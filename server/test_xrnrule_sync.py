@@ -3,6 +3,9 @@
     python3 -m unittest server/test_xrnrule_sync.py     (from the repo root)
 """
 import base64
+import gzip
+import hashlib
+import http.client
 import importlib.util
 import json
 import os
@@ -104,6 +107,50 @@ class SyncServerTest(unittest.TestCase):
             self.assertEqual("ok", r.read().decode())
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertIn("status", r.read().decode())
+
+    def test_gzip_bodies_are_unpacked_only_so_far(self):
+        def put(raw):
+            req = urllib.request.Request(self.base + "/state", method="PUT", data=raw)
+            req.add_header("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+            req.add_header("Content-Encoding", "gzip")
+            req.add_header("If-Match", '"999"')  # never the version: nothing gets written
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        bomb = gzip.compress(b'{"a":"' + b"x" * (srv.MAX_BODY + 1) + b'"}')
+        self.assertLess(len(bomb), 100_000)
+        self.assertEqual(413, put(bomb))
+        self.assertEqual(400, put(b"not gzip at all"))
+        self.assertEqual(400, put(gzip.compress(b'{"a":1}')[:-12]))  # cut short
+        self.assertEqual(412, put(gzip.compress(b'{"a":1}')))  # read fine; only the version is off
+
+    def test_a_broken_content_length_is_a_400(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+        conn.putrequest("PUT", "/state")
+        conn.putheader("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+        conn.putheader("Content-Length", "lots")
+        conn.endheaders()
+        with conn.getresponse() as r:
+            self.assertEqual(400, r.status)
+        conn.close()
+
+    def test_pages_cannot_be_framed_or_sniffed(self):
+        with urllib.request.urlopen(self.base + "/") as r:
+            self.assertEqual("DENY", r.headers["X-Frame-Options"])
+            self.assertEqual("nosniff", r.headers["X-Content-Type-Options"])
+            self.assertEqual("no-referrer", r.headers["Referrer-Policy"])
+
+    def test_the_content_policy_allows_index_html_inline_scripts_by_hash(self):
+        with tempfile.TemporaryDirectory() as web:
+            with open(os.path.join(web, "index.html"), "w") as f:
+                f.write("<head><script>go()</script><script type=module src=a.js></script></head>")
+            policy = srv.content_policy(web)
+        digest = base64.b64encode(hashlib.sha256(b"go()").digest()).decode()
+        self.assertIn(f"script-src 'self' 'sha256-{digest}';", policy)
+        self.assertIn("frame-ancestors 'none'", policy)
 
     def test_wrong_passwords_lock_out_that_address_only(self):
         guesser = {"X-Forwarded-For": "203.0.113.9"}  # as Funnel's proxy passes it on

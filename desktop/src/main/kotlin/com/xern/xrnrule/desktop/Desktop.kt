@@ -5,6 +5,7 @@ import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
 import com.xern.xrnrule.domain.Sites
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
@@ -198,7 +199,8 @@ object KWin {
 
     fun closeWindowsOf(appIds: Set<String>) {
         if (appIds.isEmpty()) return
-        val list = appIds.joinToString(",") { "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\"" }
+        // As JSON strings, which are JS strings: quotes, backslashes and control characters all escaped.
+        val list = appIds.joinToString(",") { json.encodeToString(String.serializer(), it) }
         val script = File.createTempFile("xrnrule-close", ".js")
         script.writeText(
             """

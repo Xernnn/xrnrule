@@ -527,6 +527,7 @@ class LocalServer(
         }
         ex.responseHeaders.add("Content-Type", type)
         ex.responseHeaders.add("Cache-Control", "no-store")
+        secure(ex)
         ex.sendResponseHeaders(200, bytes.size.toLong())
         ex.responseBody.use { it.write(bytes) }
     }
@@ -537,8 +538,20 @@ class LocalServer(
         val bytes = text.encodeToByteArray()
         ex.responseHeaders.add("Content-Type", if (text.startsWith("{") || text.startsWith("[")) "application/json" else "text/plain; charset=utf-8")
         ex.responseHeaders.add("Cache-Control", "no-store")
+        secure(ex)
         ex.sendResponseHeaders(code, bytes.size.toLong())
         ex.responseBody.use { it.write(bytes) }
+    }
+
+    /**
+     * No other site may frame these pages (a click there could press our buttons), run scripts
+     * in them that aren't ours, or learn from a Referer where a blocked tab went back from.
+     */
+    private fun secure(ex: HttpExchange) {
+        ex.responseHeaders.add("Content-Security-Policy", CONTENT_POLICY)
+        ex.responseHeaders.add("X-Frame-Options", "DENY")
+        ex.responseHeaders.add("X-Content-Type-Options", "nosniff")
+        ex.responseHeaders.add("Referrer-Policy", "no-referrer")
     }
 
     private fun parseQuery(raw: String?): Map<String, String> =
@@ -548,5 +561,7 @@ class LocalServer(
 
     companion object {
         const val GUARD_MS = 60_000L
+        private const val CONTENT_POLICY = "default-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; " +
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     }
 }

@@ -73,6 +73,25 @@ blocked, and while xrnrule doesn't answer it keeps blocking what it last heard w
 The phone app warns when a browser is in front and the extension says nothing, so a browser
 without it (Chrome on Android has no extensions) doesn't quietly let sites through.
 
+## Security
+
+- **Only the sync server is on the internet.** The phone app and the laptop daemon answer on
+  `127.0.0.1:47321` and nowhere else. Every change needs an `X-Xrnrule` header, which other
+  websites can't add (a CORS preflight that is never approved), and the request must name that
+  address as its Host, which shuts out DNS-rebinding pages too. The laptop's pages can't be put
+  in another site's frame and run no scripts but their own.
+- **Other apps on the phone** can reach `127.0.0.1:47321` as well. They can read which sites are
+  blocked and report a site in front, nothing more, and nothing they send can crash the app.
+  If xrnrule were down and another app took the port, the extension would still send blocked
+  sites only to its own block page or one on `127.0.0.1:47321`, never to a page that app names.
+- **The sync server** (behind Tailscale Funnel, HTTPS) wants the login for every byte of data.
+  Ten wrong passwords from one address in 15 minutes lock that address out; the address is the
+  one Funnel saw, not a header the caller could forge. Uploads are capped at 8 MB, unpacked or
+  not. The status page keeps the login in the browser's storage, so it runs only its own scripts.
+- **Secrets** stay where they're used: the sync password in the phone app's private storage
+  (never backed up) and in a file only you can read on the laptop. The hardcore password exists
+  only as a salted hash on the phone and is never synced or exported.
+
 ## Build
 
 Requirements: **JDK 17** (Gradle 8.11.1 doesn't run on newer JDKs) and the Android SDK

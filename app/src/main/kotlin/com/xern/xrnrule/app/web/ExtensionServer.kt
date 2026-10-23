@@ -1,5 +1,6 @@
 package com.xern.xrnrule.app.web
 
+import android.os.SystemClock
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.Sites
@@ -16,7 +17,10 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -28,7 +32,10 @@ import kotlin.concurrent.thread
  *
  * Loopback only. A write needs an `X-Xrnrule` header, which a web page can't add without a CORS
  * preflight this never approves, and the Host must be this address (DNS rebinding). Other apps
- * on the phone could still call it; the worst they can do is report a site.
+ * on the phone can still call it: they can read which sites are blocked and report a site in
+ * front. Nothing they send may crash the app (see [handle]), and the extension only follows a
+ * block page on this address, so an app that took the port while xrnrule was down couldn't send
+ * blocked sites anywhere else.
  */
 class ExtensionServer(
     private val store: WorldStore,
@@ -42,7 +49,10 @@ class ExtensionServer(
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
-    private val workers = Executors.newFixedThreadPool(3) { r -> Thread(r, "extension-http").apply { isDaemon = true } }
+    /** Three at a time and a short queue: a flood of connections is turned away, not piled up. */
+    private val workers = ThreadPoolExecutor(3, 3, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue(32)) { r ->
+        Thread(r, "extension-http").apply { isDaemon = true }
+    }
 
     @Volatile
     private var started = false
@@ -79,7 +89,11 @@ class ExtensionServer(
                     } catch (_: IOException) {
                         break
                     }
-                    workers.execute { handle(client) }
+                    try {
+                        workers.execute { handle(client) }
+                    } catch (_: RejectedExecutionException) {
+                        client.close()
+                    }
                 }
             }
         }
@@ -89,18 +103,23 @@ class ExtensionServer(
         socket.use { s ->
             try {
                 s.soTimeout = 5_000
+                // Whoever calls gets one request's worth of time and headers: any app on the phone
+                // can connect, and there are only three workers.
+                val deadline = SystemClock.elapsedRealtime() + REQUEST_MS
                 val input = BufferedInputStream(s.getInputStream())
-                val request = readLine(input)?.split(' ') ?: return
+                val request = readLine(input, deadline)?.split(' ') ?: return
                 val headers = HashMap<String, String>()
                 while (true) {
-                    val line = readLine(input) ?: return
+                    val line = readLine(input, deadline) ?: return
                     if (line.isEmpty()) break
+                    if (headers.size >= MAX_HEADERS) return
                     headers[line.substringBefore(':').trim().lowercase()] = line.substringAfter(':', "").trim()
                 }
                 val length = headers["content-length"]?.toIntOrNull()?.coerceIn(0, MAX_BODY) ?: 0
                 val body = ByteArray(length).also { buf ->
                     var read = 0
                     while (read < length) {
+                        if (SystemClock.elapsedRealtime() > deadline) return
                         val n = input.read(buf, read, length - read)
                         if (n < 0) break
                         read += n
@@ -118,6 +137,9 @@ class ExtensionServer(
                 }
             } catch (_: IOException) {
                 // The page went away mid-request: nothing to answer.
+            } catch (_: RuntimeException) {
+                // A request we can't make sense of. Nothing may escape this thread: an uncaught
+                // exception on any thread takes the whole app, and every block with it, down.
             }
         }
     }
@@ -129,7 +151,7 @@ class ExtensionServer(
         if (method == "POST" && headers["x-xrnrule"] == null) return 403 to "missing X-Xrnrule"
         val path = target.substringBefore('?')
         val query = target.substringAfter('?', "").split('&').filter { '=' in it }.associate {
-            URLDecoder.decode(it.substringBefore('='), "UTF-8") to URLDecoder.decode(it.substringAfter('='), "UTF-8")
+            decode(it.substringBefore('=')) to decode(it.substringAfter('='))
         }
         SiteSightings.heard()
         websites.onHeard()
@@ -151,14 +173,22 @@ class ExtensionServer(
         ExtensionApi.verdict(store.engine, store.world.value, host, store.clock, page = null),
     )
 
+    /** A query parameter as sent; a broken escape ("%" at the end, "%zz") reads as nothing. */
+    private fun decode(raw: String): String = try {
+        URLDecoder.decode(raw, "UTF-8")
+    } catch (_: IllegalArgumentException) {
+        ""
+    }
+
     /** One CRLF- (or LF-) terminated header line, or null at the end of the stream. */
-    private fun readLine(input: InputStream): String? {
+    private fun readLine(input: InputStream, deadline: Long): String? {
         val out = StringBuilder()
         while (true) {
             val c = input.read()
             if (c < 0) return if (out.isEmpty()) null else out.toString()
             if (c == '\n'.code) return out.toString().trimEnd('\r')
             if (out.length > 8_192) throw IOException("header line too long")
+            if (SystemClock.elapsedRealtime() > deadline) throw IOException("too slow")
             out.append(c.toChar())
         }
     }
@@ -168,5 +198,7 @@ class ExtensionServer(
         const val PORT = 47321
         private const val RETRY_MS = 30_000L
         private const val MAX_BODY = 64 * 1024
+        private const val MAX_HEADERS = 64
+        private const val REQUEST_MS = 10_000L
     }
 }

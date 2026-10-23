@@ -32,6 +32,21 @@ self.Xrn = (() => {
   }
 
   /**
+   * The block page xrnrule names, if it is on xrnrule's own address ([engine], such as
+   * `http://127.0.0.1:47321`); else null, which means ours. Whatever answers on that port is
+   * believed about what's blocked, but if xrnrule were down and another program had taken the
+   * port, it must not be able to send blocked sites to a page of its choosing.
+   */
+  function enginePage(page, engine) {
+    try {
+      const u = new URL(page);
+      return u.origin === new URL(engine).origin ? u.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Where a blocked page goes: the engine's block page when it has one (the laptop), else ours
    * (the phone, whose block screen is the app's overlay). The page it left rides in the hash,
    * so the block page can go back once the site opens.
@@ -66,5 +81,5 @@ self.Xrn = (() => {
     }
   }
 
-  return { DEFAULT_PORT, HEARTBEAT_MS, WARN_AT_MIN, USE_KINDS, CLOCK_LABEL, hostOf, matches, blockedBy, blockUrl, mmss, warning };
+  return { DEFAULT_PORT, HEARTBEAT_MS, WARN_AT_MIN, USE_KINDS, CLOCK_LABEL, hostOf, matches, blockedBy, enginePage, blockUrl, mmss, warning };
 })();

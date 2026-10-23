@@ -11,7 +11,7 @@
 
 importScripts("shared.js");
 
-const { DEFAULT_PORT, hostOf, blockedBy, blockUrl } = self.Xrn;
+const { DEFAULT_PORT, hostOf, blockedBy, enginePage, blockUrl } = self.Xrn;
 const OWN_PAGE = chrome.runtime.getURL("block.html");
 /** Our redirect rules' ids. Each rewrite removes the whole range first. */
 const DNR_BASE = 1000;
@@ -22,14 +22,18 @@ async function engineUrl() {
 }
 
 async function call(path, body) {
-  const res = await fetch(`${await engineUrl()}${path}`, {
+  const engine = await engineUrl();
+  const res = await fetch(`${engine}${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json", "X-Xrnrule": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`xrnrule answered ${res.status}`);
-  return res.json();
+  const answer = await res.json();
+  // Rules and verdicts name the block page: only one on xrnrule's own address is followed.
+  if (answer && typeof answer === "object" && "page" in answer) answer.page = enginePage(answer.page, engine);
+  return answer;
 }
 
 let reachable = null;

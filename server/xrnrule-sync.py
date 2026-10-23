@@ -30,9 +30,11 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import sys
 import threading
 import time
+import zlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
@@ -59,6 +61,28 @@ seen = {}  # user -> {device: epoch ms of its last request}, mirrored to devices
 seen_written = {}  # user -> time.monotonic() of the last devices.json write
 events_lock = threading.Lock()
 events = {}  # user -> list of event dicts, oldest first, mirrored to events.jsonl
+
+
+SECURITY_HEADERS = {  # on every answer; main() adds the status page's Content-Security-Policy
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def content_policy(web):
+    """The status page's CSP: its own files only, plus index.html's inline scripts by hash. The
+    page keeps the login in localStorage, so no script may come from anywhere else."""
+    hashes = []
+    try:
+        with open(os.path.join(web, "index.html"), encoding="utf-8") as f:
+            for script in re.findall(r"<script>(.*?)</script>", f.read(), re.S):
+                digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+                hashes.append(f" 'sha256-{digest}'")
+    except OSError:
+        pass
+    return ("default-src 'self'; script-src 'self'" + "".join(hashes) + "; style-src 'self'; img-src 'self' data:; "
+            "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
 
 def users_mtime():
@@ -287,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
             headers = {**(headers or {}), "Content-Encoding": "gzip"}
         self.send_response(code)
         self.send_header("Cache-Control", "no-store")
+        for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
         if code != 304:
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -295,6 +321,33 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD" and code != 304:
             self.wfile.write(body)
+
+    def body(self):
+        """The request's body, gunzipped if it came so; None once an error has been answered."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send(400, "bad Content-Length")
+            return None
+        if length <= 0 or length > MAX_BODY:
+            self.send(413, "body missing or too large")
+            return None
+        raw = self.rfile.read(length)
+        if (self.headers.get("Content-Encoding") or "").lower() != "gzip":
+            return raw
+        # Unpacked only up to MAX_BODY: a few megabytes of gzip can unpack to gigabytes.
+        unpack = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+        try:
+            out = unpack.decompress(raw, MAX_BODY + 1)
+        except zlib.error:
+            out = None
+        if out is None or (not unpack.eof and len(out) <= MAX_BODY):
+            self.send(400, "bad gzip")
+            return None
+        if len(out) > MAX_BODY:
+            self.send(413, "body too large")
+            return None
+        return out
 
     def login(self):
         addr = client_address(self)
@@ -370,11 +423,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path != "/events":
             return self.send(404, "not found")
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_BODY:
-            return self.send(413, "body missing or too large")
+        raw = self.body()
+        if raw is None:
+            return
         try:
-            body = json.loads(self.rfile.read(length))
+            body = json.loads(raw)
             raw = body["events"]
             if not isinstance(raw, list):
                 raise ValueError
@@ -393,12 +446,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path != "/state":
             return self.send(404, "not found")
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_BODY:
-            return self.send(413, "body missing or too large")
-        raw = self.rfile.read(length)
-        if (self.headers.get("Content-Encoding") or "").lower() == "gzip":
-            raw = gzip.decompress(raw)
+        raw = self.body()
+        if raw is None:
+            return
         try:
             data = json.loads(raw)
             if not isinstance(data, dict):
@@ -448,6 +498,7 @@ def main():
     args.users = os.path.expanduser(args.users)
     args.web = os.path.abspath(os.path.expanduser(args.web))
     mimetypes.add_type("text/javascript", ".js")
+    SECURITY_HEADERS["Content-Security-Policy"] = content_policy(args.web)
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.daemon_threads = True
     sys.stderr.write(f"xrnrule-sync on http://{args.host}:{args.port}, data in {args.data}\n")

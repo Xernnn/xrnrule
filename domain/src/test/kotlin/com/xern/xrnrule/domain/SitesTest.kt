@@ -29,6 +29,9 @@ class SitesTest {
         assertNull(Sites.normalize("about:blank"))
         assertNull(Sites.normalize("file.txt1"))
         assertNull(Sites.normalize("-bad.com"))
+        // Four labels of digits, one too long for an Int: no address, and no exception either.
+        assertNull(Sites.normalize("1.1.1.99999999999"))
+        assertNull(Sites.normalize("1.1.1.256"))
     }
 
     @Test

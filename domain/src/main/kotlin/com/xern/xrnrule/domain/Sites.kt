@@ -19,7 +19,8 @@ object Sites {
         if (labels.size < 2) return null
         if (labels.any { !validLabel(it) }) return null
         val tld = labels.last()
-        val isIpv4 = labels.size == 4 && labels.all { l -> l.all(Char::isDigit) && l.toInt() <= 255 }
+        // toIntOrNull: a label of digits can be too long for an Int ("1.1.1.99999999999").
+        val isIpv4 = labels.size == 4 && labels.all { l -> l.all(Char::isDigit) && (l.toIntOrNull() ?: 256) <= 255 }
         val tldOk = (tld.length >= 2 && tld.all { it in 'a'..'z' }) || tld.startsWith("xn--")
         return if (isIpv4 || tldOk) s else null
     }

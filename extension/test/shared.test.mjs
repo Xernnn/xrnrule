@@ -32,6 +32,17 @@ test("blockUrl prefers the engine's page and carries the way back in the hash", 
   assert.equal(X.blockUrl(null, "chrome-extension://x/block.html", "reddit.com"), "chrome-extension://x/block.html?site=reddit.com");
 });
 
+test("enginePage only follows a block page on xrnrule's own address", () => {
+  const engine = "http://127.0.0.1:47321";
+  assert.equal(X.enginePage("http://127.0.0.1:47321/block", engine), "http://127.0.0.1:47321/block");
+  assert.equal(X.enginePage(null, engine), null);
+  assert.equal(X.enginePage("https://evil.example/login", engine), null);
+  assert.equal(X.enginePage("http://127.0.0.1:47322/block", engine), null);
+  assert.equal(X.enginePage("http://127.0.0.1.evil.example:47321/block", engine), null);
+  assert.equal(X.enginePage("javascript:alert(1)", engine), null);
+  assert.equal(X.enginePage("not a url", engine), null);
+});
+
 test("mmss and warnings read well", () => {
   assert.equal(X.mmss(65_000), "1:05");
   assert.equal(X.mmss(3_720_000), "1:02");
