@@ -1,4 +1,4 @@
-# Domain Contract — xrnhabit (Android, formerly Habit First)
+# Domain Contract — xrnrule (Android, formerly Habit First)
 
 Trạng thái: **v1 draft**, chốt ở Phase 0. Đây là nguồn sự thật cho hành vi máy trạng thái.
 Mọi thay đổi hành vi phải sửa file này *trước*, rồi mới sửa code.
@@ -21,7 +21,7 @@ dưới đây phải có unit test tương ứng trong `:domain/src/test`.
 | **CombineMode** | Chỉ dùng khi `trigger.type == COMBINED`: `AND` (cần cả hai) hoặc `OR` (cần một trong hai). |
 | **Habit app** | `trigger.habitPackages` — app(s) nơi đồng hồ TIMER đếm giờ. Rỗng (mặc định) nghĩa là "đếm giờ trong chính app Target"; nếu khác rỗng, đếm giờ trong (các) app này thay vì Target — cho phép habit "mở app khác N phút để unlock app bị chặn". |
 | **ChecklistItem** | Một mục to-do thuộc một Block (chỉ dùng khi `trigger.type` là `CHECKLIST` hoặc `COMBINED`). |
-| **External habit** | Một habit được theo dõi ở app khác — hiện là xrnloops, bản fork Loop Habit Tracker của xrnhabit (project riêng `../xrnloops`). `:domain` chỉ biết nó qua một id chuỗi ổn định (`uuid` của Loop) và hai tập "đã xong hôm nay" / "đã xong hôm qua" mà lớp Android đọc rồi gửi vào bằng `ExternalHabitsSynced`. |
+| **External habit** | Một habit được theo dõi ở app khác — hiện là xrnloops, bản fork Loop Habit Tracker của xrnrule (project riêng `../xrnloops`). `:domain` chỉ biết nó qua một id chuỗi ổn định (`uuid` của Loop) và hai tập "đã xong hôm nay" / "đã xong hôm qua" mà lớp Android đọc rồi gửi vào bằng `ExternalHabitsSynced`. |
 | **Linked item** | `ChecklistItem` có `externalHabitId != null`. Chỉ `ExternalHabitsSynced` mới tick/untick nó, user không bấm được (I23). `linkedDay` chọn tick của ngày nào được tính: `TODAY` (mặc định) hoặc `YESTERDAY` (cho habit thường tick vào cuối ngày). `countsGoal`: tính ngày mà app ngoài báo **đạt mục tiêu** (gồm cả ngày nó tự điền cho habit kiểu "3 lần/tuần"), thay vì chỉ ngày có tick. Một lần tick ngoài chỉ trả cho một lần mở khóa mỗi ngày (I24, qua `spentEpochDay`). `tickEpochDay`: ngày (theo app ngoài) của tick mà app ngoài đang báo cho item, null nếu không có; chỉ ở máy này, như `done`. |
 | **Credit** | Quyền mở khóa đã kiếm được, có hạn dùng (TTL). |
 | **Pause** | Giờ nghỉ ngắn (mặc định 15 phút, tối đa một lần mỗi ngày local) gỡ chặn mọi block `SOFT` không phải `LOCKDOWN` (I25). |
@@ -115,7 +115,7 @@ sửa/xóa tự do (`BlockEdits.guardNeeded`). Test: `BlockEditsTest`.
 
 ### 2.4 Nhiều thiết bị: trạng thái chung
 
-Điện thoại và laptop dùng chung một trạng thái qua server đồng bộ (`xrnhabit-sync`, chỉ là kho
+Điện thoại và laptop dùng chung một trạng thái qua server đồng bộ (`xrnrule-sync`, chỉ là kho
 tài liệu JSON có phiên bản, không có logic). Một lần redeem mở block trên **mọi** thiết bị tới
 cùng một thời điểm; hạn mức mở khóa mỗi ngày, Pause và lockdown cũng là chung.
 
@@ -262,7 +262,7 @@ sealed interface BlockEvent {
 - `ToggleChecklistItem`: chỉ hiệu lực khi block ARMED (I12) và item không phải linked item (I23);
   sau khi toggle, kiểm `triggerMet`.
 - `ExternalHabitsSynced`: ảnh chụp đầy đủ các external habit đã xong trong ngày `epochDay` (ngày
-  local của xrnhabit) và trong ngày hôm trước (`doneYesterdayHabitIds`, cho linked item
+  local của xrnrule) và trong ngày hôm trước (`doneYesterdayHabitIds`, cho linked item
   `YESTERDAY`). Lớp Android gửi nó khi app ngoài báo có thay đổi, khi service khởi động, khi mở
   khóa màn hình, khi qua ngày, khi mở app và khi shield hiện ra cho block có linked item. Phải
   đọc được **cả hai** ngày mới gửi; đọc thất bại thì **không** gửi gì (không được coi "đọc lỗi"
@@ -281,7 +281,7 @@ sealed interface BlockEvent {
   gian theo website — chi tiết Android; engine chỉ nhận `site` qua `ForegroundChanged`.
 - Cách đọc habit từ Loop (ContentProvider có quyền `signature` trong bản fork `../xrnloops`, cộng
   broadcast khi có thay đổi) — chi tiết Android; engine chỉ nhận `ExternalHabitsSynced`.
-- Server đồng bộ (`server/xrnhabit-sync.py`), giao thức HTTP, lúc nào đồng bộ và cách laptop phát
+- Server đồng bộ (`server/xrnrule-sync.py`), giao thức HTTP, lúc nào đồng bộ và cách laptop phát
   hiện app/website — chi tiết lớp ngoài; engine chỉ nhận `SharedStateMerged` (§2.4).
 - Giao diện overlay, layout 3 màn hình — xem brainstorm §5.
 - Cơ chế sống sót (foreground service, WorkManager, OEM autostart) — brainstorm §4.4.

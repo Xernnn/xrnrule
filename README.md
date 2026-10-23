@@ -1,9 +1,13 @@
-# xrnhabit
+# xrnrule
 
 An Android self-control app: distracting apps (and, in the sideload build, websites) stay
 behind a full-screen block until you've done a habit, then open for a few minutes and lock
 again on their own. No accounts, no cloud: everything stays on the phone, unless you turn on
 sync with a server of your own, which also brings the same blocks to a Linux laptop.
+
+xrnrule was called xrnhabit until 24 Oct 2026. The time limits of
+[xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension, are moving into it, so one
+set of rules covers apps and sites on both devices.
 
 ## What it does
 
@@ -63,8 +67,8 @@ reader (sideload only) is an Accessibility service that reads only the browser's
 [Loop Habit Tracker](https://github.com/iSoron/uhabits) doesn't let other apps read its data,
 so habit-linked checklist items need **xrnloops**, a small GPLv3 fork of Loop kept as a
 separate project. It shares today's ticks through a signature-protected content provider and
-pings xrnhabit whenever something is ticked. Both apps must be signed with the same key.
-xrnhabit itself contains no Loop code. xrnloops can also sync its habits with your server,
+pings xrnrule whenever something is ticked. Both apps must be signed with the same key.
+xrnrule itself contains no Loop code. xrnloops can also sync its habits with your server,
 which serves a web page for ticking and reviewing them from a laptop.
 
 ## Project layout
@@ -75,7 +79,7 @@ which serves a web page for ticking and reviewing them from a laptop.
 | `:app` | Compose UI, the foreground service that enforces blocks, persistence, permissions |
 | `:hardcore` | Device Admin receiver (sideload builds only) |
 | `:desktop` | The laptop daemon, its KWin script and browser extension |
-| `server/` | `xrnhabit-sync.py`, the tiny sync server (Python), and its status page |
+| `server/` | `xrnrule-sync.py`, the tiny sync server (Python), and its status page |
 
 The engine's rules (states, transitions, invariants I1–I29, multi-device sync in §2.4) are specified in
 `docs/domain-contract.md`, which is in Vietnamese.

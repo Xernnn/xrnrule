@@ -1,4 +1,4 @@
-// xrnhabit status page: a read-only view of the state the phone and the laptop share
+// xrnrule status page: a read-only view of the state the phone and the laptop share
 // (docs/domain-contract.md §2.4), kept live with a long-poll. It shares its login with the
 // xrnloops web app on the same server (same origin, same localStorage key).
 
@@ -130,7 +130,7 @@ function loginView(message = "") {
     },
   }, h("label", {}, "User", user), h("label", {}, "Password", password), error, h("button", { class: "btn", type: "submit" }, "Sign in"));
   document.getElementById("app").replaceChildren(h("div", { class: "wrap login" },
-    h("h1", {}, h("img", { src: "icon.svg", alt: "", width: 32, height: 32 }), "xrnhabit"),
+    h("h1", {}, h("img", { src: "icon.svg", alt: "", width: 32, height: 32 }), "xrnrule"),
     h("p", {}, "What your phone and laptop are blocking. Sign in with the home server's password."),
     form));
   setTimeout(() => password.focus(), 0);
@@ -285,7 +285,7 @@ function render() {
   const updatedText = updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` by the ${updated.by}` : ""}` : "Nothing synced yet";
   document.getElementById("app").replaceChildren(
     h("header", { class: "bar" }, h("div", { class: "wrap" },
-      h("h1", {}, h("img", { src: "icon.svg", alt: "" }), "xrnhabit"),
+      h("h1", {}, h("img", { src: "icon.svg", alt: "" }), "xrnrule"),
       h("span", { class: "spacer" }),
       h("span", { class: "live" + (online ? "" : " off") }, online ? "Live" : "Offline"),
       h("a", { href: "../xrnloops/" }, "Habits"))),
@@ -296,7 +296,7 @@ function render() {
         h("div", {}, h("b", {}, breakText), h("span", {}, "15-minute break")),
         h("div", {}, h("b", {}, blocks.length), h("span", {}, blocks.length === 1 ? "Block" : "Blocks"))),
       devicesCard(now),
-      blocks.length ? cards : h("div", { class: "card empty" }, "No blocks yet. Make them in xrnhabit on the phone or on the laptop page; they show up here after the next sync."),
+      blocks.length ? cards : h("div", { class: "card empty" }, "No blocks yet. Make them in xrnrule on the phone or on the laptop page; they show up here after the next sync."),
       h("div", { class: "foot" },
         h("span", {}, updatedText),
         h("a", { href: "#", onclick: (e) => { e.preventDefault(); signOut(""); } }, "Sign out"))));

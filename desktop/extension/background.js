@@ -1,4 +1,4 @@
-// xrnhabit extension: the go-between for content.js and xrnhabit-desktop on 127.0.0.1. The
+// xrnrule extension: the go-between for content.js and xrnrule-desktop on 127.0.0.1. The
 // daemon decides what's blocked (the same shared blocks as the phone); this only reports the
 // site in front and passes the verdict back. If the daemon is down, nothing is blocked and the
 // toolbar icon shows "!".
@@ -13,7 +13,7 @@ async function daemon() {
 function badge(ok) {
   chrome.action.setBadgeText({ text: ok ? "" : "!" });
   if (!ok) chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
-  chrome.action.setTitle({ title: ok ? "xrnhabit" : "xrnhabit: the laptop app isn't running, so nothing is blocked" });
+  chrome.action.setTitle({ title: ok ? "xrnrule" : "xrnrule: the laptop app isn't running, so nothing is blocked" });
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
@@ -22,7 +22,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     try {
       const res = await fetch(`${await daemon()}/ext/heartbeat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Xrnhabit": "1" },
+        headers: { "Content-Type": "application/json", "X-Xrnrule": "1" },
         body: JSON.stringify({ host: msg.host, focused: msg.focused }),
       });
       const verdict = await res.json();
@@ -36,7 +36,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true; // the reply comes later
 });
 
-// The toolbar button opens the laptop's xrnhabit page.
+// The toolbar button opens the laptop's xrnrule page.
 chrome.action.onClicked.addListener(async () => {
   chrome.tabs.create({ url: `${await daemon()}/` });
 });

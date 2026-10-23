@@ -1,5 +1,5 @@
-// xrnhabit extension, in every http(s) page: while this tab is visible, report its site every
-// few seconds (and at once on focus changes), so xrnhabit-desktop knows what's in front and
+// xrnrule extension, in every http(s) page: while this tab is visible, report its site every
+// few seconds (and at once on focus changes), so xrnrule-desktop knows what's in front and
 // can count allowance time; when the site is blocked, step over to the block page, which comes
 // back here once it's open again.
 

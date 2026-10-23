@@ -20,7 +20,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "xrnhabit"
+rootProject.name = "xrnrule"
 
 include(":app")
 include(":domain")

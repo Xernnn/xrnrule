@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "xrnrule",
+        "Name": "xrnrule",
+        "Description": "Tells xrnrule-desktop which app is in front, and closes the apps it is blocking.",
+        "Authors": [{ "Name": "xrnrule" }],
+        "Version": "1.0",
+        "EnabledByDefault": false
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js",
+    "KPackageStructure": "KWin/Script"
+}

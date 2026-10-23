@@ -1,4 +1,4 @@
-// The laptop half of xrnhabit: the same engine (:domain) enforcing the same shared blocks on
+// The laptop half of xrnrule: the same engine (:domain) enforcing the same shared blocks on
 // websites (through desktop/extension) and desktop apps (through the KWin script in desktop/kwin).
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -16,8 +16,8 @@ kotlin {
 }
 
 application {
-    applicationName = "xrnhabit-desktop"
-    mainClass.set("com.xern.xrnhabit.desktop.MainKt")
+    applicationName = "xrnrule-desktop"
+    mainClass.set("com.xern.xrnrule.desktop.MainKt")
     // A small, always-on daemon: keep the heap and the JIT modest.
     applicationDefaultJvmArgs = listOf("-Xmx96m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-Xss512k")
 }

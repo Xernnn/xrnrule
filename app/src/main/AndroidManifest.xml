@@ -21,23 +21,23 @@
     <!-- Link to xrnloops, our Loop Habit Tracker fork (../xrnloops). The Loop build declares the same
          signature permission, so either app can be installed first; both need the same key. -->
     <permission
-        android:name="com.xern.xrnhabit.permission.HABITS"
+        android:name="com.xern.xrnrule.permission.HABITS"
         android:protectionLevel="signature" />
-    <uses-permission android:name="com.xern.xrnhabit.permission.HABITS" />
+    <uses-permission android:name="com.xern.xrnrule.permission.HABITS" />
 
     <application
-        android:name=".XrnhabitApp"
+        android:name=".XrnruleApp"
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Xrnhabit">
+        android:theme="@style/Theme.Xrnrule">
 
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.Xrnhabit">
+            android:theme="@style/Theme.Xrnrule">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -79,9 +79,9 @@
         <receiver
             android:name=".loop.LoopChangedReceiver"
             android:exported="true"
-            android:permission="com.xern.xrnhabit.permission.HABITS">
+            android:permission="com.xern.xrnrule.permission.HABITS">
             <intent-filter>
-                <action android:name="com.xern.xrnhabit.action.HABITS_CHANGED" />
+                <action android:name="com.xern.xrnrule.action.HABITS_CHANGED" />
             </intent-filter>
         </receiver>
     </application>

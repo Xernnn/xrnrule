@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">xrnhabit</string>
+    <string name="app_name">xrnrule</string>
 
-    <string name="fgs_notification_title">xrnhabit is on</string>
+    <string name="fgs_notification_title">xrnrule is on</string>
 </resources>

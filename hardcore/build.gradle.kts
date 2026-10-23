@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.xern.xrnhabit.hardcore"
+    namespace = "com.xern.xrnrule.hardcore"
     compileSdk = 35
 
     defaultConfig {

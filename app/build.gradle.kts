@@ -16,11 +16,11 @@ val xrnSigning: Properties? = rootProject.file("../xrn-signing.properties").take
 }
 
 android {
-    namespace = "com.xern.xrnhabit.app"
+    namespace = "com.xern.xrnrule.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.xern.xrnhabit"
+        applicationId = "com.xern.xrnrule"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

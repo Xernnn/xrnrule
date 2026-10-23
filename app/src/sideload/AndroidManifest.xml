@@ -6,7 +6,7 @@
              tools is a Play-policy risk, and Android 17 Advanced Protection Mode revokes it
              (brainstorm §2.1), so app blocking never depends on it. -->
         <service
-            android:name="com.xern.xrnhabit.app.web.BrowserAccessibilityService"
+            android:name="com.xern.xrnrule.app.web.BrowserAccessibilityService"
             android:exported="true"
             android:label="@string/web_a11y_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

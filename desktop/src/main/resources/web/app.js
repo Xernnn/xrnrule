@@ -1,4 +1,4 @@
-// xrnhabit on the laptop: the local page ("/") and the block page ("/block?app=…" or
+// xrnrule on the laptop: the local page ("/") and the block page ("/block?app=…" or
 // "/block?site=…&back=…") that blocked apps and sites land on. Everything comes from the
 // daemon's /api/state, polled every second; the engine behind it is the phone's.
 
@@ -22,7 +22,7 @@ let failed = false;
 async function post(path, body) {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Xrnhabit": "1" },
+    headers: { "Content-Type": "application/json", "X-Xrnrule": "1" },
     body: JSON.stringify(body),
     keepalive: true,
   });
@@ -435,12 +435,12 @@ function guardView() {
 
 function alerts() {
   const out = [];
-  if (failed) out.push(["The laptop app isn't answering", "Is xrnhabit-desktop running? systemctl --user status xrnhabit-desktop"]);
+  if (failed) out.push(["The laptop app isn't answering", "Is xrnrule-desktop running? systemctl --user status xrnrule-desktop"]);
   if (!state) return out;
-  if (state.kwinSeenAgoMs == null) out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnhabit\" in System Settings → Window Management → KWin Scripts."]);
-  if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnhabit extension isn't answering. Turn it on in the browser's extensions page."]);
+  if (state.kwinSeenAgoMs == null) out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
+  if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering. Turn it on in the browser's extensions page."]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
-  if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnhabit/desktop.properties to share blocks and unlocks with the phone.`]);
+  if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnrule/desktop.properties to share blocks and unlocks with the phone.`]);
   return out;
 }
 
@@ -448,7 +448,7 @@ function render() {
   const app = document.getElementById("app");
   const scrollY = window.scrollY;
   const header = h("header", { class: "bar" }, h("div", { class: "wrap" },
-    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), "xrnhabit", h("small", {}, "laptop"))),
+    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), "xrnrule", h("small", {}, "laptop"))),
     h("span", { class: "spacer" }),
     state && h("span", { class: "dot" + (!state.syncConfigured ? " idle" : state.sync?.ok === false ? " off" : "") },
       !state.syncConfigured ? "Local only" : state.sync?.ok === false ? "Offline" : "Synced"),
@@ -472,7 +472,7 @@ function render() {
     hero = h("section", { class: "card hero" + (still ? "" : " open") },
       h("h2", {}, still ? `${what} is blocked` : `${what} is open`),
       h("p", {}, still ? "Here's what opens it. You can wait on this page: a timer habit counts here." : blockedApp ? "You can start it again." : "Go back to it."));
-    document.title = still ? `${what} is blocked · xrnhabit` : "xrnhabit";
+    document.title = still ? `${what} is blocked · xrnrule` : "xrnrule";
   }
 
   const pause = state.pauseRemainingMs > 0
@@ -490,7 +490,7 @@ function render() {
       pause,
       !form && h("button", { class: "btn primary", onclick: () => openForm(null) }, "+ New block")),
     form && !form.blockId && !onBlockPage && h("section", { class: "card" }, formView(null)),
-    blocks.length ? blocks.map(blockCard) : !form && h("section", { class: "card note" }, onBlockPage ? "No block covers this any more." : "No blocks yet. Make one here, or in xrnhabit on the phone."),
+    blocks.length ? blocks.map(blockCard) : !form && h("section", { class: "card note" }, onBlockPage ? "No block covers this any more." : "No blocks yet. Make one here, or in xrnrule on the phone."),
     h("div", { class: "foot" },
       onBlockPage ? h("a", { href: "/" }, "All blocks") : h("span", {}, state.loop?.ok === false ? `Habits: ${state.loop.message}` : ""),
       h("span", {}, state.sync ? `${state.sync.ok ? "Last sync" : "Last try"} ${time.format(state.sync.atWallMs)}` : ""))));

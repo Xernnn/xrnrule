@@ -1,4 +1,4 @@
-# xrnhabit on the laptop
+# xrnrule on the laptop
 
 The same blocks as the phone, enforced on a Linux laptop running KDE Plasma 6. Websites are
 blocked in the browser, and desktop apps (Steam, Discord, …) are closed. Both stay blocked
@@ -7,8 +7,8 @@ device, and the block is open on both until the same moment. The daily unlock li
 15-minute break and lockdowns are shared too.
 
 ```
- xrnhabit-desktop (systemd user service, JVM, runs :domain's engine)
-   ├─ syncs the shared state with xrnhabit-sync     (server/xrnhabit-sync.py)
+ xrnrule-desktop (systemd user service, JVM, runs :domain's engine)
+   ├─ syncs the shared state with xrnrule-sync     (server/xrnrule-sync.py)
    ├─ reads habit ticks from xrnloops-sync           (../xrnloops/server)
    ├─ D-Bus  ← KWin script (kwin/): which window is in front; closes blocked ones
    └─ http://127.0.0.1:47321
@@ -26,8 +26,8 @@ Needs JDK 17 to build (the same toolchain as the Android app), plus KDE Plasma 6
 desktop/install.sh
 ```
 
-It builds the daemon, installs it to `~/.local/share/xrnhabit-desktop`, installs and turns on
-the KWin script, and starts the systemd user service `xrnhabit-desktop`. Run it again to
+It builds the daemon, installs it to `~/.local/share/xrnrule-desktop`, installs and turns on
+the KWin script, and starts the systemd user service `xrnrule-desktop`. Run it again to
 update.
 
 Then load the browser extension once. The browser's extensions page (`chrome://extensions`
@@ -37,17 +37,17 @@ aren't blocked.
 
 ### Sync with the phone
 
-Edit `~/.config/xrnhabit/desktop.properties`:
+Edit `~/.config/xrnrule/desktop.properties`:
 
 ```properties
-server=https://your-server        # where xrnhabit-sync (/xrnhabit) and xrnloops-sync (/xrnloops) live
+server=https://your-server        # where xrnrule-sync (/xrnrule) and xrnloops-sync (/xrnloops) live
 user=you
 passwordFile=~/path/to/a/file/with/the/password   # or password=…
 port=47321
 ```
 
-Then `systemctl --user restart xrnhabit-desktop`. The phone uses the same server address with
-`/xrnhabit` on the end (xrnhabit → Settings → Sync with laptop), and xrnloops uses `/xrnloops`
+Then `systemctl --user restart xrnrule-desktop`. The phone uses the same server address with
+`/xrnrule` on the end (xrnrule → Settings → Sync with laptop), and xrnloops uses `/xrnloops`
 (xrnloops → Settings → Sync with home server).
 
 Without a server it blocks on the laptop only, which is of little use: blocks are created on
@@ -93,11 +93,11 @@ WM class when a window has none.
 ## Troubleshooting
 
 ```sh
-systemctl --user status xrnhabit-desktop      # running?
-journalctl --user -u xrnhabit-desktop -n 50   # what it said
-qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded xrnhabit   # KWin script loaded?
+systemctl --user status xrnrule-desktop      # running?
+journalctl --user -u xrnrule-desktop -n 50   # what it said
+qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded xrnrule   # KWin script loaded?
 curl -s http://127.0.0.1:47321/api/state | head -c 400
 ```
 
-State lives in `~/.local/share/xrnhabit/` (`world.json`, and `shared-base.json`: the copy last
+State lives in `~/.local/share/xrnrule/` (`world.json`, and `shared-base.json`: the copy last
 agreed with the server).
