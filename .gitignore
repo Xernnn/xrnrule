@@ -34,3 +34,6 @@ brainstorm-*.md
 
 # Python (server/)
 __pycache__/
+
+# Packed browser extension (scripts/pack-extension.sh)
+dist/

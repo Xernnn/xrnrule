@@ -41,7 +41,8 @@ interface DesktopBus : DBusInterface {
  */
 class Foreground(private val store: Store) {
     @Serializable
-    data class Heartbeat(val host: String? = null, val app: String? = null, val focused: Boolean = false, val fromBlockPage: Boolean = false)
+    /** [standIn]: the extension's own block page, standing in for the site it blocks (as our block page does). */
+    data class Heartbeat(val host: String? = null, val app: String? = null, val focused: Boolean = false, val fromBlockPage: Boolean = false, val standIn: Boolean = false)
 
     @Volatile var active: AppWindow? = null
         set(value) {
@@ -120,7 +121,7 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
 
     fun isAppBlocked(appId: String): Boolean = appId in plan().blockedPackages
 
-    fun isSiteBlocked(host: String): Boolean = plan().blockedSites.any { Sites.matches(Sites.normalize(host) ?: host, it) }
+    fun isSiteBlocked(host: String): Boolean = plan().siteBlocked(Sites.normalize(host) ?: host)
 
     /** Runs inside the store's lock (I7), so the slow part goes to [worker]. */
     override fun apply(plan: ShieldPlan) {

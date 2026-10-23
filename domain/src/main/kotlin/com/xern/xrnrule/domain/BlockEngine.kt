@@ -204,17 +204,17 @@ class BlockEngine {
                 BlockMode.ALLOWANCE -> if (scheduleActive(b, clock)) {
                     val bought = overrideRemainingMs(world, b.id, clock)
                     if (b.dailyAllowanceMs > 0) {
-                        left += if (bought > 0 && dailyLimitReached(world, b, clock)) TimeLeft(bought, ClockKind.OVERRIDE)
-                        else TimeLeft((b.dailyAllowanceMs - allowanceUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.LIMIT)
+                        left += if (bought > 0 && dailyLimitReached(world, b, clock)) TimeLeft(bought, ClockKind.OVERRIDE, b.id)
+                        else TimeLeft((b.dailyAllowanceMs - allowanceUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.LIMIT, b.id)
                     }
-                    if (b.hasRowRule) left += TimeLeft((b.sessionMs - rowUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.ROW)
+                    if (b.hasRowRule) left += TimeLeft((b.sessionMs - rowUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.ROW, b.id)
                 }
                 BlockMode.SCHEDULE -> {
                     val bought = overrideRemainingMs(world, b.id, clock)
-                    if (bought > 0 && scheduleActive(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE)
+                    if (bought > 0 && scheduleActive(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE, b.id)
                 }
                 BlockMode.HABIT -> world.sessions[b.id]?.takeIf { b.state == BlockState.UNLOCKED }?.let { s ->
-                    left += TimeLeft((s.durationMs - (clock.nowMonotonicMs() - s.startedAtMonotonic)).coerceAtLeast(0), ClockKind.UNLOCK)
+                    left += TimeLeft((s.durationMs - (clock.nowMonotonicMs() - s.startedAtMonotonic)).coerceAtLeast(0), ClockKind.UNLOCK, b.id)
                 }
                 BlockMode.LOCKDOWN -> Unit
             }

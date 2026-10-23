@@ -86,6 +86,7 @@ enum class OverrideRejection {
 }
 
 /** What runs out first on an open target, for the browser's corner clock. */
+@Serializable
 enum class ClockKind {
     /** Today's limit; runs down while you use it. */
     LIMIT,
@@ -99,7 +100,8 @@ enum class ClockKind {
     BREAK,
 }
 
-data class TimeLeft(val ms: Long, val kind: ClockKind)
+/** [blockId]: the block it runs out on (null for the daily break, which is everyone's). */
+data class TimeLeft(val ms: Long, val kind: ClockKind, val blockId: String? = null)
 
 sealed interface Effect {
     data class BlockedImpression(val pkg: String) : Effect

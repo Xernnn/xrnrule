@@ -6,7 +6,8 @@ const params = new URLSearchParams(location.search);
 const onBlockPage = location.pathname === "/block";
 const blockedApp = params.get("app");
 const blockedSite = params.get("site");
-const backUrl = params.get("back");
+// The page a blocked tab left: the extension puts it in the hash (raw), older links in ?back=.
+const backUrl = location.hash.length > 1 ? location.hash.slice(1) : params.get("back");
 
 let state = null;
 let apps = null; // installed desktop apps, loaded when the form opens
@@ -16,6 +17,8 @@ let formNode = null; // kept across redraws, so typing survives the once-a-secon
 let guard = null; // { token, until, label, close }: a loosening waiting out its 60 s
 let message = "";
 let failed = false;
+let phrase = ""; // the override sentence as typed so far, kept across redraws
+let settingsForm = null; // the settings card's fields while open
 
 // ---- data ----------------------------------------------------------------------------------
 
@@ -31,7 +34,8 @@ async function post(path, body) {
 
 async function refresh() {
   try {
-    const res = await fetch("/api/state", { cache: "no-store" });
+    const subject = onBlockPage ? `?${new URLSearchParams(blockedApp ? { app: blockedApp } : { site: blockedSite ?? "" })}` : "";
+    const res = await fetch(`/api/state${subject}`, { cache: "no-store" });
     state = await res.json();
     failed = false;
   } catch {
@@ -100,6 +104,7 @@ const clock = (ms) => {
   return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 const siteMatches = (host, target) => host === target || host.endsWith("." + target);
+const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
 function status(b) {
@@ -111,9 +116,15 @@ function status(b) {
       if (!b.blocking) return ["idle", "Not blocking now" + (b.scheduleText ? ` (${b.scheduleText})` : "")];
       if (b.state === "EARNED") return ["earned", `Earned: ${min(b.unlockMs)} min ready until ${time.format(b.creditExpiresAtWall)}`];
       return ["blocked", "Blocked until you do the habit"];
-    case "ALLOWANCE":
-      return b.blocking ? ["blocked", `Used up: ${min(b.allowanceUsedMs)} of ${min(b.allowanceMs)} min today`] : ["open", `${min(b.allowanceMs - b.allowanceUsedMs)} of ${min(b.allowanceMs)} min left today`];
+    case "ALLOWANCE": {
+      if (b.rowBreakRemainingMs > 0) return ["blocked", `On a break: ${clock(b.rowBreakRemainingMs)} left (${min(b.rowMs)} min in a row is the most)`];
+      if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
+      const row = b.rowMs > 0 ? `${min(b.rowMs - b.rowUsedMs)} of ${min(b.rowMs)} min in a row left` : null;
+      if (b.allowanceMs <= 0) return ["open", row];
+      return b.blocking ? ["blocked", `Used up: ${min(b.allowanceUsedMs)} of ${min(b.allowanceMs)} min today`] : ["open", [`${min(b.allowanceMs - b.allowanceUsedMs)} of ${min(b.allowanceMs)} min left today`, row].filter(Boolean).join(" · ")];
+    }
     case "SCHEDULE":
+      if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
       return b.blocking ? ["blocked", `Blocked by its schedule (${b.scheduleText ?? "all day"})`] : ["idle", `Not now (${b.scheduleText ?? "all day"})`];
     case "LOCKDOWN":
       return b.lockdownRemainingMs > 0 ? ["blocked", `Locked down for ${clock(b.lockdownRemainingMs)}`] : ["idle", `Not running (${min(b.lockdownMs)} min when started)`];
@@ -122,6 +133,12 @@ function status(b) {
 }
 
 function how(b) {
+  if (b.mode === "ALLOWANCE") {
+    const parts = [];
+    if (b.allowanceMs > 0) parts.push(`${min(b.allowanceMs)} min a day`);
+    if (b.rowMs > 0) parts.push(`at most ${min(b.rowMs)} min in a row, then ${min(b.rowBreakMs)} min off`);
+    return `${parts.join(", ")}${parts.length ? "; " : ""}${b.perDevice ? "each device has its own" : "phone and laptop share it"}.`;
+  }
   if (b.mode !== "HABIT") return null;
   const unlock = `opens for ${min(b.unlockMs)} min`;
   const items = b.items.length;
@@ -172,6 +189,7 @@ function blockCard(b) {
     h("div", { class: "targets" },
       b.phoneApps > 0 && h("span", { class: "target" }, `${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
       b.sites.map((s) => h("span", { class: "target" }, s)),
+      b.exceptSites.map((s) => h("span", { class: "target except", title: "Left alone" }, `not ${s}`)),
       b.desktopApps.map((a) => h("span", { class: "target" }, `💻 ${appName(a)}`))),
     actions.length > 0 && h("div", { class: "actions" }, actions),
     form?.blockId === b.id && formView(b));
@@ -192,7 +210,7 @@ const minutesOf = (text) => {
 async function openForm(b) {
   cancelGuard();
   message = "";
-  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, allowanceMin: 30, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020 };
+  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
   form = b
     ? {
       blockId: b.id,
@@ -203,16 +221,22 @@ async function openForm(b) {
         timerMin: min(b.requiredMs) || 30,
         combineOr: b.combineOr,
         unlockMin: min(b.unlockMs),
+        dailyOn: b.allowanceMs > 0,
         allowanceMin: min(b.allowanceMs) || 30,
+        rowOn: b.rowMs > 0,
+        rowMin: min(b.rowMs) || 15,
+        rowBreakMin: min(b.rowBreakMs) || 15,
+        perDevice: b.perDevice,
         lockdownMin: min(b.lockdownMs) || 60,
         days: b.scheduleDays.length ? b.scheduleDays : base.days,
         startMin: b.scheduleStart ?? base.startMin,
         endMin: b.scheduleEnd ?? base.endMin,
+        moreWindows: b.moreWindows.map((w) => ({ ...w })),
         newTask: "",
       },
-      apps: new Set(b.desktopApps), sitesText: b.sites.join("\n"), filter: "", error: "",
+      apps: new Set(b.desktopApps), sitesText: b.sites.join("\n"), exceptText: b.exceptSites.join("\n"), filter: "", error: "",
     }
-    : { blockId: null, data: { ...base, name: "", kind: "HABIT", setTime: "SCHEDULE", itemsText: "", linked: new Map() }, apps: new Set(), sitesText: "", filter: "", error: "" };
+    : { blockId: null, data: { ...base, name: "", kind: "HABIT", setTime: "SCHEDULE", itemsText: "", linked: new Map() }, apps: new Set(), sitesText: "", exceptText: "", filter: "", error: "" };
   formNode = null;
   render();
   const loads = [];
@@ -289,6 +313,8 @@ function buildForm(b) {
     list,
     field("Websites", h("textarea", { value: form.sitesText, placeholder: "youtube.com\nreddit.com", oninput: (e) => (form.sitesText = e.target.value) }),
       "One per line; each covers its subdomains. The phone blocks these too."),
+    field("Leave these alone", h("textarea", { class: "short", value: form.exceptText, placeholder: "music.youtube.com", oninput: (e) => (form.exceptText = e.target.value) }),
+      "Parts of those sites this block doesn't touch, one per line."),
     b?.phoneApps > 0 && h("div", { class: "note" }, `Also ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}: change those on the phone.`));
 
   // How it unlocks
@@ -330,14 +356,27 @@ function buildForm(b) {
           }, "Link habit"))),
       field("Each unlock lasts (minutes)", number("unlockMin", { max: min(state.dailyCapMs) }), `Up to ${min(state.dailyCapMs)} min a day across phone and laptop.`));
   } else if (mode === "ALLOWANCE") {
-    rules = h("fieldset", {}, h("legend", {}, "Daily limit"), field("Minutes a day", number("allowanceMin"), "Once used up, it's blocked until tomorrow. Phone and laptop share it."));
+    rules = h("fieldset", {}, h("legend", {}, "Daily limit"),
+      check("dailyOn", "A limit a day"),
+      d.dailyOn && field("Minutes a day", number("allowanceMin"), "Once used up, it's blocked until tomorrow."),
+      check("rowOn", "At most so long in a row"),
+      d.rowOn && h("div", { class: "row" }, field("Minutes in a row", number("rowMin")), field("Then a break of (minutes)", number("rowBreakMin"))),
+      d.rowOn && h("div", { class: "note" }, "Resting that long on your own counts as the break."),
+      field("Phone and laptop", seg("perDevice", [[false, "Share one limit"], [true, "Each has its own"]])));
   } else if (mode === "SCHEDULE") {
+    const dayPick = (days, set) => h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
+      h("input", { type: "checkbox", checked: days.includes(i + 1), onchange: (e) => set(e.target.checked ? [...new Set([...days, i + 1])].sort() : days.filter((x) => x !== i + 1)) }), name)));
+    const times = (w) => h("div", { class: "row" },
+      field("From", h("input", { type: "time", value: hhmm(w.startMin), oninput: (e) => (w.startMin = minutesOf(e.target.value)) })),
+      field("Until", h("input", { type: "time", value: hhmm(w.endMin), oninput: (e) => (w.endMin = minutesOf(e.target.value)) })));
     rules = h("fieldset", {}, h("legend", {}, "When it blocks"),
-      h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
-        h("input", { type: "checkbox", checked: d.days.includes(i + 1), onchange: (e) => { d.days = e.target.checked ? [...new Set([...d.days, i + 1])].sort() : d.days.filter((x) => x !== i + 1); } }), name))),
-      h("div", { class: "row" },
-        field("From", h("input", { type: "time", value: hhmm(d.startMin), oninput: (e) => (d.startMin = minutesOf(e.target.value)) })),
-        field("Until", h("input", { type: "time", value: hhmm(d.endMin), oninput: (e) => (d.endMin = minutesOf(e.target.value)) }))),
+      dayPick(d.days, (days) => (d.days = days)),
+      times(d),
+      d.moreWindows.map((w, i) => h("div", { class: "window" },
+        dayPick(w.days, (days) => (w.days = days)),
+        times(w),
+        h("button", { class: "btn ghost", type: "button", onclick: () => { d.moreWindows.splice(i, 1); rebuildForm(); } }, "Remove these times"))),
+      h("button", { class: "btn", type: "button", onclick: () => { d.moreWindows.push({ days: [1, 2, 3, 4, 5, 6, 7], startMin: 1080, endMin: 1320 }); rebuildForm(); } }, "+ More times"),
       h("div", { class: "note" }, "A window past midnight belongs to the day it starts on."));
   } else {
     rules = h("fieldset", {}, h("legend", {}, "Lockdown"), field("Minutes", number("lockdownMin"), isNew ? "It starts as soon as you create it." : "How long each lockdown lasts."));
@@ -380,6 +419,7 @@ async function submitForm() {
     mode: formMode(),
     desktopApps: [...form.apps],
     sites: form.sitesText.split(/[\s,]+/).filter(Boolean),
+    exceptSites: form.exceptText.split(/[\s,]+/).filter(Boolean),
     checklist: d.checklist,
     timer: d.timer,
     combineOr: d.combineOr,
@@ -387,11 +427,16 @@ async function submitForm() {
     unlockMin: d.unlockMin,
     items: (d.itemsText ?? "").split("\n"),
     linked: [...(d.linked?.values() ?? [])],
+    dailyOn: d.dailyOn,
     allowanceMin: d.allowanceMin,
+    rowMin: d.rowOn ? d.rowMin : 0,
+    rowBreakMin: d.rowBreakMin,
+    perDevice: d.perDevice,
     lockdownMin: d.lockdownMin,
     days: d.days,
     startMin: d.startMin,
     endMin: d.endMin,
+    moreWindows: d.moreWindows,
   });
   if (result.error) showFormError(result.error);
   else if (result.token) startGuard(result.token, result.waitMs, "Saving (it makes the block easier to get past)");
@@ -433,6 +478,98 @@ function guardView() {
   return h("div", { class: "alert" }, h("b", {}, `${guard.label}…`), `Wait ${Math.ceil((guard.until - Date.now()) / 1000)} s and keep this page open. Leaving it cancels.`);
 }
 
+// ---- buying minutes (contract I34) ---------------------------------------------------------
+// The daemon owns the wait and checks the sentence; this page only shows them.
+
+function subjectBody() {
+  return blockedApp ? { app: blockedApp } : { site: blockedSite };
+}
+
+async function buy(op, extra = {}) {
+  const result = await post("/api/override", { op, ...subjectBody(), ...extra });
+  message = result.error ?? "";
+  if (op === "claim" && !result.error) phrase = "";
+  refresh();
+}
+
+let buyNode = null; // kept while a wait runs, so typing survives the once-a-second redraw
+let buyKey = null;
+
+function buyView() {
+  const s = state.subject;
+  if (!s) return null;
+  const minutes = min(state.settings.grantMs);
+  if (s.overrideRejection === "NONE_LEFT") return h("p", { class: "note" }, "Today's bought minutes for this are used up.");
+  if (s.overrideRejection) return null;
+  if (!s.overrideReadyAtWall) {
+    buyNode = null;
+    return h("div", { class: "buy" },
+      h("button", { class: "btn", onclick: () => buy("begin") }, `Buy ${minutes} minutes`),
+      h("span", { class: "note" }, `Wait ${Math.round(state.settings.waitMs / 1000)} s, then type a sentence.`));
+  }
+  if (!buyNode || buyKey !== s.overrideReadyAtWall) {
+    buyKey = s.overrideReadyAtWall;
+    const claim = () => buy("claim", { phrase });
+    buyNode = h("div", { class: "buy" },
+      h("p", {}, "Type: ", h("b", {}, `“${state.settings.phrase}”`)),
+      h("input", { type: "text", class: "phrase", value: phrase, placeholder: state.settings.phrase, autocomplete: "off", spellcheck: false,
+        oninput: (e) => (phrase = e.target.value), onkeydown: (e) => e.key === "Enter" && claim() }),
+      h("div", { class: "actions" },
+        h("button", { class: "btn primary claim", onclick: claim }),
+        h("button", { class: "btn ghost", onclick: () => buy("cancel") }, "Never mind")));
+  }
+  const waitLeft = s.overrideReadyAtWall - state.nowWall;
+  const button = buyNode.querySelector(".claim");
+  button.disabled = waitLeft > 0;
+  button.textContent = waitLeft > 0 ? `Wait ${Math.ceil(waitLeft / 1000)} s` : `Open for ${minutes} min`;
+  return buyNode;
+}
+
+// ---- settings ------------------------------------------------------------------------------
+
+function settingsView() {
+  const s = state.settings;
+  if (!settingsForm) {
+    return h("section", { class: "card settings" },
+      h("div", { class: "top" }, h("h3", {}, "Settings"), h("span", { class: "spacer" }),
+        h("button", { class: "btn ghost", onclick: () => { settingsForm = { phrase: s.phrase, waitSec: Math.round(s.waitMs / 1000), grantMin: min(s.grantMs), perDay: s.perDay, showClock: s.showClock }; render(); } }, "Edit")),
+      h("div", { class: "note" },
+        s.perDay > 0 ? `Buying minutes: type “${s.phrase}” after ${Math.round(s.waitMs / 1000)} s for ${min(s.grantMs)} min, ${s.perDay} a day per block.` : "Buying minutes is off.",
+        ` Corner clock on limited sites: ${s.showClock ? "on" : "off"}.`));
+  }
+  if (!settingsNode) settingsNode = buildSettings();
+  return settingsNode;
+}
+
+let settingsNode = null; // kept while open, so typing survives the once-a-second redraw
+
+function buildSettings() {
+  const f = settingsForm;
+  const field = (label, input, hint) => h("label", { class: "field" }, h("span", {}, label), input, hint && h("small", {}, hint));
+  const num = (key, attrs = {}) => h("input", { type: "number", min: 0, step: 1, value: f[key], oninput: (e) => (f[key] = Number(e.target.value)), ...attrs });
+  return h("section", { class: "card settings" },
+    h("h3", {}, "Settings"),
+    h("div", { class: "editor form" },
+      field("Sentence to buy minutes", h("input", { type: "text", value: f.phrase, oninput: (e) => (f.phrase = e.target.value) }), "Accents, case and punctuation don't matter when you type it."),
+      h("div", { class: "row" },
+        field("Wait (seconds)", num("waitSec")),
+        field("Minutes bought", num("grantMin", { min: 1 })),
+        field("Times a day per block", num("perDay"), "0 turns it off.")),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.showClock, onchange: (e) => (f.showClock = e.target.checked) }), "Show the corner clock on limited sites"),
+      h("div", { class: "actions" },
+        h("button", { class: "btn primary", onclick: saveSettings }, "Save"),
+        h("button", { class: "btn ghost", onclick: () => { settingsForm = null; settingsNode = null; render(); } }, "Cancel"))));
+}
+
+async function saveSettings() {
+  const result = await post("/api/settings", settingsForm);
+  if (result.error) message = result.error;
+  else if (result.token) startGuard(result.token, result.waitMs, "Saving the settings (they make buying minutes easier)");
+  settingsForm = null;
+  settingsNode = null;
+  refresh();
+}
+
 function alerts() {
   const out = [];
   if (failed) out.push(["The laptop app isn't answering", "Is xrnrule-desktop running? systemctl --user status xrnrule-desktop"]);
@@ -462,8 +599,9 @@ function render() {
   let blocks = state.blocks;
   let hero = null;
   if (onBlockPage) {
-    blocks = blocks.filter((b) => (blockedApp && b.desktopApps.includes(blockedApp)) || (blockedSite && b.sites.some((s) => siteMatches(blockedSite, s))));
-    const still = blockedApp ? state.blockedApps.includes(blockedApp) : state.blockedSites.some((s) => siteMatches(blockedSite ?? "", s));
+    blocks = blocks.filter((b) => (blockedApp && b.desktopApps.includes(blockedApp)) ||
+      (blockedSite && b.sites.some((s) => siteMatches(blockedSite, s)) && !b.exceptSites.some((s) => siteMatches(blockedSite, s))));
+    const still = state.subject ? state.subject.blocked : blockedApp ? state.blockedApps.includes(blockedApp) : siteBlocked(blockedSite ?? "");
     const what = blockedApp ? appName(blockedApp) : blockedSite;
     if (!still && backUrl && /^https?:/.test(backUrl)) {
       location.replace(backUrl);
@@ -471,7 +609,8 @@ function render() {
     }
     hero = h("section", { class: "card hero" + (still ? "" : " open") },
       h("h2", {}, still ? `${what} is blocked` : `${what} is open`),
-      h("p", {}, still ? "Here's what opens it. You can wait on this page: a timer habit counts here." : blockedApp ? "You can start it again." : "Go back to it."));
+      h("p", {}, still ? "Here's what opens it. You can wait on this page: a timer habit counts here." : blockedApp ? "You can start it again." : "Go back to it."),
+      still && buyView());
     document.title = still ? `${what} is blocked · xrnrule` : "xrnrule";
   }
 
@@ -491,6 +630,7 @@ function render() {
       !form && h("button", { class: "btn primary", onclick: () => openForm(null) }, "+ New block")),
     form && !form.blockId && !onBlockPage && h("section", { class: "card" }, formView(null)),
     blocks.length ? blocks.map(blockCard) : !form && h("section", { class: "card note" }, onBlockPage ? "No block covers this any more." : "No blocks yet. Make one here, or in xrnrule on the phone."),
+    !onBlockPage && settingsView(),
     h("div", { class: "foot" },
       onBlockPage ? h("a", { href: "/" }, "All blocks") : h("span", {}, state.loop?.ok === false ? `Habits: ${state.loop.message}` : ""),
       h("span", {}, state.sync ? `${state.sync.ok ? "Last sync" : "Last try"} ${time.format(state.sync.atWallMs)}` : ""))));

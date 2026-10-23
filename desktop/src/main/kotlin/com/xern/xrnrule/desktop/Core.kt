@@ -4,6 +4,7 @@ import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Effect
+import com.xern.xrnrule.domain.Outcome
 import com.xern.xrnrule.domain.PersistPort
 import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
@@ -294,12 +295,15 @@ class Store(
         scope.launch { dispatchAndGet(event) }
     }
 
-    suspend fun dispatchAndGet(event: BlockEvent): World = mutex.withLock {
+    suspend fun dispatchAndGet(event: BlockEvent): World = dispatchOutcome(event).world
+
+    /** As [dispatchAndGet], with the effects too: the caller wants to know how it went. */
+    suspend fun dispatchOutcome(event: BlockEvent): Outcome = mutex.withLock {
         val outcome = engine.reduce(_world.value, event, clock)
         applyOutcome(outcome, persist, shield, telemetry, clock.nowWallMs())
         _world.value = outcome.world
         outcome.effects.forEach { _effects.tryEmit(it) }
-        outcome.world
+        outcome
     }
 
     /** A structural edit; a block whose settings change is stamped, so the later edit wins (contract §2.4). */

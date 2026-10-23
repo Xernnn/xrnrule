@@ -1,0 +1,42 @@
+/* The extension's own pages: the block page, the popup, the options. Light and dark. */
+:root {
+  --bg: #f5f6f8;
+  --card: #fff;
+  --text: #1c2130;
+  --muted: #5d6578;
+  --line: #dde1e8;
+  --accent: #3d63c9;
+  --accent-text: #fff;
+  --bad: #c62828;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121620;
+    --card: #1b2130;
+    --text: #e8ebf2;
+    --muted: #9aa3b5;
+    --line: #2c3446;
+    --accent: #6f9bf0;
+    --accent-text: #0d1220;
+    --bad: #ef7d73;
+  }
+}
+* { box-sizing: border-box; }
+/* Quetta sets padding:0 on <body> of extension pages itself, so spacing lives on the children. */
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.card { max-width: 440px; margin: 12vh auto 24px; padding: 28px 24px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+body.popup .card { margin: 0; border: 0; border-radius: 0; min-width: 300px; padding: 16px; }
+h1 { font-size: 22px; line-height: 1.25; margin: 12px 0 6px; overflow-wrap: anywhere; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+p { margin: 6px 0; color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); }
+.bad { color: var(--bad); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.btn { appearance: none; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 10px; padding: 9px 14px; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+label { display: block; margin: 14px 0 4px; font-weight: 600; }
+input[type="number"] { width: 120px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; }
+@media (max-width: 480px) { .card { margin: 16px; } }

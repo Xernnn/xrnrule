@@ -157,3 +157,11 @@ a:hover { text-decoration: underline; }
 .applist.short { max-height: 180px; }
 .btn.danger { color: var(--blocked); }
 .card > .form:first-child { border-top: 0; padding-top: 0; }
+
+/* Buying minutes on the block page, the settings card, more schedule windows, exceptions. */
+.buy { margin-top: 14px; display: grid; gap: 8px; }
+.buy input.phrase { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 9px 10px; }
+.editor textarea.short { min-height: 44px; }
+.window { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
+.target.except { opacity: .7; text-decoration: line-through; }
+.settings .note { margin-top: 6px; }

@@ -74,6 +74,6 @@ Done. The local page is http://127.0.0.1:47321/ (or the port in desktop.properti
 For websites, load the browser extension once:
   open the browser's extensions page (helium://extensions or chrome://extensions),
   turn on Developer mode, then "Load unpacked" and pick
-  $here/extension
+  $root/extension
   and allow it in incognito windows too (its Details page).
 DONE

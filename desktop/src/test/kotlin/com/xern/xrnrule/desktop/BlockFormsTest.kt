@@ -114,4 +114,65 @@ class BlockFormsTest {
         assertNotNull(w.checklist)
         assertTrue(made.block.id !in w.checklist)
     }
+
+    @Test
+    fun aLimitCanHaveARowRuleExceptionsAndItsOwnPerDevice() {
+        val r = ok(
+            BlockForms.create(
+                World(),
+                Form(
+                    name = "YouTube",
+                    mode = BlockMode.ALLOWANCE,
+                    sites = listOf("https://www.youtube.com/"),
+                    exceptSites = listOf("music.youtube.com"),
+                    allowanceMin = 30,
+                    rowMin = 15,
+                    rowBreakMin = 10,
+                    perDevice = true,
+                ),
+                clock,
+            ),
+        )
+        assertEquals(setOf("youtube.com"), r.block.targetSites)
+        assertEquals(setOf("music.youtube.com"), r.block.exceptSites)
+        assertEquals(30L * 60_000, r.block.dailyAllowanceMs)
+        assertEquals(15L * 60_000, r.block.sessionMs)
+        assertEquals(10L * 60_000, r.block.sessionBreakMs)
+        assertTrue(r.block.perDevice)
+
+        // No daily limit, only the row rule; but not neither.
+        val rowOnly = ok(BlockForms.create(World(), Form(name = "X", mode = BlockMode.ALLOWANCE, sites = listOf("x.com"), dailyOn = false, rowMin = 20), clock))
+        assertEquals(0L, rowOnly.block.dailyAllowanceMs)
+        assertEquals("Set minutes a day, minutes in a row, or both", reason(BlockForms.create(World(), Form(name = "X", mode = BlockMode.ALLOWANCE, sites = listOf("x.com"), dailyOn = false), clock)))
+
+        // Turning the row rule off loosens the block.
+        val edited = ok(BlockForms.edit(r.world, Form(id = r.block.id, name = "YouTube", sites = listOf("youtube.com"), exceptSites = listOf("music.youtube.com"), allowanceMin = 30, rowMin = 0, perDevice = true)))
+        assertEquals(0L, edited.block.sessionMs)
+        assertTrue(BlockEdits.loosens(r.block, edited.block))
+    }
+
+    @Test
+    fun aScheduleCanHaveMoreTimes() {
+        val r = ok(
+            BlockForms.create(
+                World(),
+                Form(
+                    name = "Social",
+                    mode = BlockMode.SCHEDULE,
+                    sites = listOf("reddit.com"),
+                    days = (1..7).toSet(),
+                    startMin = 0,
+                    endMin = 14 * 60,
+                    moreWindows = listOf(BlockForms.Window((1..7).toSet(), 18 * 60, 23 * 60 + 59)),
+                ),
+                clock,
+            ),
+        )
+        assertEquals(1, r.block.schedule.moreWindows.size)
+        assertEquals(18 * 60, r.block.schedule.moreWindows.single().window.startMinuteOfDay)
+        assertEquals(
+            "Pick at least one day for each time",
+            reason(BlockForms.create(World(), Form(name = "S", mode = BlockMode.SCHEDULE, sites = listOf("reddit.com"), moreWindows = listOf(BlockForms.Window(emptySet()))), clock)),
+        )
+    }
 }

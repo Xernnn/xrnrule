@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>xrnrule settings</title>
+  <link rel="stylesheet" href="page.css">
+</head>
+<body>
+  <main class="card">
+    <h1>xrnrule</h1>
+    <p>This extension asks xrnrule on this device what to block: the phone app, or the laptop app
+      (<code>xrnrule-desktop</code>). Blocks, limits and the corner clock are set there, not here.</p>
+    <label for="port">Port</label>
+    <input id="port" type="number" min="1024" max="65535" placeholder="47321">
+    <p class="note">Only change it if xrnrule listens on another port (the laptop's <code>desktop.properties</code>).</p>
+    <div class="actions"><button id="save" class="btn primary" type="button">Save</button></div>
+    <p id="result" class="note"></p>
+  </main>
+  <script src="shared.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

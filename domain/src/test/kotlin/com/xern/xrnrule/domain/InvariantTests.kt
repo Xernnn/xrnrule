@@ -1318,7 +1318,7 @@ class InvariantTests {
         world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "youtube.com"), clock).world
         world = ticks(world, clock, 10)
 
-        assertEquals(TimeLeft(5L * 60_000, ClockKind.ROW), engine.timeLeft(world, "browser", "youtube.com", clock))
+        assertEquals(TimeLeft(5L * 60_000, ClockKind.ROW, "r1"), engine.timeLeft(world, "browser", "youtube.com", clock))
         assertNull(engine.timeLeft(world, "browser", "example.com", clock))
     }
 }

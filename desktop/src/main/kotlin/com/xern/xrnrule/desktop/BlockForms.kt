@@ -6,6 +6,7 @@ import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.CombineMode
+import com.xern.xrnrule.domain.DayWindow
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.Reward
@@ -33,6 +34,10 @@ object BlockForms {
     @Serializable
     data class LinkedHabit(val uuid: String, val name: String, val yesterday: Boolean = false, val goal: Boolean = false)
 
+    /** One more window of a schedule (contract I30). */
+    @Serializable
+    data class Window(val days: Set<Int> = (1..7).toSet(), val startMin: Int = 18 * 60, val endMin: Int = 22 * 60)
+
     @Serializable
     data class Form(
         val id: String? = null,
@@ -40,6 +45,8 @@ object BlockForms {
         val mode: BlockMode = BlockMode.HABIT,
         val desktopApps: List<String> = emptyList(),
         val sites: List<String> = emptyList(),
+        /** Hosts under [sites] to leave alone, e.g. music.youtube.com (I31). */
+        val exceptSites: List<String> = emptyList(),
         val checklist: Boolean = true,
         val timer: Boolean = false,
         val combineOr: Boolean = false,
@@ -47,11 +54,19 @@ object BlockForms {
         val unlockMin: Long = Defaults.DEFAULT_UNLOCK_MS / 60_000,
         val items: List<String> = emptyList(),
         val linked: List<LinkedHabit> = emptyList(),
+        /** A daily limit: [allowanceMin] a day when on; off leaves only the row rule (I19, I32). */
+        val dailyOn: Boolean = true,
         val allowanceMin: Long = 30,
+        /** At most this many minutes in a row, then [rowBreakMin] off; 0 is no such rule (I32). */
+        val rowMin: Long = 0,
+        val rowBreakMin: Long = 15,
+        /** Each device gets the whole limit (I33); off, phone and laptop share it. */
+        val perDevice: Boolean = false,
         val lockdownMin: Long = 60,
         val days: Set<Int> = (1..5).toSet(),
         val startMin: Int = 9 * 60,
         val endMin: Int = 17 * 60,
+        val moreWindows: List<Window> = emptyList(),
     )
 
     /** Either the changed world or why not, in the phone's words. */
@@ -64,6 +79,7 @@ object BlockForms {
         val id = UUID.randomUUID().toString()
         val apps = form.desktopApps.filter { it.isNotBlank() }.toSet()
         val sites = form.sites.mapNotNull(Sites::normalize).toSet()
+        val except = form.exceptSites.mapNotNull(Sites::normalize).toSet()
         val items = form.items.map { it.trim() }.filter { it.isNotEmpty() }
         problem(form, hasTargets = apps.isNotEmpty() || sites.isNotEmpty(), capMs = world.settings.dailyCapMs, creating = true, hasItems = items.isNotEmpty() || form.linked.isNotEmpty())
             ?.let { return Result.Invalid(it) }
@@ -72,15 +88,15 @@ object BlockForms {
             id = id,
             name = form.name.trim(),
             targetSites = sites,
+            exceptSites = except,
             targetDesktopApps = apps,
             trigger = if (habit) trigger(form.checklist, form.timer, form.timerMin, form.combineOr) else Trigger(TriggerType.CHECKLIST, Defaults.ALL_ITEMS, TriggerUnit.ITEMS),
             reward = Reward(unlockDurationMs = form.unlockMin * 60_000),
-            schedule = if (form.mode == BlockMode.SCHEDULE) Schedule(form.days, TimeWindow(form.startMin, form.endMin)) else Schedule.ALWAYS,
+            schedule = if (form.mode == BlockMode.SCHEDULE) schedule(form) else Schedule.ALWAYS,
             state = BlockState.ARMED,
             mode = form.mode,
-            dailyAllowanceMs = if (form.mode == BlockMode.ALLOWANCE) form.allowanceMin * 60_000 else 0,
             lockdownMs = if (form.mode == BlockMode.LOCKDOWN) form.lockdownMin * 60_000 else 0,
-        )
+        ).withLimits(form)
         val plain = if (habit && form.checklist) items.mapIndexed { i, text -> ChecklistItem(id = "$id-i$i", blockId = id, text = text, order = i) } else emptyList()
         val linked = if (habit && form.checklist) {
             form.linked.distinctBy { it.uuid }.mapIndexed { i, h -> linkedItem(id, h, plain.size + i) }
@@ -100,6 +116,7 @@ object BlockForms {
         val old = world.blocks.firstOrNull { it.id == form.id } ?: return Result.Invalid("That block is gone.")
         val apps = form.desktopApps.filter { it.isNotBlank() }.toSet()
         val sites = form.sites.mapNotNull(Sites::normalize).toSet()
+        val except = form.exceptSites.mapNotNull(Sites::normalize).toSet()
         val hadTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
         val kept = form.copy(mode = old.mode, checklist = old.trigger.type != TriggerType.TIMER, timer = hadTimer)
         problem(kept, hasTargets = old.targetPackages.isNotEmpty() || apps.isNotEmpty() || sites.isNotEmpty(), capMs = world.settings.dailyCapMs, creating = false, hasItems = true)
@@ -107,6 +124,7 @@ object BlockForms {
         val block = old.copy(
             name = form.name.trim(),
             targetSites = sites,
+            exceptSites = except,
             targetDesktopApps = apps,
             trigger = if (old.mode == BlockMode.HABIT && hadTimer) {
                 old.trigger.copy(requiredAmount = form.timerMin * 60_000, combineMode = if (form.combineOr) CombineMode.OR else CombineMode.AND)
@@ -114,10 +132,9 @@ object BlockForms {
                 old.trigger
             },
             reward = old.reward.copy(unlockDurationMs = form.unlockMin * 60_000),
-            dailyAllowanceMs = if (old.mode == BlockMode.ALLOWANCE) form.allowanceMin * 60_000 else old.dailyAllowanceMs,
             lockdownMs = if (old.mode == BlockMode.LOCKDOWN) form.lockdownMin * 60_000 else old.lockdownMs,
-            schedule = if (old.mode == BlockMode.SCHEDULE) Schedule(form.days, TimeWindow(form.startMin, form.endMin)) else old.schedule,
-        )
+            schedule = if (old.mode == BlockMode.SCHEDULE) schedule(form) else old.schedule,
+        ).let { if (old.mode == BlockMode.ALLOWANCE) it.withLimits(form) else it }
         return Result.Ok(world.copy(blocks = world.blocks.map { if (it.id == old.id) block else it }), block)
     }
 
@@ -146,6 +163,23 @@ object BlockForms {
         sessions = world.sessions - blockId,
         lockdowns = world.lockdowns - blockId,
         checklist = world.checklist - blockId,
+        runs = world.runs - blockId,
+        overrides = world.overrides - blockId,
+    )
+
+    /** A daily limit's numbers: the limit itself, the row rule, shared or per device. */
+    private fun Block.withLimits(form: Form): Block =
+        if (mode != BlockMode.ALLOWANCE) copy(dailyAllowanceMs = 0) else copy(
+            dailyAllowanceMs = if (form.dailyOn) form.allowanceMin * 60_000 else 0,
+            sessionMs = if (form.rowMin > 0) form.rowMin * 60_000 else 0,
+            sessionBreakMs = if (form.rowMin > 0) form.rowBreakMin * 60_000 else 0,
+            perDevice = form.perDevice,
+        )
+
+    private fun schedule(form: Form) = Schedule(
+        form.days,
+        TimeWindow(form.startMin, form.endMin),
+        form.moreWindows.map { DayWindow(it.days, TimeWindow(it.startMin, it.endMin)) },
     )
 
     private fun trigger(checklist: Boolean, timer: Boolean, timerMin: Long, or: Boolean): Trigger {
@@ -174,10 +208,13 @@ object BlockForms {
         return when {
             !hasTargets -> "Pick a laptop app or add a website to block"
             form.name.isBlank() -> "Give the block a name"
-            form.mode == BlockMode.ALLOWANCE && form.allowanceMin <= 0 -> "Set how many minutes a day"
+            form.mode == BlockMode.ALLOWANCE && !form.dailyOn && form.rowMin <= 0 -> "Set minutes a day, minutes in a row, or both"
+            form.mode == BlockMode.ALLOWANCE && form.dailyOn && form.allowanceMin <= 0 -> "Set how many minutes a day"
+            form.mode == BlockMode.ALLOWANCE && form.rowMin > 0 && form.rowBreakMin <= 0 -> "Set how long the break is"
             form.mode == BlockMode.SCHEDULE && form.days.isEmpty() -> "Pick at least one day"
-            form.mode == BlockMode.SCHEDULE && (form.days.any { it !in 1..7 } || form.startMin !in 0 until 1440 || form.endMin !in 0 until 1440) -> "Those times don't make sense"
-            form.mode == BlockMode.SCHEDULE && form.startMin == form.endMin -> "Start and end time can't be the same"
+            form.mode == BlockMode.SCHEDULE && (windows(form).any { (days, start, end) -> days.any { it !in 1..7 } || start !in 0 until 1440 || end !in 0 until 1440 }) -> "Those times don't make sense"
+            form.mode == BlockMode.SCHEDULE && windows(form).any { (_, start, end) -> start == end } -> "Start and end time can't be the same"
+            form.mode == BlockMode.SCHEDULE && form.moreWindows.any { it.days.isEmpty() } -> "Pick at least one day for each time"
             form.mode == BlockMode.LOCKDOWN && form.lockdownMin <= 0 -> "Set how long to block"
             form.mode != BlockMode.HABIT -> null
             !form.checklist && !form.timer -> "Pick at least one way to unlock it"
@@ -188,4 +225,7 @@ object BlockForms {
             else -> null
         }
     }
+
+    private fun windows(form: Form): List<Triple<Set<Int>, Int, Int>> =
+        listOf(Triple(form.days, form.startMin, form.endMin)) + form.moreWindows.map { Triple(it.days, it.startMin, it.endMin) }
 }
