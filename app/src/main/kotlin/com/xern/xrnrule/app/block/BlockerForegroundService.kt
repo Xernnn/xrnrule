@@ -258,7 +258,7 @@ class BlockerForegroundService : LifecycleService() {
         val inFront = browserInFront
         val silentBrowser = inFront?.takeIf { (_, since) ->
             val now = SystemClock.elapsedRealtime()
-            now - since >= EXTENSION_GRACE_MS && now - SiteSightings.lastHeardElapsed >= EXTENSION_GRACE_MS
+            now - since >= EXTENSION_GRACE_MS && SiteSightings.silent(now)
         }?.first
         container.websites.quiet = silentBrowser != null
         val sitesOff = silentBrowser != null && world.blocks.any { it.enabled && it.targetSites.isNotEmpty() }

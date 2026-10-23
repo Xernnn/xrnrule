@@ -21,24 +21,52 @@ object SiteSightings {
     private val _current = MutableStateFlow<String?>(null)
     val current: StateFlow<String?> = _current.asStateFlow()
 
-    /** `elapsedRealtime` of the extension's last call of any kind; 0 before the first. */
+    /**
+     * `elapsedRealtime` of the extension's last call of any kind. Starts at process start, so a
+     * fresh process gives the extension the usual time to check in before calling it silent.
+     */
     @Volatile
-    var lastHeardElapsed: Long = 0
+    var lastHeardElapsed: Long = SystemClock.elapsedRealtime()
+        private set
+
+    /** Whether the extension has called this process at all. */
+    @Volatile
+    var everHeard: Boolean = false
+        private set
+
+    /** `elapsedRealtime` of the last report of what's in front, and whether it named a website. */
+    @Volatile
+    var reportedAtElapsed: Long = 0
         private set
 
     @Volatile
-    private var reportedAtElapsed: Long = 0
+    var lastReportWasSite: Boolean = false
+        private set
 
     fun heard() {
         lastHeardElapsed = SystemClock.elapsedRealtime()
+        everHeard = true
     }
 
     /** The extension's report: [host] in front, or null for a page that isn't a website. */
     fun report(host: String?) {
         heard()
         reportedAtElapsed = lastHeardElapsed
+        lastReportWasSite = host != null
         _current.value = host
     }
+
+    /**
+     * Whether a browser in front means the extension has gone quiet. A website's page reports
+     * every 2.5 s, so silence after one is a problem within [SITE_SILENCE_MS]; on any other page
+     * the extension only checks in once a minute, so only [EXTENSION_SILENCE_MS] of nothing is.
+     */
+    fun silent(nowElapsed: Long): Boolean =
+        nowElapsed - lastHeardElapsed >= EXTENSION_SILENCE_MS ||
+            (lastReportWasSite && nowElapsed - reportedAtElapsed >= SITE_SILENCE_MS)
+
+    private const val SITE_SILENCE_MS = 15_000L
+    private const val EXTENSION_SILENCE_MS = 90_000L
 
     /** Called every second by [ExtensionServer]. */
     fun expire() {
@@ -98,7 +126,7 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
 
     override fun isSupported() = true
 
-    override fun isEnabled(context: Context) = lastHeardWall > 0 || SiteSightings.lastHeardElapsed > 0
+    override fun isEnabled(context: Context) = lastHeardWall > 0 || SiteSightings.everHeard
 
     override fun settingsIntent(): Intent =
         (extensionBrowser ?: QUETTA).let { context.packageManager.getLaunchIntentForPackage(it) }

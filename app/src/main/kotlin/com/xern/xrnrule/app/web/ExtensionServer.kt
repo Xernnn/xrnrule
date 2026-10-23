@@ -65,7 +65,8 @@ class ExtensionServer(
             val server = try {
                 ServerSocket().apply {
                     reuseAddress = true
-                    bind(InetSocketAddress(InetAddress.getLoopbackAddress(), PORT), 16)
+                    // IPv4 on purpose: Android's getLoopbackAddress() is ::1, and the extension calls 127.0.0.1.
+                    bind(InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), PORT), 16)
                 }
             } catch (_: IOException) {
                 Thread.sleep(RETRY_MS)
