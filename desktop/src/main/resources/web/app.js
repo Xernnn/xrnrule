@@ -107,6 +107,8 @@ const siteMatches = (host, target) => host === target || host.endsWith("." + tar
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
+const KIND = { HABIT: "habit", ALLOWANCE: "daily limit", SCHEDULE: "schedule", LOCKDOWN: "lockdown" };
+
 function status(b) {
   if (!b.enabled) return ["idle", "Turned off"];
   if (state.pauseRemainingMs > 0 && !b.hardcore && b.mode !== "LOCKDOWN") return ["open", `On a break for ${clock(state.pauseRemainingMs)}`];
@@ -169,7 +171,7 @@ function blockCard(b) {
   return h("section", { class: "card block" },
     h("div", { class: "top" },
       h("h3", {}, b.name),
-      h("span", { class: "chip" }, b.mode.toLowerCase()),
+      h("span", { class: "chip" }, KIND[b.mode] ?? b.mode.toLowerCase()),
       b.hardcore && h("span", { class: "chip" }, "hardcore")),
     h("div", { class: `status ${cls}` }, text),
     hasTimer && h("div", {},
