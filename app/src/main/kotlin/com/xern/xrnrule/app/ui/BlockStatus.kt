@@ -55,24 +55,43 @@ fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): 
         BlockMode.ALLOWANCE -> {
             val used = engine.allowanceUsedMs(world, block, clock)
             val allowance = block.dailyAllowanceMs
+            val rowBreak = engine.rowBreakRemainingMs(world, block, clock)
+            val bought = engine.overrideRemainingMs(world, block.id, clock)
+            val row = if (block.hasRowRule) "${formatRemaining(block.sessionMs - engine.rowUsedMs(world, block, clock))} of ${formatDuration(block.sessionMs)} in a row left" else null
+            val daily = if (allowance > 0) "${formatDuration(used)} of ${formatDuration(allowance)} used today" else null
             BlockStatusUi(
-                label = if (blocking) "Limit reached" else "${formatRemaining(allowance - used)} left",
+                label = when {
+                    rowBreak > 0 -> "On a break"
+                    blocking -> "Limit reached"
+                    bought > 0 -> "Bought time"
+                    allowance > 0 -> "${formatRemaining(allowance - used)} left"
+                    else -> "Open"
+                },
                 icon = if (blocking) Icons.Filled.Lock else Icons.Filled.HourglassBottom,
                 tone = if (blocking) BlockState.ARMED else BlockState.UNLOCKED,
-                line = "${formatDuration(used)} of ${formatDuration(allowance)} used today" +
-                    if (blocking) " · opens at midnight" else "",
-                fraction = if (allowance == 0L) 1f else used.toFloat() / allowance,
+                line = when {
+                    rowBreak > 0 -> "${formatRemaining(rowBreak)} of the break left · ${formatDuration(block.sessionMs)} in a row is the most"
+                    bought > 0 -> "${formatRemaining(bought)} of bought time left" + (daily?.let { " · $it" } ?: "")
+                    else -> listOfNotNull(daily?.let { if (blocking) "$it · opens at midnight" else it }, row).joinToString(" · ")
+                },
+                fraction = when {
+                    allowance > 0 -> used.toFloat() / allowance
+                    block.hasRowRule -> engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs
+                    else -> null
+                },
             )
         }
 
         BlockMode.SCHEDULE -> {
             val until = if (blocking) freeAtWall(block, world, engine, clock) else null
+            val bought = engine.overrideRemainingMs(world, block.id, clock)
             BlockStatusUi(
-                label = if (blocking) "Blocking now" else "Off now",
+                label = if (blocking) "Blocking now" else if (bought > 0) "Bought time" else "Off now",
                 icon = if (blocking) Icons.Filled.Lock else Icons.Filled.Schedule,
                 tone = if (blocking) BlockState.ARMED else BlockState.UNLOCKED,
                 line = describeSchedule(block.schedule) +
-                    (until?.let { " · until ${formatClockTime(it, clock.zone())}" } ?: ""),
+                    (until?.let { " · until ${formatClockTime(it, clock.zone())}" } ?: "") +
+                    (if (bought > 0) " · ${formatRemaining(bought)} of bought time left" else ""),
                 fraction = null,
             )
         }
@@ -109,26 +128,24 @@ fun freeAtWall(block: Block, world: World, engine: BlockEngine, clock: Clock): L
         BlockMode.HABIT -> null
         BlockMode.LOCKDOWN -> engine.lockdownRemainingMs(world, block.id, clock)
             .takeIf { it > 0 }?.let { clock.nowWallMs() + it }
-        BlockMode.ALLOWANCE -> now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        BlockMode.ALLOWANCE -> engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
+            ?: now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         BlockMode.SCHEDULE -> {
-            val s = block.schedule
-            val w = s.activeWindow
-            if (w == null) {
-                // All day on active days: free at the first midnight that starts an inactive day.
-                (1..7).map { now.toLocalDate().plusDays(it.toLong()) }
-                    .firstOrNull { it.dayOfWeek.value !in s.activeDays }
-                    ?.atStartOfDay(zone)?.toInstant()?.toEpochMilli()
-            } else {
-                val minute = now.hour * 60 + now.minute
-                val endDate = if (w.startMinuteOfDay > w.endMinuteOfDay && minute >= w.startMinuteOfDay) {
-                    now.toLocalDate().plusDays(1)
-                } else {
-                    now.toLocalDate()
-                }
-                endDate.atStartOfDay(zone).plusMinutes(w.endMinuteOfDay.toLong()).toInstant().toEpochMilli()
-            }
+            // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
+            val start = now.withSecond(0).withNano(0)
+            (1..7 * 24 * 60).asSequence()
+                .map { start.plusMinutes(it.toLong()) }
+                .firstOrNull { t -> !engine.scheduleActive(block, AtClock(t.toInstant().toEpochMilli(), zone)) }
+                ?.toInstant()?.toEpochMilli()
         }
     }
+}
+
+/** A clock stopped at [wall], to ask the engine about another moment. */
+private class AtClock(private val wall: Long, private val zone: ZoneId) : Clock {
+    override fun nowMonotonicMs() = 0L
+    override fun nowWallMs() = wall
+    override fun zone() = zone
 }
 
 /** Why an earned unlock can't be opened: it would go past today's unlock limit (I9). */
@@ -152,7 +169,8 @@ fun describeSchedule(schedule: Schedule): String {
     }
     val window = schedule.activeWindow
     val timeText = if (window == null) "All day" else "${minuteText(window.startMinuteOfDay)}–${minuteText(window.endMinuteOfDay)}"
-    return "$dayText · $timeText"
+    val more = schedule.moreWindows.map { w -> describeSchedule(Schedule(w.days, w.window)) }
+    return (listOf("$dayText · $timeText") + more).joinToString("; ")
 }
 
 fun shortDayName(isoDay: Int): String = DayOfWeek.of(isoDay).getDisplayName(TextStyle.SHORT, Locale.getDefault())

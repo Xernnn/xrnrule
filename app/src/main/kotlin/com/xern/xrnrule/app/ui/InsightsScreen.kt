@@ -405,7 +405,7 @@ private fun UsageRow(label: String, ms: Long, fraction: Float, isBlocked: Boolea
 
 /**
  * Time per website for the selected day. Android keeps no per-site history, so this only covers
- * time since website tracking (the Accessibility reader) was switched on.
+ * time since the browser extension first reported a site.
  */
 @Composable
 private fun WebsitesCard(
@@ -415,7 +415,8 @@ private fun WebsitesCard(
     tracking: WebsiteTracking,
     onTurnOn: () -> Unit,
 ) {
-    val trackingOn = tracking == WebsiteTracking.ON
+    // Time per site comes from the browser extension; once it has ever answered there is data to show.
+    val trackingOn = tracking != WebsiteTracking.OFF
     var showAll by rememberSaveable { mutableStateOf(false) }
     val sites = perDay[date.toEpochDay()].orEmpty().entries
         .filter { it.value >= 60_000 }
@@ -436,7 +437,7 @@ private fun WebsitesCard(
             !trackingOn -> {
                 Gap(12)
                 Button(onClick = onTurnOn, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (tracking == WebsiteTracking.OFF) "Turn on website tracking" else "Website tracking isn't running")
+                    Text("Set up the browser extension")
                 }
             }
             sites.isEmpty() -> {

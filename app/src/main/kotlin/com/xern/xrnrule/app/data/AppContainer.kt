@@ -4,8 +4,8 @@ import android.content.Context
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.hardcore.createHardcoreGuard
 import com.xern.xrnrule.app.loop.LoopHabits
-import com.xern.xrnrule.app.web.WebsiteMonitor
-import com.xern.xrnrule.app.web.createWebsiteMonitor
+import com.xern.xrnrule.app.web.ExtensionServer
+import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.World
@@ -38,7 +38,9 @@ class AppContainer(context: Context) {
     /** Anti-bypass (brainstorm §4.5) — real in the `sideload` flavor, a no-op in `play`. */
     val hardcoreGuard: HardcoreGuard = createHardcoreGuard(context)
 
-    val websites: WebsiteMonitor = createWebsiteMonitor(context)
+    /** Websites come from the xrnrule extension in the phone's browser, through [extensionServer]. */
+    val websites = ExtensionWebsiteMonitor(context)
+    val extensionServer = ExtensionServer(store, websites, appScope)
 
     val siteUsage = SiteUsageLog(File(context.filesDir, "site_usage.json"), clock)
 
@@ -55,5 +57,6 @@ class AppContainer(context: Context) {
             store.edit { it.copy(deviceId = id) }
         }
         shared.start()
+        extensionServer.start()
     }
 }

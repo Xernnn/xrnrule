@@ -31,9 +31,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,6 +49,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.xern.xrnrule.app.block.OverlayShieldPort
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
@@ -53,6 +60,7 @@ import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.CombineMode
 import com.xern.xrnrule.domain.LinkedDay
+import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.TriggerType
 import kotlinx.coroutines.delay
@@ -75,6 +83,10 @@ fun BlockOverlayContent(
     onLeave: () -> Unit,
     /** Opens a habit (by uuid) in our Loop build; null when it isn't installed. */
     onOpenLoop: ((String) -> Unit)? = null,
+    /** Buying minutes (contract I34): start the wait for these blocks, type the sentence, or drop it. */
+    onBeginOverride: (Set<String>) -> Unit = {},
+    onClaimOverride: (String) -> Unit = {},
+    onCancelOverride: () -> Unit = {},
 ) {
     XrnruleTheme {
         val block = ui?.block
@@ -135,6 +147,7 @@ fun BlockOverlayContent(
                 )
             }
             Spacer(Modifier.height(28.dp))
+            if (ui != null && strict) OverrideSection(ui, onBeginOverride, onClaimOverride, onCancelOverride)
 
             when {
                 block == null || strict -> Unit
@@ -177,12 +190,79 @@ fun BlockOverlayContent(
 /** When a daily limit / schedule / lockdown lets go — status, not instructions. */
 private fun strictStatus(block: Block, ui: OverlayShieldPort.OverlayUi): String {
     val freeAt = ui.freeAtWall
+    if (block.mode == BlockMode.ALLOWANCE && ui.rowBreakRemainingMs > 0) {
+        return "A break after ${formatDuration(block.sessionMs)} in a row · ${formatRemaining(ui.rowBreakRemainingMs)} left"
+    }
     return when (block.mode) {
         BlockMode.ALLOWANCE -> "${formatDuration(ui.allowanceMs ?: block.dailyAllowanceMs)} used · opens at midnight"
         BlockMode.SCHEDULE -> if (freeAt != null) "Until ${formatClockTime(freeAt)}" else ""
         BlockMode.LOCKDOWN -> ui.freeInMs?.let { "${formatRemaining(it)} left" }.orEmpty()
         BlockMode.HABIT -> ""
     }
+}
+
+/**
+ * Buying a few minutes past a daily limit or a schedule (contract I34): start, wait out the
+ * delay, type the sentence. The engine checks all of it; this only shows it.
+ */
+@Composable
+private fun OverrideSection(
+    ui: OverlayShieldPort.OverlayUi,
+    onBegin: (Set<String>) -> Unit,
+    onClaim: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val minutes = formatDuration(ui.overrideGrantMs)
+    when (ui.overrideRejection) {
+        null -> Unit
+        OverrideRejection.NONE_LEFT -> {
+            Text("Today's bought minutes for this are used up.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(20.dp))
+            return
+        }
+        else -> return
+    }
+    val readyAt = ui.overrideReadyAtElapsed
+    if (readyAt == null) {
+        OutlinedButton(onClick = { onBegin(ui.blockerIds) }, modifier = Modifier.fillMaxWidth()) { Text("Buy $minutes") }
+        Text(
+            "Wait ${ui.overrideWaitMs / 1000} s, then type a sentence.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(20.dp))
+        return
+    }
+    var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(readyAt) {
+        while (true) {
+            now = android.os.SystemClock.elapsedRealtime()
+            delay(250)
+        }
+    }
+    var typed by remember(readyAt) { mutableStateOf("") }
+    val waitLeft = readyAt - now
+    Text("Type: “${ui.overridePhrase}”", style = MaterialTheme.typography.bodyLarge)
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = typed,
+        onValueChange = { typed = it },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        // A password field keeps keyboards like Laban Key from turning "oo" into "ô" as you type.
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { if (waitLeft <= 0) onClaim(typed) }),
+        visualTransformation = VisualTransformation.None,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = { onClaim(typed) }, enabled = waitLeft <= 0, modifier = Modifier.weight(1f)) {
+            Text(if (waitLeft > 0) "Wait ${(waitLeft + 999) / 1000} s" else "Open for $minutes")
+        }
+        Spacer(Modifier.width(8.dp))
+        TextButton(onClick = onCancel) { Text("Never mind") }
+    }
+    Spacer(Modifier.height(20.dp))
 }
 
 @Composable

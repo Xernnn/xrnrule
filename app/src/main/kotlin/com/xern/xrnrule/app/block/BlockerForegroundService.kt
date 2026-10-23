@@ -18,13 +18,14 @@ import androidx.work.WorkManager
 import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.isGranted
+import android.os.SystemClock
+import com.xern.xrnrule.app.web.Browsers
 import com.xern.xrnrule.app.web.SiteSightings
-import com.xern.xrnrule.app.web.WebsiteTracking
-import com.xern.xrnrule.app.web.tracking
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Effect
+import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.epochDay
@@ -61,6 +62,10 @@ class BlockerForegroundService : LifecycleService() {
     /** The unlock session already warned about, so the 30 s warning fires once per unlock. */
     private var warnedSession: Pair<String, Long>? = null
     private var lastHealth: String? = null
+
+    /** A browser in front, and since when (`elapsedRealtime`): the extension should be speaking. */
+    @Volatile
+    private var browserInFront: Pair<String, Long>? = null
 
     /**
      * Screen off counts as "nothing in use". UsageStats keeps reporting the last app while the
@@ -127,18 +132,20 @@ class BlockerForegroundService : LifecycleService() {
             container.store.world.value.blocks.any { it.enabled }
         }
 
-        // 1. foreground app (+ browser site) -> engine and the site-time log. The detector only
-        //    polls while the screen is on and unlocked.
+        // 1. foreground app (+ the site the browser extension reports) -> engine and the
+        //    site-time log. The detector only polls while the screen is on and unlocked.
         lifecycleScope.launch {
             val detected = awake.flatMapLatest { isAwake -> if (isAwake) detector.foregroundPackage else flowOf(null) }
-            combine(detected, SiteSightings.current, awake) { pkg, sighting, isAwake ->
-                if (!isAwake) {
-                    Foreground(null, null)
-                } else {
-                    Foreground(pkg, sighting?.takeIf { it.browserPackage == pkg }?.host)
-                }
+            combine(detected, SiteSightings.current, awake) { pkg, host, isAwake ->
+                val browser = pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
+                if (!isAwake) Foreground(null, null) else Foreground(pkg, host?.takeIf { browser != null })
             }.distinctUntilChanged().collect { fg ->
                 foreground.value = fg
+                val browser = fg.pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
+                if (browser == null) browserInFront = null
+                else if (browserInFront?.first != browser) browserInFront = browser to SystemClock.elapsedRealtime()
+                // The extension speaks from whichever browser is in front when it does: that's the one it lives in.
+                if (browser != null && fg.site != null) container.websites.extensionBrowser = browser
                 container.siteUsage.onSite(fg.site)
                 container.store.dispatch(BlockEvent.ForegroundChanged(fg.pkg, fg.site))
             }
@@ -159,7 +166,7 @@ class BlockerForegroundService : LifecycleService() {
 
         // 3. ~1s tick while anything time-based is live and the screen is on (nothing is shown
         //    while it's off, and the first event after waking catches up); book website time
-        //    every 30 s; re-read Loop at local midnight; check that blocking still works.
+        //    every 30 s; re-read Loop at local midnight; check every 5 s that blocking still works.
         lifecycleScope.launch {
             var seconds = 0
             var loopDay = container.clock.epochDay()
@@ -171,8 +178,8 @@ class BlockerForegroundService : LifecycleService() {
                 if (seconds % 30 == 0) {
                     container.siteUsage.flush()
                     container.clockGuard.check()
-                    checkHealth(container.store.world.value)
                 }
+                if (seconds % 5 == 0) checkHealth(container.store.world.value)
                 seconds++
                 val today = container.clock.epochDay()
                 if (today != loopDay) {
@@ -231,6 +238,7 @@ class BlockerForegroundService : LifecycleService() {
             is Effect.RedeemRejected -> if (effect.reason == RejectReason.CAP_REACHED) {
                 Toast.makeText(this, "Today's unlock time is used up", Toast.LENGTH_LONG).show()
             }
+            is Effect.OverrideRejected -> Toast.makeText(this, overrideText(effect.reason), Toast.LENGTH_LONG).show()
             else -> Unit
         }
     }
@@ -246,14 +254,19 @@ class BlockerForegroundService : LifecycleService() {
         } else {
             listOf(AppPermission.USAGE_ACCESS, AppPermission.OVERLAY).filterNot { it.isGranted(this) }
         }
-        val sitesOff = container.websites.isSupported() &&
-            world.blocks.any { it.targetSites.isNotEmpty() } &&
-            container.websites.tracking(this) != WebsiteTracking.ON
+        // A browser in front for a while and not a word from the extension: sites aren't being blocked there.
+        val inFront = browserInFront
+        val silentBrowser = inFront?.takeIf { (_, since) ->
+            val now = SystemClock.elapsedRealtime()
+            now - since >= EXTENSION_GRACE_MS && now - SiteSightings.lastHeardElapsed >= EXTENSION_GRACE_MS
+        }?.first
+        container.websites.quiet = silentBrowser != null
+        val sitesOff = silentBrowser != null && world.blocks.any { it.enabled && it.targetSites.isNotEmpty() }
         // Sync failing for an hour: unlocks and ticks from the laptop stop arriving, silently.
         val now = System.currentTimeMillis()
         val blocksStuck = container.shared.failingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
         val habitsStuck = container.loop.serverFailingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
-        val health = "${missing.joinToString()}|$sitesOff|$blocksStuck|$habitsStuck"
+        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck"
         if (health == lastHealth) return
         lastHealth = health
 
@@ -280,11 +293,17 @@ class BlockerForegroundService : LifecycleService() {
                 "Turn on ${missing.joinToString(" and ") { "\"${it.label}\"" }} for xrnrule. Tap to fix.",
             )
         }
-        if (sitesOff) {
+        if (sitesOff && silentBrowser != null) {
+            val name = appLabel(silentBrowser)
+            val home = container.websites.extensionBrowser
             notifications.alert(
                 Notifications.ALERT_WEBSITES_OFF,
-                "Website blocking isn't running",
-                "Turn xrnrule's website reader back on in Accessibility settings. Tap to fix.",
+                "Sites aren't blocked in $name",
+                if (home == null || home == silentBrowser) {
+                    "The xrnrule extension in $name isn't answering. Turn it on in $name's extensions page."
+                } else {
+                    "Only ${appLabel(home)} has the xrnrule extension. Use it for the sites you block."
+                },
             )
         } else {
             notifications.cancel(Notifications.ALERT_WEBSITES_OFF)
@@ -297,6 +316,20 @@ class BlockerForegroundService : LifecycleService() {
         container.siteUsage.onSite(null)
         container.persist.flush()
         super.onDestroy()
+    }
+
+    private fun appLabel(pkg: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrDefault(pkg)
+
+    private fun overrideText(reason: OverrideRejection): String = when (reason) {
+        OverrideRejection.WRONG_PHRASE -> "That isn't the sentence. Type it exactly."
+        OverrideRejection.TOO_EARLY -> "Not yet: wait for the countdown."
+        OverrideRejection.TOO_LATE -> "That took too long. Start again."
+        OverrideRejection.NONE_LEFT -> "Today's bought minutes for this are used up."
+        OverrideRejection.OFF -> "Buying minutes is turned off."
+        OverrideRejection.NOT_OVERRIDABLE -> "This can't be bought off."
+        OverrideRejection.NOT_STARTED -> "Start again."
     }
 
     private fun keyguardLocked(): Boolean =
@@ -344,13 +377,16 @@ class BlockerForegroundService : LifecycleService() {
         /** How long sync may fail before the "not syncing" alert. */
         private const val SYNC_ALERT_MS = 60 * 60 * 1000L
 
+        /** How long a browser may be in front without a word from the extension. */
+        private const val EXTENSION_GRACE_MS = 10_000L
+
         /**
          * Android 12+ refuses foreground-service starts from a process that came up in the
-         * background (a watchdog job, the system binding the website reader) by throwing
+         * background (a watchdog job) by throwing
          * `ForegroundServiceStartNotAllowedException`, an [IllegalStateException]. Called from
          * `Application.onCreate`, that used to kill the process before anything ran. Now the
-         * start is simply skipped; the next allowed caller (opening the app, boot, the website
-         * reader connecting) brings the service up.
+         * start is simply skipped; the next allowed caller (opening the app, boot) brings the
+         * service up.
          */
         fun start(context: Context): Boolean {
             val intent = Intent(context, BlockerForegroundService::class.java)

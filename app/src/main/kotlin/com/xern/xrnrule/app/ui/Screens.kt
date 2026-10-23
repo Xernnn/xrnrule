@@ -106,12 +106,14 @@ import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.CombineMode
+import com.xern.xrnrule.domain.DayWindow
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.Reward
 import com.xern.xrnrule.domain.Schedule
+import com.xern.xrnrule.domain.Settings
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TimeWindow
 import com.xern.xrnrule.domain.Trigger
@@ -782,13 +784,43 @@ fun SettingsScreen(
                     Text("Websites", style = MaterialTheme.typography.titleMedium)
                     Gap(4)
                     PermRow(
-                        if (websiteTracking == WebsiteTracking.NOT_RUNNING) "Website tracking (not running)" else "Website tracking",
+                        when (websiteTracking) {
+                            WebsiteTracking.OFF -> "Browser extension (not set up)"
+                            WebsiteTracking.NOT_RUNNING -> "Browser extension (not answering)"
+                            WebsiteTracking.ON -> "Browser extension"
+                        },
                         granted = websiteTracking == WebsiteTracking.ON,
                     ) {
                         runCatching { context.startActivity(websites.settingsIntent()) }
                     }
+                    Text(
+                        "Sites are blocked by the xrnrule extension in Quetta; nothing reads your screen. " +
+                            "In Quetta: extensions → Developer mode → install xrnrule-extension.zip.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
+
+            OverrideSettingsCard(world.settings, onSave = { new ->
+                val save = { store.edit { w -> w.copy(settings = w.settings.copy(
+                    overridePhrase = new.overridePhrase,
+                    overrideWaitMs = new.overrideWaitMs,
+                    overrideGrantMs = new.overrideGrantMs,
+                    overridesPerDay = new.overridesPerDay,
+                    showClock = new.showClock,
+                )) } }
+                if (BlockEdits.settingsLoosen(world.settings, new)) {
+                    loosen = LoosenRequest(
+                        title = "Save these settings?",
+                        detail = "They make buying minutes past a block easier.",
+                        hardcore = false,
+                        apply = save,
+                    )
+                } else {
+                    save()
+                }
+            })
 
             // Only worth a row once Loop is around or a block relies on it — otherwise it's noise.
             if (loopStatus != LoopStatus.NOT_INSTALLED || anyLoopLinks) {
@@ -946,6 +978,73 @@ private val DAILY_CAP_CHOICES_MIN = listOf(15L, 30L, 60L, 90L, 120L, 180L)
  * A new password typed twice, so a typo can't lock Settings for good; plus the current one when
  * changing it. [onSubmit] returns an error to show, or null when done.
  */
+/**
+ * Buying minutes past a daily limit or schedule (contract I34), and the browser's corner clock.
+ * Shared with the laptop; anything that makes buying easier waits out the guard.
+ */
+@Composable
+private fun OverrideSettingsCard(settings: Settings, onSave: (Settings) -> Unit) {
+    var editing by remember { mutableStateOf(false) }
+    HFCard {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Buying minutes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (!editing) TextButton(onClick = { editing = true }) { Text("Edit") }
+        }
+        if (!editing) {
+            Text(
+                if (settings.overridesPerDay > 0) {
+                    "On a daily limit or a schedule: wait ${settings.overrideWaitMs / 1000} s, type “${settings.overridePhrase}”, " +
+                        "get ${formatDuration(settings.overrideGrantMs)}. ${settings.overridesPerDay} a day per block, phone and laptop together."
+                } else {
+                    "Off: nothing can be bought past a block."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Gap(4)
+            Text(
+                "Corner clock on limited sites: ${if (settings.showClock) "on" else "off"}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@HFCard
+        }
+        var phrase by remember { mutableStateOf(settings.overridePhrase) }
+        var waitSec by remember { mutableStateOf((settings.overrideWaitMs / 1000).toString()) }
+        var grantMin by remember { mutableStateOf((settings.overrideGrantMs / 60_000).toString()) }
+        var perDay by remember { mutableStateOf(settings.overridesPerDay.toString()) }
+        var showClock by remember { mutableStateOf(settings.showClock) }
+        OutlinedTextField(
+            value = phrase,
+            onValueChange = { phrase = it },
+            label = { Text("Sentence to type") },
+            supportingText = { Text("Accents, case and punctuation don't matter.") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField(waitSec, "Wait (s)", Modifier.weight(1f)) { waitSec = it }
+            NumberField(grantMin, "Minutes", Modifier.weight(1f)) { grantMin = it }
+            NumberField(perDay, "A day", Modifier.weight(1f)) { perDay = it }
+        }
+        CheckRow("Show the corner clock on limited sites", showClock) { showClock = it }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                onSave(
+                    settings.copy(
+                        overridePhrase = phrase.trim(),
+                        overrideWaitMs = (waitSec.toLongOrNull() ?: 0).coerceIn(0, 3600) * 1000,
+                        overrideGrantMs = (grantMin.toLongOrNull() ?: 1).coerceIn(1, 120) * 60_000,
+                        overridesPerDay = (perDay.toIntOrNull() ?: 0).coerceIn(0, 20),
+                        showClock = showClock,
+                    ),
+                )
+                editing = false
+            }) { Text("Save") }
+            TextButton(onClick = { editing = false }) { Text("Cancel") }
+        }
+    }
+}
+
 @Composable
 private fun PasswordForm(askCurrent: Boolean, submitLabel: String, onSubmit: (current: String, new: String) -> String?) {
     var current by remember { mutableStateOf("") }
@@ -1120,6 +1219,7 @@ fun CreateBlockScreen(
     val apps = remember { InstalledApps.launchable(context) }
     var selectedTargets by remember { mutableStateOf(existing?.targetPackages ?: emptySet()) }
     var sites by remember { mutableStateOf(existing?.targetSites ?: emptySet()) }
+    var exceptSites by remember { mutableStateOf(existing?.exceptSites ?: emptySet()) }
     var name by remember { mutableStateOf(existing?.name ?: "") }
     var how by remember {
         mutableStateOf(
@@ -1142,13 +1242,20 @@ fun CreateBlockScreen(
     var pickingLoopHabit by remember { mutableStateOf(false) }
     var useDifferentHabitApp by remember { mutableStateOf(existing?.trigger?.habitPackages?.isNotEmpty() == true) }
     var habitApps by remember { mutableStateOf(existing?.trigger?.habitPackages ?: emptySet()) }
-    var allowanceMinutes by remember { mutableStateOf(existing?.takeIf { it.mode == BlockMode.ALLOWANCE }?.let { (it.dailyAllowanceMs / 60_000).toString() } ?: "30") }
+    val existingLimit = existing?.takeIf { it.mode == BlockMode.ALLOWANCE }
+    var dailyOn by remember { mutableStateOf(existingLimit == null || existingLimit.dailyAllowanceMs > 0) }
+    var allowanceMinutes by remember { mutableStateOf(existingLimit?.dailyAllowanceMs?.takeIf { it > 0 }?.let { (it / 60_000).toString() } ?: "30") }
+    var rowOn by remember { mutableStateOf(existingLimit?.hasRowRule == true) }
+    var rowMinutes by remember { mutableStateOf(existingLimit?.takeIf { it.hasRowRule }?.let { (it.sessionMs / 60_000).toString() } ?: "15") }
+    var rowBreakMinutes by remember { mutableStateOf(existingLimit?.takeIf { it.hasRowRule }?.let { (it.sessionBreakMs / 60_000).toString() } ?: "15") }
+    var perDevice by remember { mutableStateOf(existingLimit?.perDevice == true) }
     var onSchedule by remember { mutableStateOf(existing?.mode == BlockMode.SCHEDULE) }
     var lockdownMinutes by remember { mutableStateOf(existing?.takeIf { it.mode == BlockMode.LOCKDOWN }?.let { (it.lockdownMs / 60_000).toString() } ?: "60") }
     val existingWindow = existing?.takeIf { it.mode == BlockMode.SCHEDULE }?.schedule
     var scheduleDays by remember { mutableStateOf(existingWindow?.activeDays ?: (1..5).toSet()) }
     var startMinute by remember { mutableIntStateOf(existingWindow?.activeWindow?.startMinuteOfDay ?: (9 * 60)) }
     var endMinute by remember { mutableIntStateOf(existingWindow?.activeWindow?.endMinuteOfDay ?: (17 * 60)) }
+    var moreWindows by remember { mutableStateOf(existingWindow?.moreWindows ?: emptyList()) }
     var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
     val capMinutes = store.world.collectAsStateWithLifecycle().value.settings.dailyCapMs / 60_000
 
@@ -1158,14 +1265,19 @@ fun CreateBlockScreen(
     val timerValid = (timerMinutes.toLongOrNull() ?: 0) > 0
     val hasTargets = selectedTargets.isNotEmpty() || sites.isNotEmpty()
     val allowanceValid = (allowanceMinutes.toLongOrNull() ?: 0) > 0
+    val rowValid = (rowMinutes.toLongOrNull() ?: 0) > 0 && (rowBreakMinutes.toLongOrNull() ?: 0) > 0
     val lockdownValid = (lockdownMinutes.toLongOrNull() ?: 0) > 0
-    val scheduleValid = scheduleDays.isNotEmpty() && startMinute != endMinute
+    val scheduleValid = scheduleDays.isNotEmpty() && startMinute != endMinute &&
+        moreWindows.all { it.days.isNotEmpty() && it.window.startMinuteOfDay != it.window.endMinuteOfDay }
     val unlockMin = unlockMinutes.toLongOrNull() ?: 0
     val hint = when {
-        !hasTargets -> if (websites.isSupported()) "Pick an app or add a website to block" else "Pick at least one app to lock"
+        !hasTargets -> "Pick an app or add a website to block"
         name.isBlank() -> "Give the block a name"
-        how == HowItBlocks.LIMIT && !allowanceValid -> "Set how many minutes a day"
+        how == HowItBlocks.LIMIT && !dailyOn && !rowOn -> "Set minutes a day, minutes in a row, or both"
+        how == HowItBlocks.LIMIT && dailyOn && !allowanceValid -> "Set how many minutes a day"
+        how == HowItBlocks.LIMIT && rowOn && !rowValid -> "Set the minutes in a row and the break"
         how == HowItBlocks.TIME && onSchedule && scheduleDays.isEmpty() -> "Pick at least one day"
+        how == HowItBlocks.TIME && onSchedule && moreWindows.any { it.days.isEmpty() } -> "Pick at least one day for each time"
         how == HowItBlocks.TIME && onSchedule && !scheduleValid -> "Start and end time can't be the same"
         how == HowItBlocks.TIME && !onSchedule && !lockdownValid -> "Set how long to block"
         !habitMode -> null
@@ -1218,20 +1330,28 @@ fun CreateBlockScreen(
                             HowItBlocks.LIMIT -> BlockMode.ALLOWANCE
                             HowItBlocks.TIME -> if (onSchedule) BlockMode.SCHEDULE else BlockMode.LOCKDOWN
                         }
+                        val dailyMs = if (dailyOn) (allowanceMinutes.toLongOrNull() ?: 0) * 60_000 else 0
+                        val rowMs = if (rowOn) (rowMinutes.toLongOrNull() ?: 0) * 60_000 else 0
+                        val rowBreakMs = if (rowOn) (rowBreakMinutes.toLongOrNull() ?: 0) * 60_000 else 0
+                        val schedule = Schedule(scheduleDays, TimeWindow(startMinute, endMinute), moreWindows)
                         if (existing != null) {
                             val updated = existing.copy(
                                 name = name.trim(),
                                 targetPackages = selectedTargets,
                                 targetSites = sites,
+                                exceptSites = exceptSites.filterTo(mutableSetOf()) { e -> sites.any { Sites.matches(e, it) } },
                                 trigger = if (habitMode && hadTimer) {
                                     existing.trigger.copy(requiredAmount = timerMs, combineMode = combineMode, habitPackages = habitPkgs)
                                 } else {
                                     existing.trigger
                                 },
                                 reward = existing.reward.copy(unlockDurationMs = unlockMin * 60_000),
-                                dailyAllowanceMs = if (mode == BlockMode.ALLOWANCE) (allowanceMinutes.toLongOrNull() ?: 0) * 60_000 else existing.dailyAllowanceMs,
+                                dailyAllowanceMs = if (mode == BlockMode.ALLOWANCE) dailyMs else existing.dailyAllowanceMs,
+                                sessionMs = if (mode == BlockMode.ALLOWANCE) rowMs else existing.sessionMs,
+                                sessionBreakMs = if (mode == BlockMode.ALLOWANCE) rowBreakMs else existing.sessionBreakMs,
+                                perDevice = if (mode == BlockMode.ALLOWANCE) perDevice else existing.perDevice,
                                 lockdownMs = if (mode == BlockMode.LOCKDOWN) (lockdownMinutes.toLongOrNull() ?: 0) * 60_000 else existing.lockdownMs,
-                                schedule = if (mode == BlockMode.SCHEDULE) Schedule(scheduleDays, TimeWindow(startMinute, endMinute)) else existing.schedule,
+                                schedule = if (mode == BlockMode.SCHEDULE) schedule else existing.schedule,
                             )
                             val save = {
                                 store.edit { it.replaceBlock(updated) }
@@ -1257,6 +1377,7 @@ fun CreateBlockScreen(
                                 name = name.trim(),
                                 targetPackages = selectedTargets,
                                 targetSites = sites,
+                                exceptSites = exceptSites.filterTo(mutableSetOf()) { e -> sites.any { Sites.matches(e, it) } },
                                 trigger = trigger,
                                 unlockMinutes = unlockMinutes.toLongOrNull() ?: 5,
                                 checklistItems = if (habitMode) validItems else emptyList(),
@@ -1264,13 +1385,12 @@ fun CreateBlockScreen(
                                 yesterdayLinks = yesterdayLinks,
                                 goalLinks = goalLinks,
                                 mode = mode,
-                                dailyAllowanceMs = (allowanceMinutes.toLongOrNull() ?: 0) * 60_000,
+                                dailyAllowanceMs = dailyMs,
+                                sessionMs = rowMs,
+                                sessionBreakMs = rowBreakMs,
+                                perDevice = perDevice,
                                 lockdownMs = (lockdownMinutes.toLongOrNull() ?: 0) * 60_000,
-                                schedule = if (mode == BlockMode.SCHEDULE) {
-                                    Schedule(scheduleDays, TimeWindow(startMinute, endMinute))
-                                } else {
-                                    Schedule.ALWAYS
-                                },
+                                schedule = if (mode == BlockMode.SCHEDULE) schedule else Schedule.ALWAYS,
                             ).withLockdownStarted(blockId, store.clock) // "for a while" starts now
                         }
                         if (habitMode && useChecklist && linkedHabits.isNotEmpty()) loop.sync(force = true)
@@ -1318,6 +1438,22 @@ fun CreateBlockScreen(
                         },
                         onRemove = { sites = sites - it },
                     )
+                    if (sites.isNotEmpty() || exceptSites.isNotEmpty()) {
+                        Gap(12)
+                        Text("Leave these alone", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Parts of those sites this block doesn't touch, like music.youtube.com.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Gap(8)
+                        SiteInput(
+                            sites = exceptSites,
+                            onAdd = { exceptSites = exceptSites + it },
+                            onRemove = { exceptSites = exceptSites - it },
+                            placeholder = "e.g. music.youtube.com",
+                        )
+                    }
                     WebsiteTrackingWarning(websites)
                 }
             }
@@ -1352,15 +1488,38 @@ fun CreateBlockScreen(
                 when (how) {
                     HowItBlocks.HABIT -> Unit
                     HowItBlocks.LIMIT -> {
+                        Gap(8)
+                        CheckRow("A limit a day", dailyOn) { dailyOn = it }
+                        if (dailyOn) {
+                            NumberField(allowanceMinutes, "Minutes per day") { allowanceMinutes = it }
+                        }
+                        CheckRow("At most so long in a row", rowOn) { rowOn = it }
+                        if (rowOn) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                NumberField(rowMinutes, "Minutes in a row", Modifier.weight(1f)) { rowMinutes = it }
+                                NumberField(rowBreakMinutes, "Then a break of", Modifier.weight(1f)) { rowBreakMinutes = it }
+                            }
+                            Text(
+                                "Resting that long on your own counts as the break.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Gap(12)
-                        OutlinedTextField(
-                            value = allowanceMinutes,
-                            onValueChange = { v -> allowanceMinutes = v.filter(Char::isDigit).take(4) },
-                            label = { Text("Minutes per day") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        Text("Phone and laptop", style = MaterialTheme.typography.titleSmall)
+                        Gap(6)
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                            SegmentedButton(
+                                selected = !perDevice,
+                                onClick = { perDevice = false },
+                                shape = SegmentedButtonDefaults.itemShape(0, 2),
+                            ) { Text("Share one limit") }
+                            SegmentedButton(
+                                selected = perDevice,
+                                onClick = { perDevice = true },
+                                shape = SegmentedButtonDefaults.itemShape(1, 2),
+                            ) { Text("Each has its own") }
+                        }
                     }
                     HowItBlocks.TIME -> {
                         Gap(12)
@@ -1388,6 +1547,30 @@ fun CreateBlockScreen(
                                 onStartChange = { startMinute = it },
                                 onEndChange = { endMinute = it },
                             )
+                            moreWindows.forEachIndexed { i, w ->
+                                fun update(new: DayWindow) {
+                                    moreWindows = moreWindows.toMutableList().also { it[i] = new }
+                                }
+                                Gap(12)
+                                Hairline()
+                                Gap(12)
+                                ScheduleEditor(
+                                    days = w.days,
+                                    onDaysChange = { update(w.copy(days = it)) },
+                                    startMinute = w.window.startMinuteOfDay,
+                                    endMinute = w.window.endMinuteOfDay,
+                                    onStartChange = { update(w.copy(window = w.window.copy(startMinuteOfDay = it))) },
+                                    onEndChange = { update(w.copy(window = w.window.copy(endMinuteOfDay = it))) },
+                                )
+                                TextButton(onClick = { moreWindows = moreWindows.toMutableList().also { it.removeAt(i) } }) {
+                                    Text("Remove these times")
+                                }
+                            }
+                            TextButton(onClick = { moreWindows = moreWindows + DayWindow((1..7).toSet(), TimeWindow(18 * 60, 22 * 60)) }) {
+                                Icon(Icons.Filled.Add, contentDescription = null)
+                                WGap(6)
+                                Text("More times")
+                            }
                         } else {
                             LockdownEditor(minutes = lockdownMinutes, onMinutesChange = { lockdownMinutes = it })
                         }
@@ -1557,9 +1740,31 @@ fun CreateBlockScreen(
 
 private fun Set<String>.toggled(value: String): Set<String> = if (value in this) this - value else this + value
 
+/** A checkbox with its label, the whole row tappable. */
+@Composable
+private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        WGap(8)
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun NumberField(value: String, label: String, modifier: Modifier = Modifier.fillMaxWidth(), onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { v -> onChange(v.filter(Char::isDigit).take(4)) },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+    )
+}
+
 /** Type a site, press Add/Done; normalized to a bare domain that also covers its subdomains. */
 @Composable
-private fun SiteInput(sites: Set<String>, onAdd: (String) -> Unit, onRemove: (String) -> Unit) {
+private fun SiteInput(sites: Set<String>, onAdd: (String) -> Unit, onRemove: (String) -> Unit, placeholder: String = "e.g. youtube.com") {
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     fun submit() {
@@ -1592,7 +1797,7 @@ private fun SiteInput(sites: Set<String>, onAdd: (String) -> Unit, onRemove: (St
     OutlinedTextField(
         value = text,
         onValueChange = { text = it; error = false },
-        placeholder = { Text("e.g. youtube.com") },
+        placeholder = { Text(placeholder) },
         singleLine = true,
         isError = error,
         supportingText = if (error) {
@@ -1611,7 +1816,7 @@ private fun SiteInput(sites: Set<String>, onAdd: (String) -> Unit, onRemove: (St
     )
 }
 
-/** Website rules do nothing until the Accessibility reader is on; say so where the rule is made. */
+/** Website rules do nothing without the xrnrule extension in the browser; say so where the rule is made. */
 @Composable
 private fun WebsiteTrackingWarning(websites: WebsiteMonitor) {
     val context = LocalContext.current
@@ -1628,13 +1833,13 @@ private fun WebsiteTrackingWarning(websites: WebsiteMonitor) {
         )
         WGap(8)
         Text(
-            if (tracking == WebsiteTracking.OFF) "Website tracking is off" else "Website tracking isn't running",
+            if (tracking == WebsiteTracking.OFF) "Sites need the xrnrule extension in your browser" else "The browser extension isn't answering",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
         TextButton(onClick = { runCatching { context.startActivity(websites.settingsIntent()) } }) {
-            Text(if (tracking == WebsiteTracking.OFF) "Turn on" else "Fix")
+            Text("Open browser")
         }
     }
 }
@@ -1752,6 +1957,7 @@ private fun World.createBlock(
     name: String,
     targetPackages: Set<String>,
     targetSites: Set<String>,
+    exceptSites: Set<String>,
     trigger: Trigger,
     unlockMinutes: Long,
     checklistItems: List<String>,
@@ -1760,6 +1966,9 @@ private fun World.createBlock(
     goalLinks: Set<String>,
     mode: BlockMode,
     dailyAllowanceMs: Long,
+    sessionMs: Long,
+    sessionBreakMs: Long,
+    perDevice: Boolean,
     lockdownMs: Long,
     schedule: Schedule,
 ): World {
@@ -1768,12 +1977,16 @@ private fun World.createBlock(
         name = name,
         targetPackages = targetPackages,
         targetSites = targetSites,
+        exceptSites = exceptSites,
         trigger = trigger,
         reward = Reward(unlockDurationMs = unlockMinutes * 60_000),
         schedule = schedule,
         state = BlockState.ARMED,
         mode = mode,
         dailyAllowanceMs = if (mode == BlockMode.ALLOWANCE) dailyAllowanceMs else 0,
+        sessionMs = if (mode == BlockMode.ALLOWANCE) sessionMs else 0,
+        sessionBreakMs = if (mode == BlockMode.ALLOWANCE) sessionBreakMs else 0,
+        perDevice = mode == BlockMode.ALLOWANCE && perDevice,
         lockdownMs = if (mode == BlockMode.LOCKDOWN) lockdownMs else 0,
     )
     val plain = checklistItems.mapIndexed { i, text ->
@@ -1849,4 +2062,6 @@ private fun World.deleteBlock(blockId: String): World = copy(
     sessions = sessions - blockId,
     lockdowns = lockdowns - blockId,
     checklist = checklist - blockId,
+    runs = runs - blockId,
+    overrides = overrides - blockId,
 )

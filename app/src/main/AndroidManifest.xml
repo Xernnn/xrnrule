@@ -8,7 +8,8 @@
     <!-- Phase A: the block screen is drawn as an overlay (brainstorm §4.3) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Only for the opt-in sync with your own home server (Settings → Sync with laptop). -->
+    <!-- The opt-in sync with your own home server (Settings → Sync with laptop), and the browser
+         extension's door on 127.0.0.1, which never leaves the phone. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -41,6 +42,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- The browser extension's "Open xrnrule" link (intent://open#Intent;scheme=xrnrule;…). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="xrnrule" android:host="open" />
             </intent-filter>
         </activity>
 

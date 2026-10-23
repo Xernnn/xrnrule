@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.PixelFormat
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -27,16 +28,15 @@ import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.ui.BlockOverlayContent
 import com.xern.xrnrule.app.ui.freeAtWall
-import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
+import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
-import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,13 +96,12 @@ class OverlayShieldPort(
         }
         val engine = store.engine
         val clock = store.clock
-        val covering = world.blocks.filter { b ->
-            if (appBlocked) foregroundPkg in b.targetPackages
-            else b.targetSites.any { Sites.matches(foregroundSite!!, it) }
-        }
+        val blockers = engine.blockersOf(world, foregroundPkg.takeIf { appBlocked }, foregroundSite.takeIf { !appBlocked }, clock)
+        val blockerIds = blockers.map { it.id }.toSet()
         // A daily limit / schedule / lockdown can't be lifted by a habit (I22), so it is the one to explain.
-        val block = covering.firstOrNull { it.mode != BlockMode.HABIT && engine.isBlocking(world, it, clock) }
-            ?: covering.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
+        val block = blockers.firstOrNull { it.mode != BlockMode.HABIT }
+            ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
+        val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
         uiState.value = OverlayUi(
             subject = if (appBlocked) appLabel(foregroundPkg!!) else foregroundSite!!,
             isSite = siteBlocked,
@@ -119,6 +118,13 @@ class OverlayShieldPort(
             redeemRejection = block?.takeIf { it.state == BlockState.EARNED }?.let { engine.redeemRejection(world, it.id, clock) },
             unlockUsedTodayMs = engine.unlockUsedTodayMs(world, clock),
             dailyCapMs = world.settings.dailyCapMs,
+            rowBreakRemainingMs = block?.let { engine.rowBreakRemainingMs(world, it, clock) } ?: 0,
+            blockerIds = blockerIds,
+            overrideRejection = if (blockers.isEmpty()) OverrideRejection.NOT_OVERRIDABLE else engine.overrideRejection(world, blockers, clock),
+            overrideReadyAtElapsed = pending?.let { SystemClock.elapsedRealtime() + (it.sinceWall + world.settings.overrideWaitMs - clock.nowWallMs()) },
+            overridePhrase = world.settings.overridePhrase,
+            overrideGrantMs = world.settings.overrideGrantMs,
+            overrideWaitMs = world.settings.overrideWaitMs,
         )
         // If the OS dropped our window out from under us, rebuild it.
         if (view != null && view?.isAttachedToWindow != true) hide()
@@ -127,20 +133,18 @@ class OverlayShieldPort(
         if (view == null && showsLinkedItem) loop.sync()
         // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
         if (view == null) shared.request()
-        show(focusable = !siteBlocked)
+        // Typing the override sentence needs the keyboard, so the shield takes focus while it waits.
+        show(focusable = !siteBlocked || pending != null)
     }
 
     /**
-     * Leaving a blocked *site* means stepping the browser back; leaving a blocked *app* means
-     * going home. Back falls through to the browser because a site shield isn't focusable.
+     * Leaving goes home. A blocked *site* can also be left with Back: its shield isn't focusable,
+     * so Back reaches the browser, which steps back from the extension's block page.
      */
-    private fun leave(isSite: Boolean) {
-        val wentBack = isSite && SiteSightings.backAction?.invoke() == true
-        if (!wentBack) {
-            context.startActivity(
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
+    private fun leave() {
+        context.startActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     private fun show(focusable: Boolean) {
@@ -166,8 +170,11 @@ class OverlayShieldPort(
                     onToggleItem = { id, done -> onEvent(BlockEvent.ToggleChecklistItem(id, done)) },
                     onSetTimer = { blockId, running -> onEvent(BlockEvent.TimerControl(blockId, running)) },
                     onRedeem = { blockId -> onEvent(BlockEvent.Redeem(blockId)) },
-                    onLeave = { leave(uiState.value?.isSite == true) },
+                    onLeave = ::leave,
                     onOpenLoop = openLoop,
+                    onBeginOverride = { ids -> onEvent(BlockEvent.BeginOverride(ids)) },
+                    onClaimOverride = { phrase -> onEvent(BlockEvent.ClaimOverride(phrase)) },
+                    onCancelOverride = { onEvent(BlockEvent.CancelOverride) },
                 )
             }
         }
@@ -200,6 +207,8 @@ class OverlayShieldPort(
             // this, rotating the phone while a landscape-capable app (e.g. a game) is blocked
             // rotates the shield with it, scrambling the portrait-only layout.
             screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            // The override sentence is typed here: keep the field above the keyboard.
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
         runCatching { wm.addView(host, layout) }
@@ -252,6 +261,17 @@ class OverlayShieldPort(
         val redeemRejection: RejectReason? = null,
         val unlockUsedTodayMs: Long = 0,
         val dailyCapMs: Long = 0,
+        /** ALLOWANCE with a row rule: what's left of a forced break (I32). */
+        val rowBreakRemainingMs: Long = 0,
+        /** The blocks keeping this blocked; buying minutes is for all of them at once (I34). */
+        val blockerIds: Set<String> = emptySet(),
+        /** Why minutes can't be bought past it, or null if they can. */
+        val overrideRejection: OverrideRejection? = null,
+        /** A wait under way for these blocks: when it's over, on `elapsedRealtime`. */
+        val overrideReadyAtElapsed: Long? = null,
+        val overridePhrase: String = "",
+        val overrideGrantMs: Long = 0,
+        val overrideWaitMs: Long = 0,
     )
 }
 
