@@ -1046,4 +1046,279 @@ class InvariantTests {
         w = engine.reduce(w, BlockEvent.Tick, clock).world
         assertEquals(3L * 60_000, engine.allowanceUsedMs(w, allowance, clock))
     }
+
+    // ---- schedules with several windows, site exceptions (I30, I31) --------------------------
+
+    @Test
+    fun i30_anyScheduleWindowCounts() {
+        val clock = FakeClock() // Thursday 12:00 UTC
+        val schedule = everyDay(0, 14 * 60).copy(moreWindows = listOf(DayWindow((1..7).toSet(), TimeWindow(18 * 60, 22 * 60))))
+        val block = modeBlock("s1", BlockMode.SCHEDULE, schedule = schedule)
+        val world = buildWorld(listOf(block), clock = clock)
+        fun blocked() = engine.isBlocking(world, block, clock)
+
+        assertTrue(blocked()) // 12:00, the first window
+        clock.advance(3L * 60 * 60_000) // 15:00, between them
+        assertFalse(blocked())
+        clock.advance(4L * 60 * 60_000) // 19:00, the second window
+        assertTrue(blocked())
+        clock.advance(4L * 60 * 60_000) // 23:00
+        assertFalse(blocked())
+
+        // Adding a window tightens; dropping one loosens.
+        assertFalse(BlockEdits.loosens(modeBlock("s1", BlockMode.SCHEDULE, schedule = everyDay(0, 14 * 60)), block))
+        assertTrue(BlockEdits.loosens(block, block.copy(schedule = everyDay(0, 14 * 60))))
+    }
+
+    @Test
+    fun i31_exceptedHostIsNeitherBlockedNorCounted() {
+        val clock = FakeClock()
+        val limit = modeBlock("a1", BlockMode.ALLOWANCE, targetPackages = emptySet(), targetSites = setOf("youtube.com"), dailyAllowanceMs = 10L * 60_000)
+            .copy(exceptSites = setOf("music.youtube.com"))
+        var world = buildWorld(listOf(limit), clock = clock)
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "music.youtube.com"), clock).world
+        clock.advance(5L * 60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(0L, engine.allowanceUsedMs(world, limit, clock))
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "m.youtube.com"), clock).world
+        clock.advance(10L * 60_000)
+        val plan = engine.reduce(world, BlockEvent.Tick, clock).world.appliedShield
+        assertTrue(plan.covers(null, "m.youtube.com"))
+        assertFalse(plan.covers(null, "music.youtube.com"))
+        assertEquals(setOf("music.youtube.com"), plan.siteExceptions["youtube.com"])
+
+        // Another block on the same domain without that exception blocks music too.
+        val habit = checklistBlock("h1").copy(targetPackages = emptySet(), targetSites = setOf("youtube.com"))
+        val both = buildWorld(listOf(limit, habit), mapOf("h1" to items("h1", 1)), clock)
+        assertTrue(both.appliedShield.covers(null, "music.youtube.com"))
+
+        assertTrue(BlockEdits.loosens(limit, limit.copy(exceptSites = setOf("music.youtube.com", "studio.youtube.com"))))
+        assertFalse(BlockEdits.loosens(limit, limit.copy(exceptSites = emptySet())))
+    }
+
+    // ---- in a row, per device (I32, I33) ---------------------------------------------------
+
+    private fun rowBlock(id: String = "r1", dailyMs: Long = 0, rowMs: Long = 15L * 60_000, breakMs: Long = 15L * 60_000) =
+        modeBlock(id, BlockMode.ALLOWANCE, targetPackages = setOf("com.target"), dailyAllowanceMs = dailyMs)
+            .copy(sessionMs = rowMs, sessionBreakMs = breakMs)
+
+    /** Minute-by-minute ticks, as the phone's 1 s tick would do it. */
+    private fun ticks(world: World, clock: FakeClock, minutes: Int): World {
+        var w = world
+        repeat(minutes) {
+            clock.advance(60_000)
+            w = engine.reduce(w, BlockEvent.Tick, clock).world
+        }
+        return w
+    }
+
+    @Test
+    fun i32_rowRuleForcesABreak() {
+        val clock = FakeClock()
+        val block = rowBlock()
+        var world = buildWorld(listOf(block), clock = clock, foregroundPkg = "com.target")
+
+        world = ticks(world, clock, 14)
+        assertFalse(engine.isBlocking(world, block, clock)) // no daily limit, 14 of 15 in a row
+        world = ticks(world, clock, 1)
+        assertTrue(engine.isBlocking(world, block, clock))
+        assertEquals(15L * 60_000, engine.rowBreakRemainingMs(world, block, clock))
+        assertEquals(15L * 60_000, engine.allowanceUsedMs(world, block, clock)) // no daily cap to stop at
+
+        world = ticks(world, clock, 14) // sitting on the block screen costs nothing
+        assertTrue(engine.isBlocking(world, block, clock))
+        world = ticks(world, clock, 1)
+        assertFalse(engine.isBlocking(world, block, clock))
+        assertTrue(engine.rowUsedMs(world, block, clock) <= 60_000) // a fresh row
+    }
+
+    @Test
+    fun i32_restingLongEnoughStartsAFreshRow() {
+        val clock = FakeClock()
+        val block = rowBlock()
+        var world = buildWorld(listOf(block), clock = clock, foregroundPkg = "com.target")
+        world = ticks(world, clock, 10)
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.other"), clock).world
+        world = ticks(world, clock, 15) // a rest as long as the break
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        world = ticks(world, clock, 10)
+        assertFalse(engine.isBlocking(world, block, clock))
+        assertEquals(10L * 60_000, engine.rowUsedMs(world, block, clock))
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.other"), clock).world
+        world = ticks(world, clock, 5) // too short: still the same row
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        world = ticks(world, clock, 5)
+        assertTrue(engine.isBlocking(world, block, clock))
+
+        assertTrue(BlockEdits.loosens(block, block.copy(sessionMs = 30L * 60_000)))
+        assertTrue(BlockEdits.loosens(block, block.copy(sessionBreakMs = 5L * 60_000)))
+        assertTrue(BlockEdits.loosens(block, block.copy(sessionMs = 0)))
+        assertFalse(BlockEdits.loosens(block, block.copy(sessionMs = 10L * 60_000, sessionBreakMs = 20L * 60_000)))
+    }
+
+    @Test
+    fun i32_rowCountsAcrossDevices() {
+        val block = rowBlock().copy(targetSites = setOf("youtube.com"))
+        val (phone, laptop, server) = twoDevices(listOf(block))
+
+        phone.on(BlockEvent.ForegroundChanged("com.target"))
+        repeat(10) { advanceAll(60_000, phone, laptop); phone.on(BlockEvent.Tick) }
+        phone.on(BlockEvent.ForegroundChanged(null))
+        phone.sync(server)
+        laptop.sync(server)
+
+        laptop.on(BlockEvent.ForegroundChanged("browser", "youtube.com"))
+        repeat(5) { advanceAll(60_000, phone, laptop); laptop.on(BlockEvent.Tick) }
+        assertTrue(engine.isBlocking(laptop.world, laptop.block("r1"), laptop.clock)) // 10 there + 5 here
+        laptop.sync(server)
+        phone.sync(server)
+        assertTrue(engine.isBlocking(phone.world, phone.block("r1"), phone.clock)) // the break is shared
+    }
+
+    @Test
+    fun i33_perDeviceLimitIgnoresOtherDevices() {
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, targetPackages = setOf("com.target"), dailyAllowanceMs = 10L * 60_000)
+            .copy(targetSites = setOf("youtube.com"), perDevice = true)
+        val (phone, laptop, server) = twoDevices(listOf(block))
+
+        phone.on(BlockEvent.ForegroundChanged("com.target"))
+        advanceAll(7L * 60_000, phone, laptop)
+        phone.on(BlockEvent.Tick)
+        phone.on(BlockEvent.ForegroundChanged(null))
+        phone.sync(server)
+        laptop.sync(server)
+
+        laptop.on(BlockEvent.ForegroundChanged("browser", "youtube.com"))
+        advanceAll(4L * 60_000, phone, laptop)
+        laptop.on(BlockEvent.Tick)
+        assertFalse(engine.isBlocking(laptop.world, laptop.block("a1"), laptop.clock)) // only its own 4 minutes count
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(laptop.world, laptop.block("a1"), laptop.clock))
+
+        val shared = block.copy(perDevice = false)
+        assertTrue(BlockEdits.loosens(shared, block))
+        assertFalse(BlockEdits.loosens(block, shared))
+    }
+
+    // ---- buying minutes (I34) --------------------------------------------------------------
+
+    private fun claim(world: World, clock: Clock, phrase: String = Defaults.OVERRIDE_PHRASE) =
+        engine.reduce(world, BlockEvent.ClaimOverride(phrase), clock)
+
+    private fun rejection(out: Outcome): OverrideRejection? =
+        out.effects.filterIsInstance<Effect.OverrideRejected>().singleOrNull()?.reason
+
+    @Test
+    fun i34_overrideNeedsTheWaitAndThePhrase() {
+        val clock = FakeClock()
+        val block = modeBlock("s1", BlockMode.SCHEDULE)
+        var world = buildWorld(listOf(block), clock = clock)
+        assertEquals(listOf(block), engine.blockersOf(world, "com.target", null, clock))
+
+        world = engine.reduce(world, BlockEvent.BeginOverride(setOf("s1")), clock).world
+        assertNotNull(world.pendingOverride)
+        var out = claim(world, clock)
+        assertEquals(OverrideRejection.TOO_EARLY, rejection(out))
+        world = out.world
+
+        clock.advance(Defaults.OVERRIDE_WAIT_MS)
+        out = claim(world, clock, "I choose to stop")
+        assertEquals(OverrideRejection.WRONG_PHRASE, rejection(out))
+        out = claim(out.world, clock, "  i CHOOSE to keep   scrolling! ")
+        assertNull(rejection(out))
+        world = out.world
+        assertFalse(engine.isBlocking(world, block, clock))
+        assertNull(world.pendingOverride)
+        assertEquals(Defaults.OVERRIDES_PER_DAY - 1, engine.overridesLeftToday(world, "s1", clock))
+
+        clock.advance(Defaults.OVERRIDE_GRANT_MS)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertTrue(engine.isBlocking(world, block, clock))
+        assertTrue(world.overrides.isEmpty())
+
+        // Waiting too long after the delay means starting again.
+        world = engine.reduce(world, BlockEvent.BeginOverride(setOf("s1")), clock).world
+        clock.advance(Defaults.OVERRIDE_WAIT_MS + Defaults.OVERRIDE_CLAIM_WINDOW_MS + 1)
+        assertNull(engine.reduce(world, BlockEvent.Tick, clock).world.pendingOverride)
+    }
+
+    @Test
+    fun i34_overrideLiftsLimitButNotABreak() {
+        val clock = FakeClock()
+        val block = rowBlock(dailyMs = 10L * 60_000, rowMs = 15L * 60_000, breakMs = 5L * 60_000)
+        var world = buildWorld(listOf(block), clock = clock, foregroundPkg = "com.target")
+        world = ticks(world, clock, 10)
+        assertTrue(engine.dailyLimitReached(world, block, clock))
+        assertNull(engine.overrideRejection(world, listOf(block), clock))
+
+        world = engine.reduce(world, BlockEvent.BeginOverride(setOf("r1")), clock).world
+        clock.advance(Defaults.OVERRIDE_WAIT_MS)
+        world = claim(world, clock).world
+        assertFalse(engine.isBlocking(world, block, clock))
+
+        // The row rule still runs during bought minutes, and its break can't be bought off.
+        world = ticks(world, clock, 6) // 15 in a row: on a 5-minute break
+        assertTrue(engine.rowBreakRemainingMs(world, block, clock) > 0)
+        assertTrue(engine.isBlocking(world, block, clock))
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(world, listOf(block), clock))
+        assertNull(engine.reduce(world, BlockEvent.BeginOverride(setOf("r1")), clock).world.pendingOverride)
+    }
+
+    @Test
+    fun i34_overridesPerDayAreShared() {
+        val block = modeBlock("s1", BlockMode.SCHEDULE).copy(targetSites = setOf("reddit.com"))
+        val (phone, laptop, server) = twoDevices(listOf(block))
+        phone.world = phone.world.copy(settings = phone.world.settings.copy(overridesPerDay = 1))
+        phone.sync(server)
+        laptop.sync(server)
+
+        phone.on(BlockEvent.BeginOverride(setOf("s1")))
+        advanceAll(Defaults.OVERRIDE_WAIT_MS, phone, laptop)
+        phone.on(BlockEvent.ClaimOverride(Defaults.OVERRIDE_PHRASE))
+        phone.sync(server)
+        laptop.sync(server)
+
+        assertFalse(engine.isBlocking(laptop.world, laptop.block("s1"), laptop.clock)) // the minutes open it here too
+        assertEquals(OverrideRejection.NONE_LEFT, engine.overrideRejection(laptop.world, listOf(laptop.block("s1")), laptop.clock))
+        advanceAll(Defaults.OVERRIDE_GRANT_MS, phone, laptop)
+        laptop.on(BlockEvent.Tick)
+        assertTrue(engine.isBlocking(laptop.world, laptop.block("s1"), laptop.clock))
+    }
+
+    @Test
+    fun i34_habitOrLockdownIsNotOverridable() {
+        val clock = FakeClock()
+        val schedule = modeBlock("s1", BlockMode.SCHEDULE)
+        val habit = checklistBlock("h1")
+        val world = buildWorld(listOf(schedule, habit), mapOf("h1" to items("h1", 1)), clock)
+        val blockers = engine.blockersOf(world, "com.target", null, clock)
+        assertEquals(setOf("s1", "h1"), blockers.map { it.id }.toSet())
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(world, blockers, clock))
+
+        val hard = schedule.copy(enforcementTier = EnforcementTier.HARDCORE)
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(world, listOf(hard), clock))
+        val lockdown = modeBlock("l1", BlockMode.LOCKDOWN, lockdownMs = 60L * 60_000)
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(world, listOf(lockdown), clock))
+        val off = world.copy(settings = world.settings.copy(overridesPerDay = 0))
+        assertEquals(OverrideRejection.OFF, engine.overrideRejection(off, listOf(schedule), clock))
+
+        assertTrue(BlockEdits.settingsLoosen(Settings(), Settings(overridesPerDay = 3)))
+        assertTrue(BlockEdits.settingsLoosen(Settings(), Settings(overridePhrase = "ok")))
+        assertFalse(BlockEdits.settingsLoosen(Settings(), Settings(overrideWaitMs = 90_000, overrideGrantMs = 5L * 60_000)))
+    }
+
+    @Test
+    fun timeLeftShowsWhatRunsOutFirst() {
+        val clock = FakeClock()
+        val block = rowBlock(dailyMs = 30L * 60_000, rowMs = 15L * 60_000).copy(targetSites = setOf("youtube.com"))
+        var world = buildWorld(listOf(block), clock = clock)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "youtube.com"), clock).world
+        world = ticks(world, clock, 10)
+
+        assertEquals(TimeLeft(5L * 60_000, ClockKind.ROW), engine.timeLeft(world, "browser", "youtube.com", clock))
+        assertNull(engine.timeLeft(world, "browser", "example.com", clock))
+    }
 }

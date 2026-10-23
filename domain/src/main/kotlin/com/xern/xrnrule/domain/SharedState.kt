@@ -9,7 +9,7 @@ import kotlinx.serialization.Serializable
  * Only wall-clock times cross devices. [of] zeroes every monotonic stamp and
  * [BlockEvent.SharedStateMerged] anchors them again on arrival, as a cold start does (I8).
  * Not shared: a linked item's `done` and `tickEpochDay` (each device reads its own tracker), HABIT timer
- * progress, the foreground, the applied shield.
+ * progress, the foreground, the applied shield, an override waiting out its delay.
  */
 @Serializable
 data class SharedState(
@@ -26,8 +26,13 @@ data class SharedState(
     /** The local day [unlockLog] belongs to (I28). */
     val unlockEpochDay: Long = 0,
     val unlockLog: Map<String, Long> = emptyMap(),
-    /** ALLOWANCE use, block id -> device id -> that device's use today (I19). */
+    /** ALLOWANCE use, block id -> device id -> that device's use today and its run in a row (I19, I32). */
     val allowance: Map<String, Map<String, AllowanceUse>> = emptyMap(),
+    /** Minutes bought past blocks (I34). */
+    val overrides: Map<String, OverrideGrant> = emptyMap(),
+    /** The local day [overrideLog] belongs to (I34). */
+    val overrideEpochDay: Long = 0,
+    val overrideLog: Map<String, Long> = emptyMap(),
 ) {
     companion object {
 
@@ -38,8 +43,10 @@ data class SharedState(
                 for (block in world.blocks) {
                     if (block.mode != BlockMode.ALLOWANCE) continue
                     val p = world.progress[block.id] ?: continue
-                    if (p.accumulatedMs <= 0) continue
-                    allowance.getOrPut(block.id) { mutableMapOf() }[world.deviceId] = AllowanceUse(p.windowStart, p.accumulatedMs)
+                    val run = world.runs[block.id]
+                    if (p.accumulatedMs <= 0 && run == null) continue
+                    allowance.getOrPut(block.id) { mutableMapOf() }[world.deviceId] =
+                        AllowanceUse(p.windowStart, p.accumulatedMs, run, run?.lastActiveWall ?: 0)
                 }
             }
             return SharedState(
@@ -60,6 +67,9 @@ data class SharedState(
                 unlockEpochDay = world.dailyUsageEpochDay,
                 unlockLog = world.unlockLog,
                 allowance = allowance,
+                overrides = world.overrides.mapValues { it.value.copy(startedAtMonotonic = 0) },
+                overrideEpochDay = world.overrideEpochDay,
+                overrideLog = world.overrideLog,
             )
         }
 
@@ -72,6 +82,9 @@ data class SharedState(
         fun merge(base: SharedState?, local: SharedState, remote: SharedState): SharedState {
             val b = base ?: SharedState()
             val unlockSameDay = local.unlockEpochDay == remote.unlockEpochDay
+            val overrideSameDay = local.overrideEpochDay == remote.overrideEpochDay
+            fun <T> field(get: (Settings) -> T, resolve: (T, T) -> T): T =
+                mergeValue(get(b.settings), get(local.settings), get(remote.settings), resolve)
             return SharedState(
                 blocks = mergeMaps(b.blocks, local.blocks, remote.blocks) { l, r ->
                     when {
@@ -129,9 +142,15 @@ data class SharedState(
                 },
                 lastPauseEpochDay = listOfNotNull(local.lastPauseEpochDay, remote.lastPauseEpochDay).maxOrNull(),
                 settings = Settings(
-                    dailyCapMs = mergeValue(b.settings.dailyCapMs, local.settings.dailyCapMs, remote.settings.dailyCapMs) { l, r -> minOf(l, r) },
-                    skewToleranceMs = mergeValue(b.settings.skewToleranceMs, local.settings.skewToleranceMs, remote.settings.skewToleranceMs) { l, r -> minOf(l, r) },
-                    unlockWarningMs = mergeValue(b.settings.unlockWarningMs, local.settings.unlockWarningMs, remote.settings.unlockWarningMs) { l, r -> maxOf(l, r) },
+                    dailyCapMs = field(Settings::dailyCapMs) { l, r -> minOf(l, r) },
+                    skewToleranceMs = field(Settings::skewToleranceMs) { l, r -> minOf(l, r) },
+                    unlockWarningMs = field(Settings::unlockWarningMs) { l, r -> maxOf(l, r) },
+                    // Both changed: the stricter side (I34).
+                    overridePhrase = field(Settings::overridePhrase) { l, r -> if (r.length > l.length) r else l },
+                    overrideWaitMs = field(Settings::overrideWaitMs) { l, r -> maxOf(l, r) },
+                    overrideGrantMs = field(Settings::overrideGrantMs) { l, r -> minOf(l, r) },
+                    overridesPerDay = field(Settings::overridesPerDay) { l, r -> minOf(l, r) },
+                    showClock = field(Settings::showClock) { l, r -> l && r },
                 ),
                 unlockEpochDay = maxOf(local.unlockEpochDay, remote.unlockEpochDay),
                 unlockLog = when { // I28: entries only ever get added during a day
@@ -143,8 +162,22 @@ data class SharedState(
                     val l = local.allowance[blockId].orEmpty()
                     val r = remote.allowance[blockId].orEmpty()
                     (l.keys + r.keys).associateWith { device ->
-                        listOfNotNull(l[device], r[device]).maxWith(compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms })
+                        listOfNotNull(l[device], r[device]).maxWith(compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.atWall })
                     }
+                },
+                overrides = mergeMaps(b.overrides, local.overrides, remote.overrides) { l, r ->
+                    when {
+                        l == null -> r
+                        r == null -> l
+                        r.startedAtWall + r.durationMs > l.startedAtWall + l.durationMs -> r
+                        else -> l
+                    }
+                },
+                overrideEpochDay = maxOf(local.overrideEpochDay, remote.overrideEpochDay),
+                overrideLog = when { // I34: entries only ever get added during a day
+                    overrideSameDay -> unionMax(local.overrideLog, remote.overrideLog)
+                    local.overrideEpochDay > remote.overrideEpochDay -> local.overrideLog
+                    else -> remote.overrideLog
                 },
             )
         }

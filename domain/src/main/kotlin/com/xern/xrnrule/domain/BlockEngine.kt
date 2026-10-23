@@ -7,8 +7,8 @@ import java.time.Instant
  * the current [World], one [BlockEvent] and a [Clock], and returns an [Outcome]. It performs
  * no I/O and never mutates its inputs.
  *
- * Every invariant I1..I25 in the contract has a matching test in
- * `domain/src/test/.../InvariantTests.kt` (`i01_*` .. `i25_*`).
+ * Every invariant I1..I34 in the contract has a matching test in
+ * `domain/src/test/.../InvariantTests.kt` (`i01_*` .. `i34_*`).
  */
 class BlockEngine {
 
@@ -29,6 +29,9 @@ class BlockEngine {
             is BlockEvent.EndPause -> world.copy(pause = null)
             is BlockEvent.SharedStateMerged ->
                 adoptShared(world, SharedState.merge(event.base, SharedState.of(world), event.remote), clock) // I26
+            is BlockEvent.BeginOverride -> onBeginOverride(world, event, clock)
+            is BlockEvent.CancelOverride -> world.copy(pendingOverride = null)
+            is BlockEvent.ClaimOverride -> onClaimOverride(world, event, clock, effects)
         }
 
         // Housekeeping sweep after every event: day rollover, credit expiry (I1), tamper (I3),
@@ -43,37 +46,51 @@ class BlockEngine {
 
     // ---- shield projection -------------------------------------------------------------
 
-    fun shieldPlan(world: World, clock: Clock): ShieldPlan =
-        ShieldPlan(blockedPackages(world, clock), blockedSites(world, clock))
+    /**
+     * Sites are evaluated per configured domain, like packages (I18); a domain's exceptions are
+     * the hosts every block blocking it leaves open (I31).
+     */
+    fun shieldPlan(world: World, clock: Clock): ShieldPlan {
+        val sites = world.blocks.flatMapTo(mutableSetOf()) { it.targetSites }
+            .associateWith { site -> blockers(world, world.blocks.filter { site in it.targetSites }, clock) }
+            .filterValues { it.isNotEmpty() }
+        return ShieldPlan(
+            blockedPackages = blockedPackages(world, clock),
+            blockedSites = sites.keys,
+            siteExceptions = sites
+                .mapValues { (_, blocks) -> blocks.map { it.exceptSites }.reduce { a, b -> a intersect b } }
+                .filterValues { it.isNotEmpty() },
+        )
+    }
 
     /** Blocked apps: phone packages and laptop apps alike (I29). */
     fun blockedPackages(world: World, clock: Clock): Set<String> {
         val allTargets = world.blocks.flatMapTo(mutableSetOf()) { it.targetApps }
         return allTargets.filterTo(mutableSetOf()) { pkg ->
-            targetBlocked(world, world.blocks.filter { pkg in it.targetApps }, clock)
+            blockers(world, world.blocks.filter { pkg in it.targetApps }, clock).isNotEmpty()
         }
     }
 
     /** I18: target domains currently blocked, evaluated per configured domain like packages. */
-    fun blockedSites(world: World, clock: Clock): Set<String> {
-        val allTargets = world.blocks.flatMapTo(mutableSetOf()) { it.targetSites }
-        return allTargets.filterTo(mutableSetOf()) { site ->
-            targetBlocked(world, world.blocks.filter { site in it.targetSites }, clock)
-        }
-    }
+    fun blockedSites(world: World, clock: Clock): Set<String> = shieldPlan(world, clock).blockedSites
 
     /**
-     * I22: any engaged ALLOWANCE / SCHEDULE / LOCKDOWN block wins outright; otherwise the HABIT
-     * rule (I6) — free iff *any* covering HABIT block is UNLOCKED. During a break (I25) the
-     * blocks it covers drop out first.
+     * I22: the blocks keeping a target blocked, out of [all] that cover it; empty when it is
+     * free. Any engaged ALLOWANCE / SCHEDULE / LOCKDOWN block blocks outright; HABIT blocks block
+     * unless *any* covering HABIT block is UNLOCKED (I6). During a break (I25) the blocks it
+     * covers drop out first.
      */
-    private fun targetBlocked(world: World, all: List<Block>, clock: Clock): Boolean {
+    fun blockers(world: World, all: List<Block>, clock: Clock): List<Block> {
         val covering = if (pauseRemainingMs(world, clock) > 0) all.filterNot(::pausable) else all
-        if (covering.any { it.mode != BlockMode.HABIT && isBlocking(world, it, clock) }) return true
+        val strict = covering.filter { it.mode != BlockMode.HABIT && isBlocking(world, it, clock) }
         val habit = covering.filter { it.mode == BlockMode.HABIT }
-        if (habit.any { it.state == BlockState.UNLOCKED }) return false
-        return habit.any { it.enabled && scheduleActive(it, clock) }
+        val habitBlocking = if (habit.any { it.state == BlockState.UNLOCKED }) emptyList() else habit.filter { it.enabled && scheduleActive(it, clock) }
+        return strict + habitBlocking
     }
+
+    /** The blocks keeping this app or site blocked right now (I22, I31); empty when it is open. */
+    fun blockersOf(world: World, pkg: String?, site: String?, clock: Clock): List<Block> =
+        blockers(world, world.blocks.filter { covers(it, pkg, site) }, clock)
 
     fun isAppUnlocked(world: World, pkg: String): Boolean =
         world.blocks.any { pkg in it.targetApps && it.state == BlockState.UNLOCKED }
@@ -90,23 +107,121 @@ class BlockEngine {
         if (pausable(block) && pauseRemainingMs(world, clock) > 0) return false // I25
         return when (block.mode) {
             BlockMode.HABIT -> block.state != BlockState.UNLOCKED && scheduleActive(block, clock)
-            BlockMode.ALLOWANCE ->
-                scheduleActive(block, clock) && allowanceUsedMs(world, block, clock) >= block.dailyAllowanceMs
-            BlockMode.SCHEDULE -> scheduleActive(block, clock)
+            BlockMode.ALLOWANCE -> scheduleActive(block, clock) && (
+                rowBreakRemainingMs(world, block, clock) > 0 || // I32: a bought minute doesn't lift a forced break
+                    (dailyLimitReached(world, block, clock) && overrideRemainingMs(world, block.id, clock) == 0L)
+                )
+            BlockMode.SCHEDULE -> scheduleActive(block, clock) && overrideRemainingMs(world, block.id, clock) == 0L // I34
             BlockMode.LOCKDOWN -> lockdownRemainingMs(world, block.id, clock) > 0
         }
     }
 
+    /** I19: the daily limit is on and used up (0 means no daily limit, only the row rule). */
+    fun dailyLimitReached(world: World, block: Block, clock: Clock): Boolean =
+        block.dailyAllowanceMs > 0 && allowanceUsedMs(world, block, clock) >= block.dailyAllowanceMs
+
     /**
-     * I19: today's used allowance, here plus on the other devices (§2.4); a progress window or
-     * a report from an earlier day counts as zero.
+     * I19: today's used allowance, here plus on the other devices (§2.4) unless each device has
+     * its own (I33); a progress window or a report from an earlier day counts as zero.
      */
     fun allowanceUsedMs(world: World, block: Block, clock: Clock): Long {
         val p = world.progress[block.id]
         val here = if (p == null || dayRolled(p, clock)) 0 else p.accumulatedMs
+        if (block.perDevice) return here
         val today = clock.startOfLocalDayMs()
         val elsewhere = world.otherAllowance[block.id].orEmpty().values.sumOf { if (it.dayStartWall == today) it.ms else 0 }
         return here + elsewhere
+    }
+
+    /**
+     * I32: use in a row so far: this device's run, plus other devices' (unless [Block.perDevice])
+     * while they haven't rested [Block.sessionBreakMs] since.
+     */
+    fun rowUsedMs(world: World, block: Block, clock: Clock): Long {
+        if (!block.hasRowRule) return 0
+        val now = clock.nowWallMs()
+        val here = world.runs[block.id]?.takeIf { live(it, block, now) }?.ms ?: 0
+        return here + rowElsewhereMs(world, block, now)
+    }
+
+    private fun rowElsewhereMs(world: World, block: Block, now: Long): Long =
+        if (block.perDevice) 0
+        else world.otherAllowance[block.id].orEmpty().values.sumOf { use -> use.run?.takeIf { live(it, block, now) }?.ms ?: 0 }
+
+    private fun live(run: RunUse, block: Block, now: Long): Boolean =
+        run.lastActiveWall > 0 && now - run.lastActiveWall < block.sessionBreakMs
+
+    /** I32: what's left of a forced break: this device's, or any device's on a shared block. */
+    fun rowBreakRemainingMs(world: World, block: Block, clock: Clock): Long {
+        if (!block.hasRowRule) return 0
+        val here = world.runs[block.id]?.breakUntilWall ?: 0
+        val elsewhere = if (block.perDevice) 0 else world.otherAllowance[block.id].orEmpty().values.maxOfOrNull { it.run?.breakUntilWall ?: 0 } ?: 0
+        return (maxOf(here, elsewhere) - clock.nowWallMs()).coerceAtLeast(0)
+    }
+
+    /** I34: what's left of the minutes bought past this block; a per-device block's only count where they were bought (I33). */
+    fun overrideRemainingMs(world: World, blockId: String, clock: Clock): Long {
+        val g = world.overrides[blockId] ?: return 0
+        if (world.block(blockId)?.perDevice == true && g.deviceId != world.deviceId) return 0
+        return (g.durationMs - (clock.nowMonotonicMs() - g.startedAtMonotonic)).coerceAtLeast(0)
+    }
+
+    /** I34: overrides of this block still to be had today, across devices. */
+    fun overridesLeftToday(world: World, blockId: String, clock: Clock): Int {
+        val used = if (world.overrideEpochDay != clock.epochDay()) 0 else world.overrideLog.keys.count { it.substringBeforeLast('@') == blockId }
+        return (world.settings.overridesPerDay - used).coerceAtLeast(0)
+    }
+
+    /**
+     * I34: why minutes can't be bought past [blocks] — the blockers of one target
+     * ([blockersOf]) — right now, or null if they can: every one has to be a SOFT daily limit or
+     * schedule, not on a forced break, with overrides left today.
+     */
+    fun overrideRejection(world: World, blocks: List<Block>, clock: Clock): OverrideRejection? {
+        if (world.settings.overridesPerDay <= 0) return OverrideRejection.OFF
+        if (blocks.isEmpty() || blocks.any { !overridable(world, it, clock) }) return OverrideRejection.NOT_OVERRIDABLE
+        if (blocks.any { overridesLeftToday(world, it.id, clock) <= 0 }) return OverrideRejection.NONE_LEFT
+        return null
+    }
+
+    private fun overridable(world: World, block: Block, clock: Clock): Boolean =
+        block.enforcementTier == EnforcementTier.SOFT && when (block.mode) {
+            BlockMode.SCHEDULE -> true
+            BlockMode.ALLOWANCE -> rowBreakRemainingMs(world, block, clock) == 0L
+            BlockMode.HABIT, BlockMode.LOCKDOWN -> false
+        }
+
+    /**
+     * What runs out first on an open app or site, for the browser's corner clock: today's limit,
+     * the row rule, a habit unlock, bought minutes or the daily break. Null when nothing meters it.
+     */
+    fun timeLeft(world: World, pkg: String?, site: String?, clock: Clock): TimeLeft? {
+        val covering = world.blocks.filter { it.enabled && covers(it, pkg, site) }
+        if (covering.isEmpty()) return null
+        val left = mutableListOf<TimeLeft>()
+        for (b in covering) {
+            when (b.mode) {
+                BlockMode.ALLOWANCE -> if (scheduleActive(b, clock)) {
+                    val bought = overrideRemainingMs(world, b.id, clock)
+                    if (b.dailyAllowanceMs > 0) {
+                        left += if (bought > 0 && dailyLimitReached(world, b, clock)) TimeLeft(bought, ClockKind.OVERRIDE)
+                        else TimeLeft((b.dailyAllowanceMs - allowanceUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.LIMIT)
+                    }
+                    if (b.hasRowRule) left += TimeLeft((b.sessionMs - rowUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.ROW)
+                }
+                BlockMode.SCHEDULE -> {
+                    val bought = overrideRemainingMs(world, b.id, clock)
+                    if (bought > 0 && scheduleActive(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE)
+                }
+                BlockMode.HABIT -> world.sessions[b.id]?.takeIf { b.state == BlockState.UNLOCKED }?.let { s ->
+                    left += TimeLeft((s.durationMs - (clock.nowMonotonicMs() - s.startedAtMonotonic)).coerceAtLeast(0), ClockKind.UNLOCK)
+                }
+                BlockMode.LOCKDOWN -> Unit
+            }
+        }
+        val pause = pauseRemainingMs(world, clock)
+        if (pause > 0 && blockers(world.copy(pause = null), covering, clock).any(::pausable)) left += TimeLeft(pause, ClockKind.BREAK)
+        return left.minByOrNull { it.ms }
     }
 
     /** I21: monotonic countdown, so moving the wall clock can't shorten it. */
@@ -142,10 +257,10 @@ class BlockEngine {
         return null
     }
 
-    /** I18: in a target app, or on a target site (or a subdomain of one). */
-    private fun inTargets(block: Block, pkg: String?, site: String?): Boolean =
+    /** I18: in a target app, or on a target site (or a subdomain of one) the block doesn't except (I31). */
+    fun covers(block: Block, pkg: String?, site: String?): Boolean =
         (pkg != null && pkg in block.targetApps) || // I29: a laptop app is a target like a package
-            (site != null && block.targetSites.any { Sites.matches(site, it) })
+            (site != null && block.coversSite(site))
 
     // ---- trigger evaluation ----------------------------------------------------------
 
@@ -216,10 +331,11 @@ class BlockEngine {
      * so any of several targets counts (I17).
      *
      * ALLOWANCE (I19): while a target is foreground *and not shielded* — time spent looking at
-     * the block screen isn't use — capped at the allowance.
+     * the block screen isn't use — capped at the allowance; the same time runs the row rule (I32).
      */
     private fun accrueTimers(world: World, clock: Clock): World {
         val nowMono = clock.nowMonotonicMs()
+        val nowWall = clock.nowWallMs()
         val fgPkg = world.foregroundPkg
         val fgSite = world.foregroundSite
 
@@ -232,30 +348,45 @@ class BlockEngine {
         if (progress.isEmpty()) return world
 
         val fgShielded = shieldPlan(world, clock).covers(fgPkg, fgSite)
+        val runs = world.runs.toMutableMap()
         progress = progress.mapValues { (blockId, p) ->
             val block = world.block(blockId) ?: return@mapValues p
             val delta = (nowMono - p.lastUpdated).coerceAtLeast(0)
             val credit = when (block.mode) {
-                BlockMode.ALLOWANCE -> !fgShielded && inTargets(block, fgPkg, fgSite)
+                BlockMode.ALLOWANCE -> !fgShielded && covers(block, fgPkg, fgSite)
                 BlockMode.HABIT -> {
                     val hasTimer = block.trigger.type == TriggerType.TIMER || block.trigger.type == TriggerType.COMBINED
                     val counted = if (block.trigger.habitPackages.isNotEmpty()) {
                         fgPkg != null && fgPkg in block.trigger.habitPackages // I16
                     } else {
-                        inTargets(block, fgPkg, fgSite)
+                        covers(block, fgPkg, fgSite)
                     }
                     hasTimer && p.timerRunning && block.state == BlockState.ARMED && counted
                 }
                 BlockMode.SCHEDULE, BlockMode.LOCKDOWN -> false
             }
             if (!credit) return@mapValues p.copy(lastUpdated = nowMono)
+            if (block.hasRowRule) runs[blockId] = advanceRun(world, block, runs[blockId], delta, nowWall)
             val accumulated = p.accumulatedMs + delta
             p.copy(
-                accumulatedMs = if (block.mode == BlockMode.ALLOWANCE) accumulated.coerceAtMost(block.dailyAllowanceMs) else accumulated,
+                accumulatedMs = if (block.mode == BlockMode.ALLOWANCE && block.dailyAllowanceMs > 0) accumulated.coerceAtMost(block.dailyAllowanceMs) else accumulated,
                 lastUpdated = nowMono,
             )
         }
-        return world.copy(progress = progress)
+        return world.copy(progress = progress, runs = runs)
+    }
+
+    /**
+     * I32: [delta] more use in a row. Resting [Block.sessionBreakMs] since the last use starts a
+     * fresh run; reaching [Block.sessionMs], counting other devices' live runs, starts the break.
+     */
+    private fun advanceRun(world: World, block: Block, run: RunUse?, delta: Long, nowWall: Long): RunUse {
+        val r = run ?: RunUse()
+        val rested = nowWall - r.lastActiveWall >= block.sessionBreakMs
+        val ms = (if (rested) 0 else r.ms) + delta
+        val reached = ms + rowElsewhereMs(world, block, nowWall) >= block.sessionMs
+        val breakUntil = if (reached && r.breakUntilWall <= nowWall) nowWall + block.sessionBreakMs else r.breakUntilWall
+        return RunUse(ms = ms, lastActiveWall = nowWall, breakUntilWall = breakUntil)
     }
 
     private fun checkTimerTriggers(world: World, clock: Clock, effects: MutableList<Effect>): World {
@@ -379,6 +510,40 @@ class BlockEngine {
         )
     }
 
+    /** I34: the wait starts, unless one for the same blocks is already running. */
+    private fun onBeginOverride(world: World, event: BlockEvent.BeginOverride, clock: Clock): World {
+        val blocks = event.blockIds.mapNotNull(world::block)
+        if (blocks.isEmpty() || blocks.size != event.blockIds.size) return world
+        if (overrideRejection(world, blocks, clock) != null || blocks.none { isBlocking(world, it, clock) }) return world
+        if (world.pendingOverride?.blockIds == event.blockIds) return world
+        return world.copy(pendingOverride = PendingOverride(event.blockIds, clock.nowMonotonicMs(), clock.nowWallMs()))
+    }
+
+    /** I34: after the wait, with the phrase, and still allowed: the minutes, for every block at once. */
+    private fun onClaimOverride(world: World, event: BlockEvent.ClaimOverride, clock: Clock, effects: MutableList<Effect>): World {
+        fun reject(reason: OverrideRejection, keepWaiting: Boolean): World {
+            effects += Effect.OverrideRejected(reason)
+            return if (keepWaiting) world else world.copy(pendingOverride = null)
+        }
+        val pending = world.pendingOverride ?: return reject(OverrideRejection.NOT_STARTED, keepWaiting = true)
+        val settings = world.settings
+        val waited = clock.nowMonotonicMs() - pending.sinceMonotonic
+        if (waited < settings.overrideWaitMs) return reject(OverrideRejection.TOO_EARLY, keepWaiting = true)
+        if (waited > settings.overrideWaitMs + Defaults.OVERRIDE_CLAIM_WINDOW_MS) return reject(OverrideRejection.TOO_LATE, keepWaiting = false)
+        if (Sites.normalizePhrase(event.phrase) != Sites.normalizePhrase(settings.overridePhrase)) {
+            return reject(OverrideRejection.WRONG_PHRASE, keepWaiting = true)
+        }
+        val blocks = pending.blockIds.mapNotNull(world::block)
+        overrideRejection(world, blocks, clock)?.let { return reject(it, keepWaiting = false) }
+        val grants = blocks.associate { b ->
+            b.id to OverrideGrant(b.id, clock.nowMonotonicMs(), clock.nowWallMs(), settings.overrideGrantMs, world.deviceId)
+        }
+        val today = clock.epochDay()
+        val log = (if (world.overrideEpochDay == today) world.overrideLog else emptyMap()) + grants.values.associate { it.key to it.durationMs }
+        effects += Effect.OverrideGranted(grants.keys, settings.overrideGrantMs)
+        return world.copy(overrides = world.overrides + grants, overrideLog = log, overrideEpochDay = today, pendingOverride = null)
+    }
+
     private fun onStartPause(world: World, event: BlockEvent.StartPause, clock: Clock): World {
         if (!canPause(world, clock) || event.durationMs <= 0) return world // I25: one a day
         val pause = Pause(clock.nowMonotonicMs(), clock.nowWallMs(), event.durationMs)
@@ -452,6 +617,21 @@ class BlockEngine {
         }
         if (liveLockdowns.size != w.lockdowns.size) w = w.copy(lockdowns = liveLockdowns)
         if (w.pause != null && pauseRemainingMs(w, clock) == 0L) w = w.copy(pause = null) // I25
+
+        // I34: bought minutes that ran out (or whose block is gone), yesterday's log, a wait left too long.
+        val liveOverrides = w.overrides.filter { (id, g) ->
+            w.block(id) != null && g.durationMs - (clock.nowMonotonicMs() - g.startedAtMonotonic) > 0
+        }
+        if (liveOverrides.size != w.overrides.size) w = w.copy(overrides = liveOverrides)
+        if (w.overrideEpochDay != today && w.overrideLog.isNotEmpty()) w = w.copy(overrideLog = emptyMap(), overrideEpochDay = today)
+        w.pendingOverride?.let { p ->
+            val waited = clock.nowMonotonicMs() - p.sinceMonotonic
+            if (waited > w.settings.overrideWaitMs + Defaults.OVERRIDE_CLAIM_WINDOW_MS || p.blockIds.any { w.block(it) == null }) {
+                w = w.copy(pendingOverride = null)
+            }
+        }
+        val liveRuns = w.runs.filterKeys { w.block(it)?.hasRowRule == true }
+        if (liveRuns.size != w.runs.size) w = w.copy(runs = liveRuns)
 
         for (block in w.blocks) {
             w = when (block.state) {
@@ -531,6 +711,9 @@ class BlockEngine {
         val pause = shared.pause?.let { p ->
             world.pause?.takeIf { it.copy(startedAtMonotonic = 0) == p } ?: p.copy(startedAtMonotonic = anchor(p.startedAtWall))
         }
+        val overrides = shared.overrides.filterKeys { it in blockIds }.mapValues { (id, g) ->
+            world.overrides[id]?.takeIf { it.copy(startedAtMonotonic = 0) == g } ?: g.copy(startedAtMonotonic = anchor(g.startedAtWall))
+        }
 
         val mine = world.checklist.values.flatten().associateBy { it.id }
         val checklist = shared.items.values
@@ -579,6 +762,9 @@ class BlockEngine {
             checklist = checklist.filterValues { it.isNotEmpty() },
             lockdowns = lockdowns,
             pause = pause,
+            overrides = overrides,
+            overrideEpochDay = maxOf(shared.overrideEpochDay, world.overrideEpochDay),
+            overrideLog = if (shared.overrideEpochDay >= world.overrideEpochDay) shared.overrideLog else world.overrideLog,
             lastPauseEpochDay = shared.lastPauseEpochDay,
             settings = shared.settings,
             dailyUnlockUsedMs = if (newerDay) 0 else world.dailyUnlockUsedMs,
@@ -613,10 +799,19 @@ class BlockEngine {
             val wallElapsed = (nowWall - p.startedAtWall).coerceAtLeast(0)
             p.copy(startedAtMonotonic = nowMono - wallElapsed)
         }
+        val overrides = world.overrides.mapValues { (_, g) ->
+            g.copy(startedAtMonotonic = nowMono - (nowWall - g.startedAtWall).coerceAtLeast(0))
+        }
+        val pending = world.pendingOverride?.let { p ->
+            p.copy(sinceMonotonic = nowMono - (nowWall - p.sinceWall).coerceAtLeast(0))
+        }
         // Timer accrual markers are monotonic and meaningless after a reboot; re-anchor them.
         val progress = world.progress.mapValues { (_, p) -> p.copy(lastUpdated = nowMono) }
         return sweep(
-            world.copy(credits = credits, sessions = sessions, lockdowns = lockdowns, pause = pause, progress = progress),
+            world.copy(
+                credits = credits, sessions = sessions, lockdowns = lockdowns, pause = pause, progress = progress,
+                overrides = overrides, pendingOverride = pending,
+            ),
             clock,
             effects,
         )
@@ -649,18 +844,24 @@ class BlockEngine {
         return started != clock.localDate()
     }
 
-    /** I20. A window that wraps midnight belongs to the day it starts on. */
-    private fun scheduleActive(block: Block, clock: Clock): Boolean {
+    /** I20, I30: any of the schedule's windows is on. */
+    fun scheduleActive(block: Block, clock: Clock): Boolean {
         val s = block.schedule
         val zdt = Instant.ofEpochMilli(clock.nowWallMs()).atZone(clock.zone())
+        return windowActive(s.activeDays, s.activeWindow, zdt) ||
+            s.moreWindows.any { windowActive(it.days, it.window, zdt) }
+    }
+
+    /** I20. A window that wraps midnight belongs to the day it starts on; no window means whole days. */
+    private fun windowActive(days: Set<Int>, w: TimeWindow?, zdt: java.time.ZonedDateTime): Boolean {
         val today = zdt.dayOfWeek
-        val w = s.activeWindow ?: return today.value in s.activeDays
+        w ?: return today.value in days
         val minute = zdt.hour * 60 + zdt.minute
         return when {
             w.startMinuteOfDay <= w.endMinuteOfDay ->
-                today.value in s.activeDays && minute in w.startMinuteOfDay until w.endMinuteOfDay
-            minute >= w.startMinuteOfDay -> today.value in s.activeDays
-            minute < w.endMinuteOfDay -> today.minus(1).value in s.activeDays // last night's window
+                today.value in days && minute in w.startMinuteOfDay until w.endMinuteOfDay
+            minute >= w.startMinuteOfDay -> today.value in days
+            minute < w.endMinuteOfDay -> today.minus(1).value in days // last night's window
             else -> false
         }
     }

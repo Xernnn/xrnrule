@@ -22,14 +22,35 @@ object BlockEdits {
             new.trigger.habitPackages != old.trigger.habitPackages ||
             new.reward.unlockDurationMs > old.reward.unlockDurationMs ||
             new.reward.creditTtlMs > old.reward.creditTtlMs ||
-            new.dailyAllowanceMs > old.dailyAllowanceMs ||
+            allowanceLoosens(old, new) ||
+            !old.exceptSites.containsAll(new.exceptSites) || // I31: a new exception opens a host
+            (!old.perDevice && new.perDevice) || // I33: each device gets the whole limit
             new.lockdownMs < old.lockdownMs ||
             schedulesLoosen(old.schedule, new.schedule)
     }
 
-    /** Fewer days, or any change to the window, can free a moment that used to be blocked. */
+    /** I19/I32: a bigger daily limit (0 is none at all), a longer row, or a shorter break. */
+    private fun allowanceLoosens(old: Block, new: Block): Boolean {
+        fun bigger(o: Long, n: Long) = o > 0 && (n == 0L || n > o)
+        return bigger(old.dailyAllowanceMs, new.dailyAllowanceMs) ||
+            (old.hasRowRule && (!new.hasRowRule || new.sessionMs > old.sessionMs || new.sessionBreakMs < old.sessionBreakMs))
+    }
+
+    /**
+     * Fewer days, or any change to the main window, can free a moment that used to be blocked;
+     * so can dropping or changing one of the other windows (I30). Adding windows only tightens.
+     */
     private fun schedulesLoosen(old: Schedule, new: Schedule): Boolean =
-        !new.activeDays.containsAll(old.activeDays) || new.activeWindow != old.activeWindow
+        !new.activeDays.containsAll(old.activeDays) || new.activeWindow != old.activeWindow ||
+            !new.moreWindows.containsAll(old.moreWindows)
+
+    /** I34: changes to the override settings that make buying minutes easier. */
+    fun settingsLoosen(old: Settings, new: Settings): Boolean =
+        Sites.normalizePhrase(new.overridePhrase).length < Sites.normalizePhrase(old.overridePhrase).length ||
+            new.overrideWaitMs < old.overrideWaitMs ||
+            new.overrideGrantMs > old.overrideGrantMs ||
+            new.overridesPerDay > old.overridesPerDay ||
+            new.dailyCapMs > old.dailyCapMs
 
     /**
      * Whether a block's own settings may change freely right now. Only a lockdown that isn't

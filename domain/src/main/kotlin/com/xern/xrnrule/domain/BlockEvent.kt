@@ -59,6 +59,19 @@ sealed interface BlockEvent {
      */
     data class SharedStateMerged(val base: SharedState?, val remote: SharedState) : BlockEvent
 
+    /**
+     * Starts buying minutes past [blockIds], the blocks keeping one target blocked
+     * ([BlockEngine.blockersOf]); the wait starts now. Ignored unless all of them can be
+     * overridden ([BlockEngine.overrideRejection]). A wait already running for them goes on (I34).
+     */
+    data class BeginOverride(val blockIds: Set<String>) : BlockEvent
+
+    /** Drops the override waiting here, if any (I34). */
+    data object CancelOverride : BlockEvent
+
+    /** Finishes the override waiting here: grants it if the wait is over and [phrase] matches (I34). */
+    data class ClaimOverride(val phrase: String) : BlockEvent
+
     /** Process cold start or BOOT_COMPLETED — rebuild state and re-apply the shield (I8). */
     data object BootOrColdStart : BlockEvent
 }

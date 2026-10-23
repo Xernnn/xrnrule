@@ -48,16 +48,58 @@ interface Telemetry {
 
 /**
  * The full desired shield state. Applying it is idempotent. [blockedSites] holds target domains;
- * a host is covered when it [Sites.matches] any of them (I18).
+ * a host is covered when it [Sites.matches] any of them (I18) and none of that domain's
+ * [siteExceptions] (I31).
  */
 @Serializable
-data class ShieldPlan(val blockedPackages: Set<String>, val blockedSites: Set<String> = emptySet()) {
+data class ShieldPlan(
+    val blockedPackages: Set<String>,
+    val blockedSites: Set<String> = emptySet(),
+    /** Per blocked domain, the hosts under it that every block blocking it leaves open (I31). */
+    val siteExceptions: Map<String, Set<String>> = emptyMap(),
+) {
     fun covers(pkg: String?, site: String?): Boolean =
-        (pkg != null && pkg in blockedPackages) ||
-            (site != null && blockedSites.any { Sites.matches(site, it) })
+        (pkg != null && pkg in blockedPackages) || (site != null && siteBlocked(site))
+
+    fun siteBlocked(host: String): Boolean = blockedSites.any { domain ->
+        Sites.matches(host, domain) && siteExceptions[domain].orEmpty().none { Sites.matches(host, it) }
+    }
 }
 
 enum class RejectReason { NOT_EARNED, CAP_REACHED }
+
+/** Why minutes can't be bought past a block (I34). */
+enum class OverrideRejection {
+    /** Overrides are turned off (`overridesPerDay == 0`). */
+    OFF,
+    /** Something blocking the target can't be overridden: a habit, a lockdown, a hardcore block, a forced break. */
+    NOT_OVERRIDABLE,
+    /** Today's overrides for one of the blocks are used up. */
+    NONE_LEFT,
+    /** [BlockEvent.ClaimOverride] with no override started. */
+    NOT_STARTED,
+    /** Claimed before the wait was over. */
+    TOO_EARLY,
+    /** Claimed too long after the wait: start again. */
+    TOO_LATE,
+    WRONG_PHRASE,
+}
+
+/** What runs out first on an open target, for the browser's corner clock. */
+enum class ClockKind {
+    /** Today's limit; runs down while you use it. */
+    LIMIT,
+    /** The "in a row" rule (I32); runs down while you use it. */
+    ROW,
+    /** A habit unlock; runs down by the clock. */
+    UNLOCK,
+    /** Bought minutes (I34); run down by the clock. */
+    OVERRIDE,
+    /** The daily break (I25); runs down by the clock. */
+    BREAK,
+}
+
+data class TimeLeft(val ms: Long, val kind: ClockKind)
 
 sealed interface Effect {
     data class BlockedImpression(val pkg: String) : Effect
@@ -66,6 +108,8 @@ sealed interface Effect {
     data class UnlockEndingSoon(val blockId: String, val remainingMs: Long) : Effect
     data class TamperDetected(val blockId: String) : Effect
     data class RedeemRejected(val blockId: String, val reason: RejectReason) : Effect
+    data class OverrideGranted(val blockIds: Set<String>, val ms: Long) : Effect
+    data class OverrideRejected(val reason: OverrideRejection) : Effect
 }
 
 /**
@@ -98,7 +142,9 @@ fun applyOutcome(
             is Effect.UnlockConsumed -> telemetry.onUnlockConsumed(effect.blockId, effect.ms, nowWallMs, effect.startedAtWall)
             is Effect.UnlockEndingSoon,
             is Effect.TamperDetected,
-            is Effect.RedeemRejected -> Unit // routed to notifications / UI by the caller
+            is Effect.RedeemRejected,
+            is Effect.OverrideGranted,
+            is Effect.OverrideRejected -> Unit // routed to notifications / UI by the caller
         }
     }
 }

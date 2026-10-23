@@ -150,6 +150,31 @@ class SharedStateTest {
     }
 
     @Test
+    fun overrideSettings_stricterValueWinsPerField() {
+        val base = SharedState(settings = Settings())
+        val here = base.copy(settings = Settings(overridePhrase = "I really do choose to keep scrolling", overrideWaitMs = 30_000, overridesPerDay = 1, showClock = false))
+        val there = base.copy(settings = Settings(overridePhrase = "ok fine", overrideWaitMs = 90_000, overrideGrantMs = 4L * 60_000, overridesPerDay = 3))
+        val merged = merge(base, here, there).settings
+        assertEquals("I really do choose to keep scrolling", merged.overridePhrase)
+        assertEquals(90_000L, merged.overrideWaitMs)
+        assertEquals(4L * 60_000, merged.overrideGrantMs)
+        assertEquals(1, merged.overridesPerDay)
+        assertFalse(merged.showClock)
+    }
+
+    @Test
+    fun overrides_laterEndWins_andTheLogIsUnionedPerDay() {
+        val early = OverrideGrant("s1", 0, t, 4L * 60_000, "phone")
+        val late = OverrideGrant("s1", 0, t + 60_000, 4L * 60_000, "laptop")
+        val here = SharedState(overrides = mapOf("s1" to early), overrideEpochDay = 9, overrideLog = mapOf(early.key to early.durationMs))
+        val there = SharedState(overrides = mapOf("s1" to late), overrideEpochDay = 9, overrideLog = mapOf(late.key to late.durationMs))
+        val merged = merge(null, here, there)
+        assertEquals(late, merged.overrides["s1"])
+        assertEquals(setOf(early.key, late.key), merged.overrideLog.keys)
+        assertEquals(mapOf(late.key to late.durationMs), merge(null, here, there.copy(overrideEpochDay = 10)).overrideLog)
+    }
+
+    @Test
     fun unlockLog_unionOnTheSameDay_newerDayWins() {
         val here = SharedState(unlockEpochDay = 10, unlockLog = mapOf("a@1" to 100L, "b@2" to 50L))
         val there = SharedState(unlockEpochDay = 10, unlockLog = mapOf("a@1" to 100L, "c@3" to 70L))
@@ -183,7 +208,10 @@ class SharedStateTest {
             lastPauseEpochDay = 3,
             unlockEpochDay = 3,
             unlockLog = mapOf("c2@$t" to 1_000L),
-            allowance = mapOf("a1" to mapOf("phone" to AllowanceUse(t, 5))),
+            allowance = mapOf("a1" to mapOf("phone" to AllowanceUse(t, 5, RunUse(5, t, t + 60_000), t))),
+            overrides = mapOf("s1" to OverrideGrant("s1", 0, t, 60_000, "phone")),
+            overrideEpochDay = 3,
+            overrideLog = mapOf("s1@$t" to 60_000L),
         )
         val decoded = json.decodeFromString(SharedState.serializer(), json.encodeToString(SharedState.serializer(), state))
         assertEquals(state, decoded)

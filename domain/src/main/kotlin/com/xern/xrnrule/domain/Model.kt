@@ -43,6 +43,12 @@ object Defaults {
     const val DEFAULT_UNLOCK_MS = 5L * 60 * 1000
     const val PAUSE_MS = 15L * 60 * 1000                 // I25
     const val ALL_ITEMS = -1L                            // trigger.requiredAmount sentinel (I11)
+    const val OVERRIDE_PHRASE = "I choose to keep scrolling" // I34
+    const val OVERRIDE_WAIT_MS = 45_000L                 // I34
+    const val OVERRIDE_GRANT_MS = 10L * 60 * 1000        // I34
+    const val OVERRIDES_PER_DAY = 2                      // I34, per block
+    /** I34: a started override must be claimed within this long after its wait. */
+    const val OVERRIDE_CLAIM_WINDOW_MS = 10L * 60 * 1000
 }
 
 @Serializable
@@ -75,11 +81,21 @@ data class Reward(
 @Serializable
 data class TimeWindow(val startMinuteOfDay: Int, val endMinuteOfDay: Int)
 
+/** One more window of a [Schedule], with days of its own (I30). */
+@Serializable
+data class DayWindow(
+    /** ISO-8601 day numbers, 1 = Monday .. 7 = Sunday. */
+    val days: Set<Int>,
+    val window: TimeWindow,
+)
+
 @Serializable
 data class Schedule(
     /** ISO-8601 day numbers, 1 = Monday .. 7 = Sunday. */
     val activeDays: Set<Int>,
     val activeWindow: TimeWindow? = null,
+    /** More windows, each with its own days; the schedule is active while any window is (I30). */
+    val moreWindows: List<DayWindow> = emptyList(),
 ) {
     companion object {
         val ALWAYS = Schedule((1..7).toSet(), null)
@@ -95,6 +111,8 @@ data class Block(
     val targetCategories: Set<String> = emptySet(),
     /** Normalized domains (see [Sites.normalize]); each also covers its subdomains (I18). */
     val targetSites: Set<String> = emptySet(),
+    /** Hosts under [targetSites] this block leaves alone, e.g. `music.youtube.com` (I31). */
+    val exceptSites: Set<String> = emptySet(),
     /**
      * Laptop apps, by the `.desktop` id KWin reports (e.g. `steam`). Targets like
      * [targetPackages] (I29); the phone never sees them in the foreground.
@@ -106,8 +124,17 @@ data class Block(
     val enforcementTier: EnforcementTier = EnforcementTier.SOFT,
     val state: BlockState = BlockState.ARMED,
     val mode: BlockMode = BlockMode.HABIT,
-    /** [BlockMode.ALLOWANCE]: free foreground time per local day before the block engages (I19). */
+    /**
+     * [BlockMode.ALLOWANCE]: free foreground time per local day before the block engages (I19);
+     * 0 means no daily limit, only the "in a row" rule ([sessionMs]).
+     */
     val dailyAllowanceMs: Long = 0,
+    /** [BlockMode.ALLOWANCE]: at most this much use in a row, then a forced break; 0 = no such rule (I32). */
+    val sessionMs: Long = 0,
+    /** [BlockMode.ALLOWANCE]: the forced break after [sessionMs] in a row; resting this long also starts a fresh row (I32). */
+    val sessionBreakMs: Long = 0,
+    /** [BlockMode.ALLOWANCE]: each device gets the whole limit to itself instead of sharing one (I33). */
+    val perDevice: Boolean = false,
     /** [BlockMode.LOCKDOWN]: length of one lockdown, reused when it is started again (I21). */
     val lockdownMs: Long = 0,
     /** Wall-clock ms of the last edit; the later edit wins when two devices change a block at once (§2.4). */
@@ -115,6 +142,13 @@ data class Block(
 ) {
     /** Everything this block blocks that can be "the foreground app": phone packages and laptop apps. */
     val targetApps: Set<String> get() = targetPackages + targetDesktopApps
+
+    /** A target site covers [host] unless one of [exceptSites] does too (I18, I31). */
+    fun coversSite(host: String): Boolean =
+        targetSites.any { Sites.matches(host, it) } && exceptSites.none { Sites.matches(host, it) }
+
+    /** Whether the "in a row" rule applies (I32). */
+    val hasRowRule: Boolean get() = mode == BlockMode.ALLOWANCE && sessionMs > 0 && sessionBreakMs > 0
 }
 
 /**
@@ -210,15 +244,52 @@ data class UnlockSession(
     val key: String get() = "$blockId@$startedAtWall"
 }
 
-/** One device's ALLOWANCE use of a block on the local day starting at [dayStartWall] (I19, §2.4). */
+/**
+ * One device's run of use "in a row" of an ALLOWANCE block with a row rule (I32): [ms] of use,
+ * the last of it at [lastActiveWall]; resting [Block.sessionBreakMs] starts a fresh run. A run
+ * that reached [Block.sessionMs] set [breakUntilWall].
+ */
 @Serializable
-data class AllowanceUse(val dayStartWall: Long, val ms: Long)
+data class RunUse(val ms: Long = 0, val lastActiveWall: Long = 0, val breakUntilWall: Long = 0)
+
+/**
+ * One device's ALLOWANCE use of a block on the local day starting at [dayStartWall] (I19, §2.4),
+ * with its current run (I32). [atWall]: when that device last counted any of it.
+ */
+@Serializable
+data class AllowanceUse(val dayStartWall: Long, val ms: Long, val run: RunUse? = null, val atWall: Long = 0)
+
+/** Minutes bought past a block (I34). Counted down on the monotonic clock, like [Lockdown]. */
+@Serializable
+data class OverrideGrant(
+    val blockId: String,
+    val startedAtMonotonic: Long,
+    val startedAtWall: Long,
+    val durationMs: Long,
+    /** The device that bought it; a [Block.perDevice] block opens there only (I33). */
+    val deviceId: String = "",
+) {
+    /** Names this grant on every device, for the [World.overrideLog] (I34). */
+    val key: String get() = "$blockId@$startedAtWall"
+}
+
+/** An override waiting out its delay on this device (I34); never shared. */
+@Serializable
+data class PendingOverride(val blockIds: Set<String>, val sinceMonotonic: Long, val sinceWall: Long)
 
 @Serializable
 data class Settings(
     val dailyCapMs: Long = Defaults.DAILY_CAP_MS,
     val skewToleranceMs: Long = Defaults.SKEW_TOLERANCE_MS,
     val unlockWarningMs: Long = Defaults.UNLOCK_WARNING_MS,
+    /** I34: what has to be typed to buy minutes past a block. */
+    val overridePhrase: String = Defaults.OVERRIDE_PHRASE,
+    val overrideWaitMs: Long = Defaults.OVERRIDE_WAIT_MS,
+    val overrideGrantMs: Long = Defaults.OVERRIDE_GRANT_MS,
+    /** I34: per block per day, across devices; 0 turns overrides off. */
+    val overridesPerDay: Int = Defaults.OVERRIDES_PER_DAY,
+    /** The browser extension's corner clock on limited sites. */
+    val showClock: Boolean = true,
 )
 
 /**
@@ -251,6 +322,15 @@ data class World(
     val deviceId: String = "",
     /** Other devices' ALLOWANCE use, block id -> device id -> use (I19, §2.4). */
     val otherAllowance: Map<String, Map<String, AllowanceUse>> = emptyMap(),
+    /** This device's run of use in a row, by block (I32). */
+    val runs: Map<String, RunUse> = emptyMap(),
+    /** Minutes bought past blocks, by block (I34). */
+    val overrides: Map<String, OverrideGrant> = emptyMap(),
+    /** Overrides bought on [overrideEpochDay], keyed by [OverrideGrant.key] (I34). */
+    val overrideLog: Map<String, Long> = emptyMap(),
+    val overrideEpochDay: Long = 0,
+    /** An override waiting out its delay here (I34). */
+    val pendingOverride: PendingOverride? = null,
     /**
      * The last plan handed to the shield. A new plan is emitted when the projection differs
      * from this, not from the previous world's projection: schedules and lockdowns change the

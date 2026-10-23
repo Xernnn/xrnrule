@@ -28,6 +28,18 @@ object Sites {
     fun matches(host: String, target: String): Boolean =
         host == target || host.endsWith(".$target")
 
+    /**
+     * The override phrase as compared (I34): no accents (a Vietnamese keyboard may add them), no
+     * punctuation, case and spacing ignored.
+     */
+    fun normalizePhrase(text: String): String =
+        java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{Mn}+"), "")
+            .replace('đ', 'd').replace('Đ', 'D')
+            .lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .trim()
+
     private fun validLabel(label: String): Boolean =
         label.isNotEmpty() && label.length <= 63 && !label.startsWith('-') && !label.endsWith('-') &&
             label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
