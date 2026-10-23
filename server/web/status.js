@@ -171,11 +171,15 @@ function devicesCard(now) {
   }));
 }
 
-/** BlockEngine.scheduleActive (I20): a window past midnight belongs to the day it starts on. */
+/** BlockEngine.scheduleActive (I20, I30): any of its windows; one past midnight belongs to the day it starts on. */
 function scheduleActive(schedule, now = new Date()) {
   const days = schedule?.activeDays ?? [1, 2, 3, 4, 5, 6, 7];
+  return windowActive(days, schedule?.activeWindow, now) ||
+    (schedule?.moreWindows ?? []).some((w) => windowActive(w.days, w.window, now));
+}
+
+function windowActive(days, w, now) {
   const iso = ((now.getDay() + 6) % 7) + 1;
-  const w = schedule?.activeWindow;
   if (!w) return days.includes(iso);
   const minute = now.getHours() * 60 + now.getMinutes();
   if (w.startMinuteOfDay <= w.endMinuteOfDay) return days.includes(iso) && minute >= w.startMinuteOfDay && minute < w.endMinuteOfDay;
@@ -211,15 +215,22 @@ function blockStatus(block, now) {
       return ["blocked", "Blocked until you do the habit"];
     }
     case "ALLOWANCE": {
+      // The devices' own reports (I19, I32); a per-device block (I33) is read for all of them together here.
       const today = localDayStartMs(now);
-      const used = Object.values(doc.allowance?.[block.id] ?? {}).reduce((sum, u) => sum + (u.dayStartWall === today ? u.ms : 0), 0);
+      const uses = Object.values(doc.allowance?.[block.id] ?? {});
+      const used = uses.reduce((sum, u) => sum + (u.dayStartWall === today ? u.ms : 0), 0);
       const allowance = block.dailyAllowanceMs ?? 0;
+      const breakUntil = Math.max(0, ...uses.map((u) => u.run?.breakUntilWall ?? 0));
       if (!scheduleActive(block.schedule, now)) return ["idle", "Outside its hours"];
+      if (breakUntil > wall) return ["blocked", `On a break until ${timeFmt.format(breakUntil)}`];
+      if (bought(block, wall)) return ["open", `Bought time until ${timeFmt.format(bought(block, wall))}`];
+      if (allowance <= 0) return ["open", `At most ${minutes(block.sessionMs ?? 0)} min in a row`];
       return used >= allowance
         ? ["blocked", `Used up: ${minutes(used)} of ${minutes(allowance)} min today`]
         : ["open", `${minutes(allowance - used)} of ${minutes(allowance)} min left today`];
     }
     case "SCHEDULE":
+      if (scheduleActive(block.schedule, now) && bought(block, wall)) return ["open", `Bought time until ${timeFmt.format(bought(block, wall))}`];
       return scheduleActive(block.schedule, now) ? ["blocked", "Blocked by its schedule"] : ["idle", "Outside its hours"];
     case "LOCKDOWN": {
       const l = doc.lockdowns?.[block.id];
@@ -231,12 +242,25 @@ function blockStatus(block, now) {
   return ["idle", mode];
 }
 
+/** When minutes bought past this block (I34) run out, or 0. */
+function bought(block, wall) {
+  const g = doc.overrides?.[block.id];
+  return g && wall < g.startedAtWall + g.durationMs ? g.startedAtWall + g.durationMs : 0;
+}
+
 function unlockMethod(block, items) {
   const mode = block.mode ?? "HABIT";
-  if (mode === "ALLOWANCE") return `${minutes(block.dailyAllowanceMs ?? 0)} min a day`;
+  if (mode === "ALLOWANCE") {
+    const parts = [];
+    if (block.dailyAllowanceMs > 0) parts.push(`${minutes(block.dailyAllowanceMs)} min a day`);
+    if (block.sessionMs > 0) parts.push(`${minutes(block.sessionMs)} min in a row, then ${minutes(block.sessionBreakMs ?? 0)} off`);
+    if (block.perDevice) parts.push("each device its own");
+    return parts.join(" · ");
+  }
   if (mode === "SCHEDULE") {
     const w = block.schedule?.activeWindow;
-    return w ? `Blocked ${hhmm(w.startMinuteOfDay)}–${hhmm(w.endMinuteOfDay)}` : "Blocked all day on its days";
+    const more = (block.schedule?.moreWindows ?? []).map((x) => `${hhmm(x.window.startMinuteOfDay)}–${hhmm(x.window.endMinuteOfDay)}`);
+    return w ? `Blocked ${[`${hhmm(w.startMinuteOfDay)}–${hhmm(w.endMinuteOfDay)}`, ...more].join(", ")}` : "Blocked all day on its days";
   }
   if (mode === "LOCKDOWN") return "Blocked for a while once started";
   const t = block.trigger ?? {};

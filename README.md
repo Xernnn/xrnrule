@@ -1,41 +1,77 @@
 # xrnrule
 
-An Android self-control app: distracting apps (and, in the sideload build, websites) stay
-behind a full-screen block until you've done a habit, then open for a few minutes and lock
-again on their own. No accounts, no cloud: everything stays on the phone, unless you turn on
-sync with a server of your own, which also brings the same blocks to a Linux laptop.
+Rules for your phone and your laptop. Distracting apps and websites stay behind a block until
+you've done a habit, used up today's minutes, or are inside the hours you set; then they open
+for a while and lock again on their own. No accounts, no cloud: everything stays on the phone,
+unless you turn on sync with a server of your own, which also brings the same blocks to a
+Linux laptop.
 
-xrnrule was called xrnhabit until 24 Oct 2026. The time limits of
-[xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension, are moving into it, so one
-set of rules covers apps and sites on both devices.
+xrnrule was called xrnhabit until 24 Oct 2026, when it took in
+[xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension that put time limits on
+sites. One set of rules now covers apps and sites on both devices.
 
-## What it does
+## How it fits together
 
-- **Habit blocks.** Unlock by finishing a checklist, running a timer (optionally counted in a
-  *different* app, such as a reading app), or both. Checklist items are hold-to-check, and an
-  item can be linked to a habit in [xrnloops](#companion-app-xrnloops) so only a real tick
-  there counts.
-- **Daily limits.** N free minutes a day across a block's apps, then blocked until midnight.
-- **Set times.** Block on a weekly schedule, or lock down right now for N minutes.
+```
+Phone                                      Laptop (KDE Plasma 6)
+ xrnrule app: rules, apps, habits           xrnrule-desktop: rules, desktop apps
+   ↑ 127.0.0.1:47321                          ↑ 127.0.0.1:47321
+ Quetta + the xrnrule extension: sites      Helium + the xrnrule extension: sites
+              \                             /
+               your home server (server/): blocks, unlocks, minutes used, bought minutes
+```
+
+A block is about a thing, not a device: a "YouTube" block can cover the phone app,
+youtube.com in both browsers and a laptop app. Each block is one of three kinds:
+
+1. **Earn it.** Blocked until you do the habit: a checklist, a timer (optionally counted in a
+   *different* app, such as a reading app), or both. A checklist item can be linked to a habit
+   in [xrnloops](#companion-app-xrnloops), so only a real tick there counts.
+2. **Limit.** N minutes a day, and/or "at most N minutes in a row, then a break". Phone and
+   laptop share one limit, or each gets its own (a choice per block).
+3. **Set time.** Blocked on a weekly schedule (as many time windows as you like), or locked
+   down right now for N minutes.
+
+A thing can be in several blocks; whichever is strictest right now wins. A block can leave
+parts of a site alone (music.youtube.com under youtube.com).
+
+**Ways through a block**, the same on the phone and the laptop:
+
+- **Do the habit** (Earn-it blocks): it opens on both devices.
+- **Buy a few minutes** (Limit and Set-time blocks): start, wait 45 s, type "I choose to keep
+  scrolling", get a few minutes. A few times a day per block, counted across both devices.
+  Never past a lockdown, a hardcore block or a forced break.
+- **The daily break**: 15 minutes off every soft block, once a day.
+
+## What else it does
+
 - **Hardcore mode** (sideload build). A password gate on Android Settings (and phone-maker
   security apps) plus Device Admin anti-uninstall while a hardcore block is active.
-- **Hard to talk yourself out of.** Deleting a block or making one easier takes a 60-second
-  wait (or the hardcore password). One 15-minute break a day pauses soft blocks. Changing the
-  phone's clock by hand doesn't reset limits or move schedules.
+- **Hard to talk yourself out of.** Deleting a block or making one easier (including the
+  buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the phone's
+  clock by hand doesn't reset limits or move schedules.
 - **Status at a glance.** The notification shows what's open and for how long, warns 30 s
-  before an unlock ends, and says so if blocking stops working. A Quick Settings tile restarts
-  your lockdowns.
+  before an unlock ends, and says so if blocking stops working. On limited sites the extension
+  can show a corner clock of what runs out first, and warns at 10, 5, 3 and 1 minutes left.
 - **Backup.** Export your blocks to a file and import them on a new install.
-- **On the laptop too** (optional). With a small sync server of your own (`server/`), a
-  laptop daemon (`desktop/`, KDE Plasma 6) enforces the same blocks on websites (a browser
-  extension) and desktop apps. An unlock earned or redeemed on either device opens the block
-  on both; the daily unlock limit, the break and lockdowns are shared. Blocks can be made and
-  edited on the laptop too, and the habits web page has a weekly review of both devices. See
-  [desktop/README.md](desktop/README.md).
-- **Insights.** Per-app screen time, habits done, times blocked and your streak, and in the
-  sideload build per-site time.
-- Built to survive reboots, process death and OEM battery killers. Unlock countdowns run on a
-  clock that changing the system time doesn't affect.
+- **Insights.** Per-app screen time, time per site, habits done, times blocked and your streak.
+- Built to survive reboots, process death and OEM battery killers.
+
+## The browser extension
+
+Websites are blocked by the extension in `extension/`, not by reading the screen: nothing in
+xrnrule uses Accessibility, which banking apps refuse to run next to. The extension asks
+xrnrule on the same device (`127.0.0.1:47321`) what to do and decides nothing itself. It sends
+a blocked site to the block page before it loads, moves open tabs off a site the moment it's
+blocked, and while xrnrule doesn't answer it keeps blocking what it last heard was blocked.
+
+- **Laptop (Helium or another Chromium browser):** extensions page → Developer mode → Load
+  unpacked → `extension/`.
+- **Phone (Quetta):** `scripts/pack-extension.sh` makes `dist/xrnrule-extension.zip`; copy it to
+  the phone, then in Quetta: extensions page → Developer mode → "(from .zip/.crx/.user.js)".
+
+The phone app warns when a browser is in front and the extension says nothing, so a browser
+without it (Chrome on Android has no extensions) doesn't quietly let sites through.
 
 ## Build
 
@@ -44,14 +80,15 @@ Requirements: **JDK 17** (Gradle 8.11.1 doesn't run on newer JDKs) and the Andro
 
 ```sh
 ./gradlew :domain:test                 # engine unit tests (pure JVM)
-./gradlew :app:assembleSideloadDebug   # full build: website blocking + hardcore mode
-./gradlew :app:assemblePlayDebug       # Play-safe build: no Accessibility, no Device Admin
+./gradlew :app:assembleSideloadDebug   # full build, with hardcore mode
+./gradlew :app:assemblePlayDebug       # Play-safe build: no Device Admin
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
+node --test extension/test             # the extension's helpers
+scripts/pack-extension.sh              # the extension as a .zip, for Quetta
 ```
 
-The two flavors exist because the distribution channel is undecided. Website reading uses an
-Accessibility service and anti-uninstall uses Device Admin, and both carry Play Store policy
-risk, so the `play` build leaves them out.
+The two flavors exist because the distribution channel is undecided: anti-uninstall uses
+Device Admin, which carries Play Store policy risk, so the `play` build leaves it out.
 
 Minimum Android version: 8.0 (API 26).
 
@@ -59,8 +96,8 @@ Minimum Android version: 8.0 (API 26).
 
 Usage access (to see the foreground app), draw over other apps (the block screen),
 notifications, and exemption from battery optimization. On Xiaomi/MIUI also enable
-autostart. The Settings screen shows what's missing and links to each one. The website
-reader (sideload only) is an Accessibility service that reads only the browser's address bar.
+autostart. The Settings screen shows what's missing and links to each one. Sites need the
+browser extension (above); the app only listens for it on `127.0.0.1`.
 
 ## Companion app: xrnloops
 
@@ -75,11 +112,12 @@ which serves a web page for ticking and reviewing them from a laptop.
 
 | Module | |
 |---|---|
-| `:domain` | The block engine: a pure Kotlin state machine with no Android dependencies, fully unit-tested |
-| `:app` | Compose UI, the foreground service that enforces blocks, persistence, permissions |
+| `:domain` | The rules engine: a pure Kotlin state machine with no Android dependencies, fully unit-tested |
+| `:app` | Compose UI, the foreground service that enforces blocks, the extension's door, persistence, permissions |
 | `:hardcore` | Device Admin receiver (sideload builds only) |
-| `:desktop` | The laptop daemon, its KWin script and browser extension |
+| `:desktop` | The laptop daemon and its KWin script; see [desktop/README.md](desktop/README.md) |
+| `extension/` | The browser extension, for both devices |
 | `server/` | `xrnrule-sync.py`, the tiny sync server (Python), and its status page |
 
-The engine's rules (states, transitions, invariants I1–I29, multi-device sync in §2.4) are specified in
-`docs/domain-contract.md`, which is in Vietnamese.
+The engine's rules (states, transitions, invariants I1–I34, multi-device sync in §2.4) are
+specified in `docs/domain-contract.md`, which is in Vietnamese.

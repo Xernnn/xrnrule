@@ -1,10 +1,10 @@
 # xrnrule on the laptop
 
 The same blocks as the phone, enforced on a Linux laptop running KDE Plasma 6. Websites are
-blocked in the browser, and desktop apps (Steam, Discord, …) are closed. Both stay blocked
-until the same habits are done. With sync set up, an unlock is shared: redeem it on either
-device, and the block is open on both until the same moment. The daily unlock limit, the
-15-minute break and lockdowns are shared too.
+blocked in the browser, and desktop apps (Steam, Discord, …) are closed. With sync set up,
+everything is shared: an unlock redeemed on either device opens the block on both until the
+same moment, daily limits count both devices' use (unless a block gives each its own), and
+bought minutes, the daily unlock limit, the 15-minute break and lockdowns are shared too.
 
 ```
  xrnrule-desktop (systemd user service, JVM, runs :domain's engine)
@@ -14,7 +14,7 @@ device, and the block is open on both until the same moment. The daily unlock li
    └─ http://127.0.0.1:47321
         ├─ the local page: blocks, unlocks, laptop apps & sites per block
         ├─ /block: where blocked apps and sites land, with what unlocks them
-        └─ /ext/*: the browser extension (extension/) asks what's blocked
+        └─ /ext/*: the browser extension (../extension) asks what's blocked
 ```
 
 ## Install
@@ -31,9 +31,13 @@ the KWin script, and starts the systemd user service `xrnrule-desktop`. Run it a
 update.
 
 Then load the browser extension once. The browser's extensions page (`chrome://extensions`
-in Chromium browsers, including Helium) → Developer mode → **Load unpacked** →
-`desktop/extension`. On its Details page, allow it in incognito windows, or incognito tabs
-aren't blocked.
+in Chromium browsers, including Helium) → Developer mode → **Load unpacked** → `extension/`
+at the top of this repo (the phone's Quetta uses the same extension). On its Details page,
+allow it in incognito windows, or incognito tabs aren't blocked.
+
+Moving from xrnhabit: `install.sh` stops `xrnhabit-desktop`, removes its KWin script, and
+moves `~/.config/xrnhabit` and `~/.local/share/xrnhabit` over, so the blocks and this
+laptop's device id carry on.
 
 ### Sync with the phone
 
@@ -57,15 +61,21 @@ the phone.
 
 - **Blocks** can be made on either device. On the local page, **+ New block** makes one with
   the phone's choices (a habit with tasks, a timer or both, a daily limit, a schedule or a
-  lockdown), covering laptop apps and websites; add phone apps to it on the phone. **Edit**
-  changes a block's name, laptop apps, sites, minutes and tasks, links a task to a habit, or
-  deletes it. Sites are shared with the phone; laptop apps only matter here. Tightening is
+  lockdown), covering laptop apps and websites; add phone apps to it on the phone. A daily
+  limit can also have "at most N minutes in a row, then a break" and can be shared or per
+  device; a schedule can have several times; any block can leave parts of its sites alone
+  (music.youtube.com). **Edit** changes a block's name, laptop apps, sites, minutes and tasks,
+  links a task to a habit, or deletes it. Sites are shared with the phone; laptop apps only matter here. Tightening is
   instant. Anything that loosens a block waits 60 seconds with the page open, like on the
   phone, and a hardcore block can only be loosened on the phone.
 - **Opening a blocked app** closes it at once (a tray app like Steam is also stopped). A
   notification appears, and the block page opens in the browser.
-- **Opening a blocked site** turns the tab into the block page. Once the site is open again,
-  the tab goes back where it was.
+- **Opening a blocked site** turns the tab into the block page, before the site loads. Once
+  the site is open again, the tab goes back where it was. On limited sites the extension can
+  show a corner clock (Settings on the local page) and warns at 10, 5, 3 and 1 minutes left.
+- **Buying minutes.** On a daily limit's or a schedule's block page, **Buy … minutes** starts
+  a wait; then type the sentence it shows. The sentence, the wait, the minutes and how many a
+  day are in **Settings** on the local page (shared with the phone; easing them waits 60 s).
 - **Unlocking** works as on the phone. Tick the habit (in xrnloops or on the habits web page,
   for linked items), tick a to-do item, or wait out a timer *on the block page*: it stands in
   for the blocked app, as the phone's shield does. Then press **Open**.
