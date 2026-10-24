@@ -6,8 +6,8 @@
 //   - redirect rules (declarativeNetRequest) send a new visit to a blocked site straight to the
 //     block page, before anything loads;
 //   - tabs already open on a site that just got blocked are moved there too;
-//   - while xrnrule doesn't answer, what it last said was blocked stays blocked, and the
-//     toolbar icon shows "!".
+//   - while xrnrule doesn't answer, what it last said was blocked stays blocked (on our own block
+//     page, since xrnrule's can't load then), and the toolbar icon shows "!".
 
 importScripts("shared.js");
 
@@ -43,7 +43,12 @@ function badge(ok) {
   chrome.action.setBadgeText({ text: ok ? "" : "!" });
   if (!ok) chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
   chrome.action.setTitle({ title: ok ? "xrnrule" : "xrnrule isn't answering: only what it last blocked stays blocked" });
+  // Which block page the redirects name depends on it.
+  cachedRules().then((rules) => rules && syncRedirects(rules));
 }
+
+/** xrnrule's block page, or null for ours: while xrnrule doesn't answer, its page won't load either. */
+const pageOf = (rules) => (reachable === false ? null : rules?.page ?? null);
 
 // ---- the rule list -------------------------------------------------------------------------
 
@@ -77,7 +82,14 @@ async function applyRules(rules) {
   await moveBlockedTabs(rules);
 }
 
-async function syncRedirects(rules) {
+let redirecting = Promise.resolve();
+/** Rewrites the redirect rules; one rewrite at a time, so an older list can't land last. */
+function syncRedirects(rules) {
+  redirecting = redirecting.then(() => writeRedirects(rules)).catch(() => {});
+  return redirecting;
+}
+
+async function writeRedirects(rules) {
   let existing = [];
   try {
     existing = await chrome.declarativeNetRequest.getSessionRules();
@@ -89,7 +101,7 @@ async function syncRedirects(rules) {
     id: DNR_BASE + i,
     priority: 1,
     // \0 is the whole URL asked for: the block page goes back there once the site opens.
-    action: { type: "redirect", redirect: { regexSubstitution: blockUrl(rules.page, OWN_PAGE, r.domain, "\\0") } },
+    action: { type: "redirect", redirect: { regexSubstitution: blockUrl(pageOf(rules), OWN_PAGE, r.domain, "\\0") } },
     condition: {
       regexFilter: "^https?://.*",
       requestDomains: [r.domain],
@@ -118,7 +130,7 @@ async function moveBlockedTabs(rules) {
     const host = hostOf(tab.url || "");
     const hit = blockedBy(rules, host);
     if (!hit) continue;
-    chrome.tabs.update(tab.id, { url: blockUrl(rules.page, OWN_PAGE, host, tab.url) }).catch(() => {});
+    chrome.tabs.update(tab.id, { url: blockUrl(pageOf(rules), OWN_PAGE, host, tab.url) }).catch(() => {});
   }
 }
 
@@ -141,7 +153,7 @@ async function beat(host, focused, standIn = false) {
     // Fail closed: what xrnrule last said was blocked stays blocked; nothing else is.
     const rules = await cachedRules();
     const site = host ? hostOf(`https://${host}/`) : null;
-    return { site, blocked: !!blockedBy(rules, site), page: rules?.page ?? null, showClock: false, offline: true };
+    return { site, blocked: !!blockedBy(rules, site), page: null, showClock: false, offline: true };
   }
 }
 
@@ -155,6 +167,8 @@ async function beatActive() {
   } catch {
     return;
   }
+  // xrnrule's own pages (its block page stands in for a site) speak for themselves.
+  if (tab?.url?.startsWith(`${await engineUrl()}/`)) return;
   const host = tab ? hostOf(tab.url || "") : null;
   const verdict = await beat(host, focused);
   if (verdict.blocked && tab && host) {

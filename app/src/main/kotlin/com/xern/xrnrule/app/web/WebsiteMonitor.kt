@@ -48,12 +48,39 @@ object SiteSightings {
         everHeard = true
     }
 
-    /** The extension's report: [host] in front, or null for a page that isn't a website. */
-    fun report(host: String?) {
+    /** The site you chose to leave on the block screen, and when (`elapsedRealtime`). */
+    @Volatile
+    private var leaving: Pair<String, Long>? = null
+
+    /**
+     * The block screen's "Leave this site": the screen goes at once, and the extension's
+     * stand-in page for [site] is told to step back, or close its tab, the next time it reports.
+     * You stay in the browser, instead of being sent home with the blocked tab still in front.
+     */
+    fun leave(site: String) {
+        leaving = site to SystemClock.elapsedRealtime()
+        _current.value = null
+    }
+
+    /**
+     * The extension's report: [host] in front, or null for a page that isn't a website.
+     * [standIn]: from its block page, standing in for [host]. Returns whether that page should
+     * leave (see [leave]).
+     */
+    fun report(host: String?, standIn: Boolean): Boolean {
         heard()
         reportedAtElapsed = lastHeardElapsed
         lastReportWasSite = host != null
-        _current.value = host
+        val left = leaving?.takeIf { (site, at) -> site == host && lastHeardElapsed - at < LEAVE_MS }
+        if (left == null) {
+            _current.value = host
+            return false
+        }
+        // The site doesn't come back in front while its tab steps off it. Each stand-in told to
+        // leave starts the wait again, so a step back onto another one for the site leaves too.
+        _current.value = null
+        if (standIn) leaving = left.first to lastHeardElapsed
+        return standIn
     }
 
     /**
@@ -66,6 +93,8 @@ object SiteSightings {
             (lastReportWasSite && nowElapsed - reportedAtElapsed >= SITE_SILENCE_MS)
 
     private const val SITE_SILENCE_MS = 15_000L
+    /** How long a site you left stays out of front while its tab steps off it. */
+    private const val LEAVE_MS = 4_000L
     private const val EXTENSION_SILENCE_MS = 90_000L
 
     /** Called every second by [ExtensionServer]. */

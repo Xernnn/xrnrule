@@ -28,6 +28,7 @@ import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.ui.BlockOverlayContent
 import com.xern.xrnrule.app.ui.freeAtWall
+import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
@@ -70,7 +71,6 @@ class OverlayShieldPort(
     private var plan = ShieldPlan(emptySet())
 
     private var view: View? = null
-    private var params: WindowManager.LayoutParams? = null
 
     private val _visible = MutableStateFlow(false)
 
@@ -133,30 +133,28 @@ class OverlayShieldPort(
         if (view == null && showsLinkedItem) loop.sync()
         // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
         if (view == null) shared.request()
-        // Typing the override sentence needs the keyboard, so the shield takes focus while it waits.
-        show(focusable = !siteBlocked || pending != null)
+        show()
     }
 
     /**
-     * Leaving goes home. A blocked *site* can also be left with Back: its shield isn't focusable,
-     * so Back reaches the browser, which steps back from the extension's block page.
+     * Leaving a blocked app goes home. Leaving a blocked *site* (the button or Back) keeps you in
+     * the browser: the screen goes at once and the extension steps the tab back, or closes it,
+     * so the browser isn't stuck behind this screen. Going home instead would leave the blocked
+     * tab in front, and this screen would be back the moment the browser was.
      */
     private fun leave() {
+        val ui = uiState.value
+        if (ui?.isSite == true) {
+            SiteSightings.leave(ui.subject)
+            return
+        }
         context.startActivity(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
     }
 
-    private fun show(focusable: Boolean) {
-        view?.let { existing ->
-            val p = params ?: return
-            val wanted = withFocusable(p.flags, focusable)
-            if (p.flags != wanted) {
-                p.flags = wanted
-                runCatching { wm.updateViewLayout(existing, p) }
-            }
-            return
-        }
+    private fun show() {
+        if (view != null) return
 
         val owner = OverlayWindowOwner().also { it.onCreate() }
         // Opening Loop moves the foreground off the blocked app, which drops the overlay.
@@ -178,11 +176,12 @@ class OverlayShieldPort(
                 )
             }
         }
-        // Swallow BACK so the overlay can't be dismissed with the nav gesture / button.
+        // BACK can't dismiss an app's block screen; on a site's, it leaves the site.
         val host = object : FrameLayout(context) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-                if (event.keyCode == KeyEvent.KEYCODE_BACK) return true
-                return super.dispatchKeyEvent(event)
+                if (event.keyCode != KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
+                if (event.action == KeyEvent.ACTION_UP && uiState.value?.isSite == true) leave()
+                return true
             }
         }
         // Compose resolves its recomposer from the *root* view attached to the window, so the
@@ -196,10 +195,8 @@ class OverlayShieldPort(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
-            withFocusable(
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                focusable,
-            ),
+            // Focusable: Back comes here, and the override sentence is typed here.
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.OPAQUE,
         ).apply {
             gravity = Gravity.CENTER
@@ -214,7 +211,6 @@ class OverlayShieldPort(
         runCatching { wm.addView(host, layout) }
         view = host
         _visible.value = true
-        params = layout
         windowOwner = owner
         owner.onStart()
     }
@@ -223,15 +219,9 @@ class OverlayShieldPort(
         view?.let { v -> runCatching { wm.removeView(v) } }
         view = null
         _visible.value = false
-        params = null
         windowOwner?.onDestroy()
         windowOwner = null
     }
-
-    /** A site shield must not take focus, so Back reaches the browser and steps off the site. */
-    private fun withFocusable(flags: Int, focusable: Boolean): Int =
-        if (focusable) flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
-        else flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
 
     private fun appLabel(pkg: String): String = runCatching {
         val pm = context.packageManager

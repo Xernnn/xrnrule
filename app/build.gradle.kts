@@ -54,9 +54,12 @@ android {
         debug {
             signingConfigs.findByName("xrn")?.let { signingConfig = it }
         }
+        // The build to live with: not debuggable, so a computer allowed USB debugging can't
+        // `run-as` into the app's files (the sync password is there). Not shrunk: R8 has never
+        // been checked against the saved World, and a world.json the app can't read starts it
+        // empty.
         release {
-            isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            isMinifyEnabled = false
             signingConfigs.findByName("xrn")?.let { signingConfig = it }
         }
     }
@@ -69,6 +72,17 @@ android {
         jvmTarget = "17"
     }
 }
+
+// The phone's block page is the extension's (extension/block.*), served by the app itself at
+// http://127.0.0.1:47321/block (see ExtensionServer); copied in at build time so there's one copy.
+val blockPage = tasks.register<Sync>("blockPage") {
+    from(rootProject.file("extension")) {
+        include("block.html", "block.js", "shared.js", "page.css", "icons/icon-48.png")
+    }
+    into(layout.buildDirectory.dir("generated/blockPage/web"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/blockPage"))
+tasks.named("preBuild") { dependsOn(blockPage) }
 
 dependencies {
     implementation(project(":domain"))

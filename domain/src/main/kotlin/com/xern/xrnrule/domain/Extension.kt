@@ -16,9 +16,9 @@ object ExtensionApi {
 
     /**
      * Every site blocked right now, for the extension's redirect rules. [page] is where a blocked
-     * tab goes ("?site=…" is added, and the page it left as the hash); null means the extension's
-     * own block page, which the phone uses because its block screen is the app's overlay. [v]
-     * changes whenever any of it does.
+     * tab goes ("?site=…" is added, and the page it left as the hash): the laptop daemon's block
+     * page, or on the phone the app's copy of the extension's stand-in page (its block screen is
+     * the app's overlay); null means the extension's own. [v] changes whenever any of it does.
      */
     @Serializable
     data class SiteRules(val v: String, val blocked: List<SiteRule>, val page: String? = null, val showClock: Boolean = true)
@@ -29,6 +29,8 @@ object ExtensionApi {
     /**
      * About one host: [blocked], else what runs out first ([left], on the block named [label]).
      * [rules] is the current [SiteRules.v], so the extension knows when to fetch them again.
+     * [leave] (the phone): you chose to leave this site on the block screen, so the extension's
+     * stand-in page steps back, or closes its tab, instead of keeping the browser behind it.
      */
     @Serializable
     data class SiteVerdict(
@@ -39,6 +41,7 @@ object ExtensionApi {
         val label: String? = null,
         val showClock: Boolean = true,
         val rules: String = "",
+        val leave: Boolean = false,
     )
 
     fun rules(world: World, page: String?): SiteRules {

@@ -40,7 +40,7 @@ class AppContainer(context: Context) {
 
     /** Websites come from the xrnrule extension in the phone's browser, through [extensionServer]. */
     val websites = ExtensionWebsiteMonitor(context)
-    val extensionServer = ExtensionServer(store, websites, appScope)
+    val extensionServer = ExtensionServer(store, websites, context.assets, appScope)
 
     val siteUsage = SiteUsageLog(File(context.filesDir, "site_usage.json"), clock)
 
