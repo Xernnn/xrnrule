@@ -38,6 +38,7 @@ class SyncServerTest(unittest.TestCase):
             f.write("<!doctype html>status")
         srv.args = type("Args", (), {"data": os.path.join(cls.tmp.name, "data"), "users": users, "web": web})()
         srv.FAIL_DELAY_S = 0
+        srv.session_key = srv.load_session_key()
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
         cls.httpd.daemon_threads = True
         cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
@@ -196,6 +197,72 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual([("laptop", "unlock", 300000), ("phone", "unlock", 300000)],
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
+
+    def web(self, method, path, cookie=None, client=True, auth=None):
+        """A request as the web pages make it: no password, the login cookie and X-Xrn-Client."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+        headers = {}
+        if cookie:
+            headers["Cookie"] = f"other=1; {srv.SESSION_COOKIE}={cookie}"
+        if client:
+            headers["X-Xrn-Client"] = "web"
+        if auth:
+            headers["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
+        conn.request(method, path, headers=headers)
+        res = conn.getresponse()
+        res.read()
+        conn.close()
+        return res.status, res.getheader("Set-Cookie") or ""
+
+    def sign_in(self):
+        status, set_cookie = self.web("POST", "/xrnrule/session", auth="sonn:secret")
+        self.assertEqual(200, status)
+        return set_cookie.split(";")[0].partition("=")[2]
+
+    def test_a_password_signs_the_web_pages_in_with_a_cookie_scripts_cannot_read(self):
+        status, set_cookie = self.web("POST", "/xrnrule/session", auth="sonn:secret")
+        self.assertEqual(200, status)
+        for flag in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/", f"Max-Age={srv.SESSION_S}"):
+            self.assertIn(flag, set_cookie)
+        cookie = set_cookie.split(";")[0].partition("=")[2]
+        self.assertEqual(200, self.web("GET", "/xrnrule/state", cookie)[0])
+        self.assertEqual(200, self.web("GET", "/devices", cookie)[0])
+        # Without the header another site's page can't add, the cookie is worth nothing.
+        self.assertEqual(401, self.web("GET", "/state", cookie, client=False)[0])
+        # A cookie can't make itself a new one, and a wrong password makes none.
+        self.assertEqual(401, self.web("POST", "/session", cookie)[0])
+        self.assertEqual((401, ""), self.web("POST", "/session", auth="sonn:nope"))
+        status, set_cookie = self.web("DELETE", "/session", cookie)
+        self.assertEqual(200, status)
+        self.assertIn("Max-Age=0", set_cookie)
+
+    def test_a_forged_expired_or_old_password_cookie_is_refused(self):
+        cookie = self.sign_in()
+        who, expires, mac = cookie.split(".")
+        other = base64.urlsafe_b64encode(b"admin").decode().rstrip("=")
+        for bad in (f"{other}.{expires}.{mac}", f"{who}.{int(expires) + 1}.{mac}", f"{who}.{expires}.{'0' * 64}",
+                    "garbage", "", f"{who}.{expires}", "%%%.1.2"):
+            self.assertEqual(401, self.web("GET", "/state", bad)[0], bad)
+        body = f"{who}.{int(time.time()) - 1}"
+        self.assertEqual(401, self.web("GET", "/state", f"{body}.{srv.session_mac(body, srv.password_tag('sonn'))}")[0])
+        # A new password ends the sessions made with the old one.
+        import bcrypt
+        with open(srv.args.users) as f:
+            old = f.read()
+        try:
+            with open(srv.args.users, "w") as f:
+                f.write("sonn:" + bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode() + "\n")
+            self.assertEqual(401, self.web("GET", "/state", cookie)[0])
+        finally:
+            with open(srv.args.users, "w") as f:
+                f.write(old)
+        self.assertEqual(200, self.web("GET", "/state", cookie)[0])
+
+    def test_the_session_key_is_private_and_shared_by_every_server_on_the_users_file(self):
+        path = os.path.join(os.path.dirname(srv.args.users), "session.key")
+        self.assertEqual(0o600, os.stat(path).st_mode & 0o777)
+        self.assertEqual(srv.session_key, srv.load_session_key())
+        self.assertGreaterEqual(len(srv.session_key), 32)
 
 
 if __name__ == "__main__":

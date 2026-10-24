@@ -1,29 +1,32 @@
 // xrnrule status page: a read-only view of the state the phone and the laptop share
 // (docs/domain-contract.md §2.4), kept live with a long-poll. It shares its login with the
-// xrnloops web app on the same server (same origin, same localStorage key).
+// xrnloops web app on the same server: a cookie either page's sign-in sets, which no script can
+// read (xrnrule-sync.py, "/session"). The password itself is never kept.
 
-const KEY_AUTH = "xrnloops.auth";
+const KEY_SIGNED_IN = "xrn.signedIn"; // a hint only: whether to try the cookie or show the form
+const KEY_OLD_AUTH = "xrnloops.auth"; // the password, as these pages kept it before the cookie
+const HEADERS = { "X-Xrn-Client": "web" }; // what makes the cookie count
 const DAY_MS = 86400000;
 
-let auth = load();
+let signedIn = load(KEY_SIGNED_IN) === true;
 let doc = null;
 let etag = "";
 let online = true;
 let updated = { at: "", by: "" };
 let devices = {}; // device -> epoch ms of its last check-in
 
-function load() {
+function load(key) {
   try {
-    return JSON.parse(localStorage.getItem(KEY_AUTH));
+    return JSON.parse(localStorage.getItem(key));
   } catch {
     return null;
   }
 }
 
-function save(value) {
+function save(key, value) {
   try {
-    if (value) localStorage.setItem(KEY_AUTH, JSON.stringify(value));
-    else localStorage.removeItem(KEY_AUTH);
+    if (value) localStorage.setItem(key, JSON.stringify(value));
+    else localStorage.removeItem(key);
   } catch {
     /* private window: works for this visit only */
   }
@@ -52,8 +55,17 @@ function check(res) {
   if (res.status === 429) throw new Error(LOCKED_OUT);
 }
 
+/** Trades a password ("Basic …") for the login cookie. */
+async function signIn(basic) {
+  const res = await fetch(new URL("session", location.href), { method: "POST", headers: { ...HEADERS, Authorization: basic }, cache: "no-store" });
+  check(res);
+  if (!res.ok) throw new Error(`${res.status}`);
+  signedIn = true;
+  save(KEY_SIGNED_IN, true);
+}
+
 async function fetchState(wait) {
-  const headers = { Authorization: auth, "X-Xrn-Client": "web" };
+  const headers = { ...HEADERS };
   if (wait && etag) headers["If-None-Match"] = etag;
   const res = await fetch(new URL(wait ? `state?wait=${wait}` : "state", location.href), { headers, cache: "no-store" });
   check(res);
@@ -68,7 +80,7 @@ async function fetchState(wait) {
 /** When the phone and the laptop last checked in; refreshed with each redraw. */
 async function fetchDevices() {
   try {
-    const res = await fetch(new URL("devices", location.href), { headers: { Authorization: auth, "X-Xrn-Client": "web" }, cache: "no-store" });
+    const res = await fetch(new URL("devices", location.href), { headers: HEADERS, cache: "no-store" });
     check(res);
     if (res.ok) devices = await res.json();
   } catch {
@@ -82,7 +94,7 @@ async function live(gen) {
       if (await fetchState(25)) render();
       setOnline(true);
     } catch (e) {
-      if (e instanceof AuthError) return signOut("Your password was refused. Sign in again.");
+      if (e instanceof AuthError) return signOut("You were signed out. Sign in again.");
       setOnline(false);
       await new Promise((r) => setTimeout(r, 5000));
     }
@@ -107,8 +119,9 @@ async function start() {
 
 function signOut(message) {
   generation++;
-  auth = null;
-  save(null);
+  signedIn = false;
+  save(KEY_SIGNED_IN, null);
+  fetch(new URL("session", location.href), { method: "DELETE", headers: HEADERS }).catch(() => {});
   loginView(message);
 }
 
@@ -119,12 +132,10 @@ function loginView(message = "") {
   const form = h("form", {
     onsubmit: async (e) => {
       e.preventDefault();
-      auth = "Basic " + btoa(unescape(encodeURIComponent(`${user.value.trim()}:${password.value}`)));
       try {
+        await signIn("Basic " + btoa(unescape(encodeURIComponent(`${user.value.trim()}:${password.value}`))));
         await start();
-        save(auth);
       } catch (err) {
-        auth = null;
         error.textContent = err instanceof AuthError ? "Wrong user name or password." : err.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${err.message}).`;
       }
     },
@@ -328,12 +339,23 @@ function render() {
 
 // Statuses change with the clock alone (sessions end, schedules start): redraw each half minute.
 setInterval(async () => {
-  if (auth) await fetchDevices();
+  if (signedIn) await fetchDevices();
   render();
 }, 30000);
 
-if (auth) {
-  start().catch((e) => (e instanceof AuthError ? signOut("Your password was refused. Sign in again.") : loginView(e.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${e.message}).`)));
-} else {
-  loginView();
+async function boot() {
+  // A password kept by an older version of these pages: traded for the cookie, then dropped.
+  const old = load(KEY_OLD_AUTH);
+  if (old) {
+    try {
+      await signIn(old);
+      save(KEY_OLD_AUTH, null);
+    } catch (e) {
+      if (e instanceof AuthError) save(KEY_OLD_AUTH, null);
+    }
+  }
+  if (!signedIn) return loginView();
+  start().catch((e) => (e instanceof AuthError ? signOut("You were signed out. Sign in again.") : loginView(e.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${e.message}).`)));
 }
+
+boot();

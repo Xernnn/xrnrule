@@ -65,6 +65,11 @@ xrnrule on the same device (`127.0.0.1:47321`) what to do and decides nothing it
 a blocked site to the block page before it loads, moves open tabs off a site the moment it's
 blocked, and while xrnrule doesn't answer it keeps blocking what it last heard was blocked.
 
+On the phone, a blocked tab turns into a small page the app serves itself, and the app's block
+screen covers the browser only while that tab is the one in front. **Leave this site** (or
+Back) closes the block screen at once and steps the tab back to where you were, or closes it if
+it has nothing to go back to, so the rest of the browser stays yours.
+
 - **Laptop (Helium or another Chromium browser):** extensions page → Developer mode → Load
   unpacked → `extension/`.
 - **Phone (Quetta):** `scripts/pack-extension.sh` makes `dist/xrnrule-extension.zip`; copy it to
@@ -87,10 +92,18 @@ without it (Chrome on Android has no extensions) doesn't quietly let sites throu
 - **The sync server** (behind Tailscale Funnel, HTTPS) wants the login for every byte of data.
   Ten wrong passwords from one address in 15 minutes lock that address out; the address is the
   one Funnel saw, not a header the caller could forge. Uploads are capped at 8 MB, unpacked or
-  not. The status page keeps the login in the browser's storage, so it runs only its own scripts.
+  not.
+- **The web pages** (this status page and the xrnloops habits page, on a host shared with
+  other apps) trade the password for a 30-day cookie that no script can read, and keep nothing
+  else: a script bug anywhere on the host can't walk off with the password. The cookie only
+  counts with a header other sites can't send, and a new password ends every session. The
+  pages run only their own scripts and can't be put in another site's frame.
 - **Secrets** stay where they're used: the sync password in the phone app's private storage
   (never backed up) and in a file only you can read on the laptop. The hardcore password exists
   only as a salted hash on the phone and is never synced or exported.
+- **Install the release build on the phone** (`installSideloadRelease`). The debug build is
+  debuggable, so any computer you've allowed USB debugging can read the app's files, the sync
+  password among them.
 
 ## Build
 
@@ -102,6 +115,7 @@ Requirements: **JDK 17** (Gradle 8.11.1 doesn't run on newer JDKs) and the Andro
 ./gradlew :app:assembleSideloadDebug   # full build, with hardcore mode
 ./gradlew :app:assemblePlayDebug       # Play-safe build: no Device Admin
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
+./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
 node --test extension/test             # the extension's helpers
 scripts/pack-extension.sh              # the extension as a .zip, for Quetta
 ```
