@@ -49,6 +49,7 @@ class AuthError extends Error {}
 
 /** The server's answer to too many wrong passwords from this address. */
 const LOCKED_OUT = "Too many wrong passwords from here. Wait 15 minutes, then try again.";
+const WRONG_LOGIN = "Wrong user name or password.";
 
 function check(res) {
   if (res.status === 401) throw new AuthError();
@@ -136,7 +137,7 @@ function loginView(message = "") {
         await signIn("Basic " + btoa(unescape(encodeURIComponent(`${user.value.trim()}:${password.value}`))));
         await start();
       } catch (err) {
-        error.textContent = err instanceof AuthError ? "Wrong user name or password." : err.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${err.message}).`;
+        error.textContent = err instanceof AuthError ? WRONG_LOGIN : err.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${err.message}).`;
       }
     },
   }, h("label", {}, "User", user), h("label", {}, "Password", password), error, h("button", { class: "btn", type: "submit" }, "Sign in"));
