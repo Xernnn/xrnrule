@@ -20,6 +20,9 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out
     GET  /health              200 "ok", no login (for monitoring)
+    GET  /update/<file>       releases from scripts/release.mjs, in <data>/update: the browser
+                              extension's updates.xml and signed .crx with no login (a browser's
+                              own updater fetches them), the phone app's app.json and .apk with it
     GET  /, /status.js, ...   a read-only status page (static files; the data needs a login)
 
 The devices send Basic auth with every request. The web pages (this status page, the xrnloops
@@ -42,6 +45,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -60,6 +64,16 @@ SEEN_WRITE_S = 60  # devices.json is rewritten at most this often per user
 EVENTS_KEEP_DAYS = 120
 EVENT_TYPES = {"blocked", "habit", "unlock"}
 PREFIX = "/xrnrule"
+# What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
+# are public, since a browser's updater sends no login; the app is the private repo's code.
+UPDATE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.(?:xml|crx|json|apk)")
+UPDATE_TYPES = {
+    ".xml": "application/xml; charset=utf-8",
+    ".crx": "application/x-chrome-extension",
+    ".json": "application/json; charset=utf-8",
+    ".apk": "application/vnd.android.package-archive",
+}
+PUBLIC_UPDATES = (".xml", ".crx")
 SESSION_COOKIE = "xrn_session"
 SESSION_S = 30 * 86400
 
@@ -461,6 +475,8 @@ class Handler(BaseHTTPRequestHandler):
         path, query = self.route()
         if path == "/health":
             return self.send(200, "ok")
+        if path.startswith("/update/"):
+            return self.update_file(path[len("/update/"):])
         if path == "/devices":
             user = self.login()
             if user:
@@ -571,6 +587,30 @@ class Handler(BaseHTTPRequestHandler):
                                "by": by, "data": data})
             changed.notify_all()
         self.send(200, '{"ok":true}', "application/json", {"ETag": f'"{version}"'})
+
+    def update_file(self, name):
+        """A release, streamed as is: an .apk is already compressed and runs to megabytes."""
+        if not UPDATE_NAME.fullmatch(name):
+            return self.send(404, "not found")
+        ext = os.path.splitext(name)[1]
+        # The login comes first, so a caller without one can't even tell which releases exist.
+        if ext not in PUBLIC_UPDATES and not self.login():
+            return
+        try:
+            f = open(os.path.join(args.data, "update", name), "rb")
+        except OSError:
+            return self.send(404, "not found")
+        with f:
+            # The release script swaps files in by rename, so the open file is one whole version.
+            size = os.fstat(f.fileno()).st_size
+            self.send_response(200)
+            self.send_header("Cache-Control", "no-store")
+            for k, v in SECURITY_HEADERS.items():
+                self.send_header(k, v)
+            self.send_header("Content-Type", UPDATE_TYPES[ext])
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            shutil.copyfileobj(f, self.wfile)
 
     def static(self, path):
         if path in ("", "/"):

@@ -314,8 +314,8 @@ function render() {
         laptop.map((a) => h("span", { class: "target", title: "Laptop app" }, `💻 ${a}`))),
       h("div", { class: "how" }, unlockMethod(block, own)),
       own.length > 0 && (block.mode ?? "HABIT") === "HABIT" && h("ul", { class: "items" }, own.map((i) =>
-        h("li", { class: i.done && !i.externalHabitId ? "done" : "" }, i.text,
-          i.externalHabitId && h("span", { class: "link" }, i.linkedDay === "YESTERDAY" ? "Loop · yesterday" : "Loop")))));
+        h("li", { class: i.done && !i.habitId ? "done" : "" }, i.text,
+          i.habitId && h("span", { class: "link" }, i.linkedDay === "YESTERDAY" ? "habit · yesterday" : "habit")))));
   });
 
   const updatedText = updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` by the ${updated.by}` : ""}` : "Nothing synced yet";

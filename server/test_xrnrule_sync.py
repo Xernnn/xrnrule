@@ -23,6 +23,10 @@ srv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srv)
 
 
+# The test login (both servers are started with this one user).
+RIGHT = "secret"
+WRONG = "nope"
+
 class SyncServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -49,7 +53,7 @@ class SyncServerTest(unittest.TestCase):
         cls.httpd.shutdown()
         cls.tmp.cleanup()
 
-    def call(self, method, path, body=None, headers=None, password="secret"):
+    def call(self, method, path, body=None, headers=None, password=RIGHT):
         req = urllib.request.Request(self.base + path, method=method,
                                      data=json.dumps(body).encode() if body is not None else None)
         req.add_header("Authorization", "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode())
@@ -100,14 +104,51 @@ class SyncServerTest(unittest.TestCase):
         self.assertGreaterEqual(time.monotonic() - start, 0.4)
 
     def test_login_and_open_paths(self):
-        self.assertEqual(401, self.call("GET", "/state", password="nope")[0])
-        status, _, headers = self.call("GET", "/state", password="nope", headers={"X-Xrn-Client": "web"})
+        self.assertEqual(401, self.call("GET", "/state", password=WRONG)[0])
+        status, _, headers = self.call("GET", "/state", password=WRONG, headers={"X-Xrn-Client": "web"})
         self.assertEqual(401, status)
         self.assertIsNone(headers.get("WWW-Authenticate"))
         with urllib.request.urlopen(self.base + "/xrnrule/health") as r:
             self.assertEqual("ok", r.read().decode())
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertIn("status", r.read().decode())
+
+    def test_updates_serve_the_extension_openly_and_the_app_only_with_the_login(self):
+        folder = os.path.join(srv.args.data, "update")
+        os.makedirs(folder, exist_ok=True)
+        files = {"updates.xml": b"<gupdate/>", "xrnrule-2.1.0.crx": b"Cr24" + bytes(3000),
+                 "app.json": b'{"versionCode":2}', "xrnrule-2.apk": b"PK" + bytes(3000)}
+        for name, data in files.items():
+            with open(os.path.join(folder, name), "wb") as f:
+                f.write(data)
+
+        def get(path, password=None):
+            req = urllib.request.Request(self.base + path)
+            req.add_header("Accept-Encoding", "gzip")  # never applied: these go out as they are
+            if password:
+                req.add_header("Authorization", "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode())
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status, r.read(), r.headers
+            except urllib.error.HTTPError as e:
+                return e.code, e.read(), e.headers
+
+        status, body, headers = get("/xrnrule/update/xrnrule-2.1.0.crx")
+        self.assertEqual((200, files["xrnrule-2.1.0.crx"]), (status, body))
+        self.assertEqual("application/x-chrome-extension", headers["Content-Type"])
+        self.assertIsNone(headers.get("Content-Encoding"))
+        self.assertEqual(200, get("/update/updates.xml")[0])
+        for name in ("app.json", "xrnrule-2.apk"):
+            self.assertEqual(401, get(f"/update/{name}")[0], name)
+            self.assertEqual(401, get(f"/update/{name}", password=WRONG)[0], name)
+            status, body, _ = get(f"/update/{name}", password=RIGHT)
+            self.assertEqual((200, files[name]), (status, body))
+        # A release that isn't there, without the login, looks like one that is.
+        self.assertEqual(401, get("/update/xrnrule-9.apk")[0])
+        self.assertEqual(404, get("/update/xrnrule-9.apk", password=RIGHT)[0])
+        self.assertEqual(404, get("/update/missing.crx")[0])
+        for bad in ("..%2Fusers%2Fsonn%2Fstate.json", "../x.crx", ".hidden.crx", "state.json.gz", "x.crx/y", ""):
+            self.assertEqual(404, get(f"/update/{bad}")[0], bad)
 
     def test_gzip_bodies_are_unpacked_only_so_far(self):
         def put(raw):
@@ -156,7 +197,7 @@ class SyncServerTest(unittest.TestCase):
     def test_wrong_passwords_lock_out_that_address_only(self):
         guesser = {"X-Forwarded-For": "203.0.113.9"}  # as Funnel's proxy passes it on
         for _ in range(srv.FAIL_LIMIT):
-            self.assertEqual(401, self.call("GET", "/state", password="nope", headers=guesser)[0])
+            self.assertEqual(401, self.call("GET", "/state", password=WRONG, headers=guesser)[0])
         # Locked out now, even with the right password; everyone else isn't.
         self.assertEqual(429, self.call("GET", "/state", headers=guesser)[0])
         self.assertEqual(200, self.call("GET", "/state", headers={"X-Forwarded-For": "203.0.113.10"})[0])
@@ -164,9 +205,9 @@ class SyncServerTest(unittest.TestCase):
     def test_a_right_password_clears_earlier_mistakes(self):
         typo = {"X-Forwarded-For": "203.0.113.20"}
         for _ in range(srv.FAIL_LIMIT - 1):
-            self.call("GET", "/state", password="nope", headers=typo)
+            self.call("GET", "/state", password=WRONG, headers=typo)
         self.assertEqual(200, self.call("GET", "/state", headers=typo)[0])
-        self.assertEqual(401, self.call("GET", "/state", password="nope", headers=typo)[0])
+        self.assertEqual(401, self.call("GET", "/state", password=WRONG, headers=typo)[0])
         self.assertEqual(200, self.call("GET", "/state", headers=typo)[0])
 
     def test_devices_report_when_each_last_checked_in(self):

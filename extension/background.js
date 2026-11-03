@@ -200,6 +200,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     case "setPort":
       chrome.storage.local.set({ port: msg.port || null }).then(() => refreshRules()).then(() => reply({ ok: reachable }));
       return true;
+    case "checkUpdate": // the options page's "Check now"
+      checkForUpdate().then(reply);
+      return true;
   }
   return false;
 });
@@ -216,5 +219,80 @@ chrome.runtime.onStartup.addListener(start);
 chrome.runtime.onInstalled.addListener(start);
 chrome.alarms.create("rules", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "rules") refreshRules();
+  if (alarm.name === "rules") {
+    refreshRules();
+    checkIfUnpacked();
+  }
+  if (alarm.name === UPDATE_ALARM) checkForUpdate();
+});
+
+// ---- updating itself -----------------------------------------------------------------------
+//
+// Nobody installs a new version by hand. Installed from the signed .crx (the phone; see
+// scripts/release.mjs), the manifest carries an update_url on the home server and the browser
+// fetches new versions from there on its own, every few hours, or now through
+// requestUpdateCheck(). Loaded unpacked (the laptop, from the working copy) there is no update
+// URL, but the browser serves an unpacked extension's files straight from its folder, so a
+// manifest there naming another version means the folder has moved on. Either way the new version
+// runs at once, not at the next browser start.
+
+const UPDATE_ALARM = "update";
+chrome.runtime.onUpdateAvailable.addListener(() => chrome.runtime.reload());
+
+async function checkForUpdate() {
+  const running = chrome.runtime.getManifest();
+  let installType = "normal";
+  try {
+    ({ installType } = await chrome.management.getSelf());
+  } catch {} // a browser without it: treat it as installed
+  if (installType === "development") {
+    let onDisk = running.version;
+    try {
+      const res = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
+      onDisk = (await res.json()).version;
+    } catch {} // mid-edit; the next check reads it again
+    if (onDisk === running.version) return { status: "no_update", version: running.version, installType };
+    setTimeout(() => chrome.runtime.reload(), 250); // the reply reaches the options page first
+    return { status: "reloading", version: onDisk, installType };
+  }
+  if (!running.update_url) return { status: "no_update_url", version: running.version, installType };
+  try {
+    // "update_available" (onUpdateAvailable follows once it's downloaded), "no_update", or
+    // "throttled" when asked too often.
+    const res = await chrome.runtime.requestUpdateCheck();
+    return { status: res.status, version: res.version || running.version, installType };
+  } catch (e) {
+    return { status: "error", error: String(e?.message || e), version: running.version, installType };
+  }
+}
+
+// Created only when missing: creating an alarm again restarts its period, and this worker
+// starts far more often than once an hour.
+chrome.alarms.get(UPDATE_ALARM).then((a) => {
+  if (!a) chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 60 });
+});
+// Reading one local file is cheap enough for every start of the worker and every minute (the
+// rules alarm), so the laptop runs a new version within a minute of it landing in the folder.
+// The worker may never stop for an hour: pages beating keep it awake.
+async function checkIfUnpacked() {
+  const self = await chrome.management?.getSelf().catch(() => null);
+  if (self?.installType === "development") checkForUpdate();
+}
+checkIfUnpacked();
+
+// An update orphans the content script in every open tab (content.js stops itself), and a page
+// that doesn't beat isn't counted against a limit: put the new copy in each one now rather than
+// at its next reload.
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  if (reason !== "update") return;
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  } catch {
+    return;
+  }
+  for (const tab of tabs) {
+    if (!hostOf(tab.url || "") || /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tab.url)) continue;
+    chrome.scripting?.executeScript({ target: { tabId: tab.id }, files: ["shared.js", "content.js"] }).catch(() => {});
+  }
 });
