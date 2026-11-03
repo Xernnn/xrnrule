@@ -7,8 +7,8 @@
     android:viewportHeight="108">
     <group android:translateX="18" android:translateY="18"
         android:scaleX="0.72" android:scaleY="0.72">
-        <group android:translateX="10" android:translateY="10"
-            android:scaleX="0.8" android:scaleY="0.8">
+        <group android:translateX="-2.5" android:translateY="-2.5"
+            android:scaleX="1.05" android:scaleY="1.05">
             <path
                 android:pathData="M38,46 V38 A12,12 0 0 1 62,38 V46"
                 android:strokeColor="#FFFFFF"
