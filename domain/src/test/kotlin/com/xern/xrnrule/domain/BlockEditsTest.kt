@@ -51,4 +51,20 @@ class BlockEditsTest {
         world = engine.reduce(world, BlockEvent.StartLockdown("l"), clock).world
         assertTrue(BlockEdits.guardNeeded(engine, world, lockdown, clock))
     }
+
+    @Test
+    fun habitsLoosenWithASmallerUnlockOrAnotherKind() {
+        val push = habit("push", goal = 20)
+        assertTrue(BlockEdits.habitLoosens(push, push.copy(goal = units(10))))
+        assertTrue("20 a week opens for 3 a day", BlockEdits.habitLoosens(push, push.copy(freqDen = 7)))
+        assertTrue(BlockEdits.habitLoosens(push, push.copy(kind = HabitKind.CHECK)))
+        assertFalse(BlockEdits.habitLoosens(push, push.copy(goal = units(30))))
+        assertFalse(BlockEdits.habitLoosens(push, push.copy(name = "Push-ups", unit = "reps", paletteColor = 3, icon = "dumbbell")))
+        assertFalse("at most never opens anything", BlockEdits.habitLoosens(push, push.copy(targetType = TargetType.AT_MOST)))
+        assertTrue(BlockEdits.habitLoosens(push.copy(targetType = TargetType.AT_MOST), push))
+
+        val gym = habit("gym", HabitKind.CHECK)
+        assertTrue("Loop fills in more days by itself", BlockEdits.habitLoosens(gym, gym.copy(freqNum = 3, freqDen = 7)))
+        assertFalse(BlockEdits.habitLoosens(gym.copy(freqNum = 3, freqDen = 7), gym))
+    }
 }

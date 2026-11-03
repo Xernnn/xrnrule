@@ -27,11 +27,15 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Base64
 
+/** The test servers' one login. */
+private const val LOGIN = "pw"
+
 /**
  * Two devices sharing blocks through the real servers: `server/xrnrule-sync.py` and
  * `../xrnloops/server/xrnloops-sync.py`, started on free ports. Both devices are laptop
- * clients ([SharedSyncClient], [LoopClient]); the phone's `SharedSync` makes the same rounds
- * against the same server and merge, so this covers the path an unlock takes between them.
+ * clients ([SharedSyncClient], [HabitClient]); the phone's `SharedSync` and `HabitSync` make the
+ * same rounds against the same servers and merge, so this covers the path an unlock and a tick
+ * take between them.
  *
  * Skipped when python3 with bcrypt, or the xrnloops checkout next to this repo, is missing.
  */
@@ -95,11 +99,11 @@ class EndToEndTest {
     private fun device(name: String, clock: Clock = DesktopClock()): Device {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scopes += it }
         val data = File(dir, name).apply { mkdirs() }
-        val config = Config(server = "", user = "you", password = "pw", port = 0, dataDir = data, ruleUrl = ruleUrl, loopUrl = loopUrl)
+        val config = Config(server = "", user = "you", password = LOGIN, port = 0, dataDir = data, ruleUrl = ruleUrl, loopUrl = loopUrl)
         val telemetry = FileTelemetry(File(data, "telemetry.log"))
         val store = Store(BlockEngine(), NoPersist, clock, scope, telemetry)
         SharedSyncClient(config, store, telemetry, scope).start()
-        LoopClient(config, store, scope).start()
+        HabitClient(config, store, scope).start()
         return Device(store)
     }
 
@@ -176,6 +180,33 @@ class EndToEndTest {
         postHabits("""{"habits":[],"entries":[{"habit":"plank","date":"$yesterday","value":2,"notes":"","mtime":${now + 1}}]}""")
 
         await("earned by the 1 am tick") { laptop.store.world.value.block(id)?.state == BlockState.EARNED }
-        assertEquals(yesterday.toEpochDay(), laptop.store.world.value.items(id).single().tickEpochDay)
+        val world = laptop.store.world.value
+        assertEquals(3, world.habitDayStartHour)
+        assertEquals(yesterday.toEpochDay(), laptop.store.engine.itemDay(world, world.items(id).single(), laptop.store.clock))
+    }
+
+    @Test
+    fun amountsLoggedOnTwoDevicesAtOnceAddUp() {
+        val now = System.currentTimeMillis()
+        postHabits(
+            """{"habits":[{"uuid":"pushups","mtime":$now,"deleted":false,"data":{"name":"Push-ups","freqNum":1,"freqDen":1,"type":1,"targetValue":20.0,"unit":"reps"}}],"entries":[]}""",
+        )
+        val a = device("a")
+        val b = device("b")
+        await("both have the habit") { a.store.world.value.habit("pushups") != null && b.store.world.value.habit("pushups") != null }
+
+        // Logged on both before either hears of the other: neither amount is lost (I38).
+        runBlocking {
+            a.store.dispatchAndGet(BlockEvent.LogHabit("pushups", 12_000))
+            b.store.dispatchAndGet(BlockEvent.LogHabit("pushups", 10_000))
+        }
+        val day = a.store.world.value.habitDay(a.store.clock)
+        await("both see 22") {
+            listOf(a, b).all { d -> d.store.world.value.entry("pushups", day)?.let { it.value == 22_000L && !it.dirty } == true }
+        }
+
+        // A tick on one device reaches the other.
+        runBlocking { a.store.dispatchAndGet(BlockEvent.LogHabit("pushups", -2_000)) }
+        await("B sees 20") { b.store.world.value.entry("pushups", day)?.value == 20_000L }
     }
 }

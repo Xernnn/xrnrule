@@ -560,240 +560,6 @@ class InvariantTests {
         assertFalse(engine.blockedPackages(world, clock).contains("com.x"))
     }
 
-    // ---- linked items: the external habit tracker (I23, I24) ------------------------------
-
-    private fun sync(world: World, clock: Clock, vararg done: String): World =
-        engine.reduce(world, BlockEvent.ExternalHabitsSynced(clock.epochDay(), done.toSet()), clock).world
-
-    @Test
-    fun i23_manualToggleIgnoredOnLinkedItem() {
-        val clock = FakeClock()
-        val world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-
-        val out = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-meditate", true), clock)
-
-        assertFalse(out.world.items("c1").single().done)
-        assertEquals(BlockState.ARMED, out.world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i23_syncTicksLinkedItemAndEarns() {
-        val clock = FakeClock()
-        val world = buildWorld(
-            listOf(checklistBlock("c1"), checklistBlock("c2")),
-            mapOf(
-                "c1" to listOf(linkedItem("c1", "meditate")),
-                "c2" to items("c2", 1) + linkedItem("c2", "meditate", order = 1),
-            ),
-            clock,
-        )
-
-        val out = engine.reduce(world, BlockEvent.ExternalHabitsSynced(clock.epochDay(), setOf("meditate", "other")), clock)
-
-        assertEquals(BlockState.EARNED, out.world.block("c1")!!.state)
-        assertTrue(out.effects.contains(Effect.HabitCompleted("c1")))
-        assertTrue(out.world.items("c2").single { it.externalHabitId != null }.done)
-        assertEquals("c2's plain item is still open", BlockState.ARMED, out.world.block("c2")!!.state)
-
-        val earned = engine.reduce(out.world, BlockEvent.ToggleChecklistItem("c2-i0", true), clock).world
-        assertEquals(BlockState.EARNED, earned.block("c2")!!.state)
-    }
-
-    @Test
-    fun i23_syncUnticksWhileArmed() {
-        val clock = FakeClock()
-        val checklist = items("c1", 1) + linkedItem("c1", "meditate", order = 1)
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to checklist), clock)
-
-        world = sync(world, clock, "meditate")
-        assertTrue(world.items("c1").single { it.externalHabitId != null }.done)
-
-        world = sync(world, clock) // unticked in the tracker
-        val linked = world.items("c1").single { it.externalHabitId != null }
-        assertFalse(linked.done)
-        assertNull(linked.doneAtMonotonic)
-    }
-
-    @Test
-    fun i23_syncForAnotherDayIsIgnored() {
-        val clock = FakeClock()
-        val world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-
-        val stale = BlockEvent.ExternalHabitsSynced(clock.epochDay() - 1, setOf("meditate"))
-        val out = engine.reduce(world, stale, clock)
-
-        assertFalse(out.world.items("c1").single().done)
-        assertEquals(BlockState.ARMED, out.world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i23_yesterdayItemCountsYesterdaysTick() {
-        val clock = FakeClock()
-        val item = linkedItem("c1", "journal", day = LinkedDay.YESTERDAY)
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(item)), clock)
-
-        world = sync(world, clock, "journal") // done today only
-        assertFalse(world.items("c1").single().done)
-        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
-
-        val yesterday = BlockEvent.ExternalHabitsSynced(clock.epochDay(), emptySet(), setOf("journal"))
-        world = engine.reduce(world, yesterday, clock).world
-        assertTrue(world.items("c1").single().done)
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i23_goalItemCountsGoalMetDays() {
-        val clock = FakeClock()
-        val item = linkedItem("c1", "gym").copy(countsGoal = true)
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(item)), clock)
-
-        world = sync(world, clock, "gym") // ticked today, but the item asks about the goal
-        assertFalse(world.items("c1").single().done)
-
-        val goalMet = BlockEvent.ExternalHabitsSynced(clock.epochDay(), emptySet(), goalMetHabitIds = setOf("gym"))
-        world = engine.reduce(world, goalMet, clock).world
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i23_syncIgnoredUnlessArmed() {
-        val clock = FakeClock()
-        val checklist = items("c1", 1) + linkedItem("c1", "meditate", order = 1)
-        var world = buildWorld(listOf(checklistBlock("c1", required = 1)), mapOf("c1" to checklist), clock)
-        world = earn(world, clock) // the plain item alone meets required = 1
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-
-        world = sync(world, clock, "meditate")
-
-        assertFalse(world.items("c1").single { it.externalHabitId != null }.done)
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i24_externalTickEarnsOncePerDay() {
-        val clock = FakeClock()
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-
-        world = sync(world, clock, "meditate")
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-        assertNull("not spent until redeemed", world.items("c1").single().spentEpochDay)
-
-        world = engine.reduce(world, BlockEvent.Redeem("c1"), clock).world
-        assertEquals(clock.epochDay(), world.items("c1").single().spentEpochDay)
-        clock.advance(5L * 60_000) // the unlock runs out
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
-
-        world = sync(world, clock, "meditate") // same tick, still done in the tracker
-        assertFalse(world.items("c1").single().done)
-        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i24_expiredCreditDoesNotSpendTick() {
-        val clock = FakeClock()
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-        world = sync(world, clock, "meditate")
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-
-        clock.advance(Defaults.CREDIT_TTL_MS) // never redeemed (I1)
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
-        assertNull(world.items("c1").single().spentEpochDay)
-
-        world = sync(world, clock, "meditate")
-        assertEquals("the unused tick earns again", BlockState.EARNED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i24_nextDaySameHabitCanEarnAgain() {
-        val clock = FakeClock() // 12:00 UTC
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-        world = sync(world, clock, "meditate")
-        world = engine.reduce(world, BlockEvent.Redeem("c1"), clock).world
-        clock.advance(5L * 60_000) // the unlock runs out
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-        world = sync(world, clock, "meditate")
-        assertEquals("spent for today", BlockState.ARMED, world.block("c1")!!.state)
-
-        clock.advance(24L * 60 * 60_000) // tomorrow
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-        world = sync(world, clock, "meditate")
-
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i24_spentTickIsStillKnownAsTicked() {
-        val clock = FakeClock()
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-        world = sync(world, clock, "meditate")
-        world = engine.reduce(world, BlockEvent.Redeem("c1"), clock).world
-        clock.advance(5L * 60_000)
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-
-        world = sync(world, clock, "meditate")
-
-        val item = world.items("c1").single()
-        assertFalse(item.done)
-        assertEquals("the app can say the tick paid already", item.spentEpochDay, item.tickEpochDay)
-        world = sync(world, clock) // unticked in the tracker
-        assertNull(world.items("c1").single().tickEpochDay)
-    }
-
-    /** Loop's "day starts at 3 am": at 01:00 its day is still yesterday's date. */
-    private fun syncLagging(world: World, clock: Clock, vararg done: String): World =
-        engine.reduce(world, BlockEvent.ExternalHabitsSynced(clock.epochDay(), done.toSet(), trackerEpochDay = clock.epochDay() - 1), clock).world
-
-    @Test
-    fun i23_tickAfterMidnightCountsForTheTrackersDay() {
-        val clock = FakeClock() // 12:00 UTC
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-        clock.advance(13L * 60 * 60_000) // 01:00 the next day; the tracker's day hasn't turned yet
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-
-        world = syncLagging(world, clock, "meditate")
-
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-        assertEquals(clock.epochDay() - 1, world.items("c1").single().tickEpochDay)
-    }
-
-    @Test
-    fun i24_eveningTickDoesNotPayAgainAfterMidnight() {
-        val clock = FakeClock() // 12:00 UTC
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))), clock)
-        clock.advance(10L * 60 * 60_000) // 22:00
-        world = sync(world, clock, "meditate")
-        world = engine.reduce(world, BlockEvent.Redeem("c1"), clock).world
-        val evening = clock.epochDay()
-        assertEquals(evening, world.items("c1").single().spentEpochDay)
-
-        clock.advance(3L * 60 * 60_000) // 01:00: a new date, but still the tracker's evening day
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-        world = syncLagging(world, clock, "meditate")
-        assertEquals("the same tick already paid", BlockState.ARMED, world.block("c1")!!.state)
-
-        clock.advance(3L * 60 * 60_000) // 04:00: the tracker's new day, and a new tick
-        world = sync(world, clock, "meditate")
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-    }
-
-    @Test
-    fun i24_yesterdayItemSpendsYesterdaysTick() {
-        val clock = FakeClock()
-        val item = linkedItem("c1", "journal", day = LinkedDay.YESTERDAY)
-        var world = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(item)), clock)
-        world = engine.reduce(world, BlockEvent.ExternalHabitsSynced(clock.epochDay(), emptySet(), doneYesterdayHabitIds = setOf("journal")), clock).world
-        world = engine.reduce(world, BlockEvent.Redeem("c1"), clock).world
-
-        assertEquals(clock.epochDay() - 1, world.items("c1").single().spentEpochDay)
-        clock.advance(24L * 60 * 60_000) // tomorrow, today's tick is the new "yesterday"
-        world = engine.reduce(world, BlockEvent.Tick, clock).world
-        world = engine.reduce(world, BlockEvent.ExternalHabitsSynced(clock.epochDay(), emptySet(), doneYesterdayHabitIds = setOf("journal")), clock).world
-        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
-    }
-
     @Test
     fun i25_pauseLiftsSoftBlocksOnly() {
         val clock = FakeClock()
@@ -959,44 +725,6 @@ class InvariantTests {
         advanceAll(3L * 60_000, phone, laptop)
         laptop.on(BlockEvent.Tick)
         assertEquals("ends with the phone's, not five minutes after hearing of it", BlockState.ARMED, laptop.block("c1").state)
-    }
-
-    @Test
-    fun i27_adoptedUnlockSpendsLocalTick() {
-        val (phone, laptop, server) = twoDevices(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))))
-        // The phone reads the tick and earns; the laptop's tracker read is behind, so it only
-        // has the credit from the phone when it redeems, and spends no tick of its own.
-        phone.on(BlockEvent.ExternalHabitsSynced(phone.clock.epochDay(), setOf("meditate")))
-        phone.sync(server)
-        laptop.sync(server)
-        laptop.on(BlockEvent.Redeem("c1"))
-        assertNull(laptop.world.items("c1").single().spentEpochDay)
-        laptop.sync(server)
-
-        phone.sync(server) // the phone adopts the unlock: its own tick is now spent (I24)
-        assertEquals(BlockState.UNLOCKED, phone.block("c1").state)
-        assertEquals(phone.clock.epochDay(), phone.world.items("c1").single().spentEpochDay)
-
-        advanceAll(5L * 60_000, phone, laptop)
-        phone.on(BlockEvent.Tick)
-        phone.on(BlockEvent.ExternalHabitsSynced(phone.clock.epochDay(), setOf("meditate")))
-        assertEquals("one tick, one unlock", BlockState.ARMED, phone.block("c1").state)
-        phone.sync(server)
-        laptop.sync(server)
-        assertEquals(phone.clock.epochDay(), laptop.world.items("c1").single().spentEpochDay)
-    }
-
-    @Test
-    fun i27_linkedDoneIsNeverShared() {
-        val (phone, laptop, server) = twoDevices(listOf(checklistBlock("c1")), mapOf("c1" to listOf(linkedItem("c1", "meditate"))))
-        phone.on(BlockEvent.ExternalHabitsSynced(phone.clock.epochDay(), setOf("meditate")))
-        assertTrue(phone.world.items("c1").single().done)
-        phone.sync(server)
-        laptop.sync(server)
-
-        assertEquals(BlockState.EARNED, laptop.block("c1").state) // the credit is shared
-        assertFalse("the tick is the laptop's own to read", laptop.world.items("c1").single().done)
-        assertTrue(phone.world.items("c1").single().done)
     }
 
     @Test
@@ -1320,5 +1048,730 @@ class InvariantTests {
 
         assertEquals(TimeLeft(5L * 60_000, ClockKind.ROW, "r1"), engine.timeLeft(world, "browser", "youtube.com", clock))
         assertNull(engine.timeLeft(world, "browser", "example.com", clock))
+    }
+
+    // ---- habits (I23, I24, I27, I35-I38) -----------------------------------------------------
+
+    private val minute = 60_000L
+    private val day = 24L * 60 * minute
+
+    private fun on(world: World, clock: Clock, event: BlockEvent): World = engine.reduce(world, event, clock).world
+
+    private fun log(world: World, clock: Clock, habitId: String, amount: Long): World =
+        on(world, clock, BlockEvent.LogHabit(habitId, amount))
+
+    private fun set(world: World, clock: Clock, habitId: String, epochDay: Long, value: Long, notes: String = ""): World =
+        on(world, clock, BlockEvent.SetHabitEntry(habitId, epochDay, value, notes))
+
+    private fun habitWorld(clock: Clock, habits: List<Habit>, items: Map<String, List<ChecklistItem>>): World =
+        buildWorld(items.keys.map { checklistBlock(it) }, items, clock).copy(habits = habits, deviceId = "here")
+
+    private fun habitWorld(clock: Clock, habits: List<Habit>, vararg blocks: Pair<String, List<String>>): World =
+        habitWorld(clock, habits, blocks.associate { (id, habitIds) -> id to habitIds.mapIndexed { i, h -> habitItem(id, h, i) } })
+
+    private fun World.state(blockId: String): BlockState = block(blockId)!!.state
+
+    private fun at(text: String): Long = Instant.parse(text).toEpochMilli()
+
+    /** A phone and a laptop sharing blocks through one server and habits through the habit server. */
+    private class HabitDevices(val phone: Device, val laptop: Device, val server: FakeServer, val habits: FakeHabitServer) {
+        fun syncBlocks() {
+            phone.sync(server)
+            laptop.sync(server)
+            phone.sync(server)
+        }
+    }
+
+    private fun twoDevicesWithHabits(habits: List<Habit>, vararg blocks: Pair<String, List<String>>): HabitDevices {
+        val habitServer = FakeHabitServer()
+        habits.forEach { habitServer.put(HabitRecord(it.id, HabitRecords.data(it), BASE_WALL)) }
+        val phoneClock = FakeClock(mono = 7_000_000)
+        val phone = Device("phone", habitWorld(phoneClock, emptyList(), *blocks), phoneClock)
+        val laptop = Device("laptop", World(), FakeClock(mono = 300_000))
+        val devices = HabitDevices(phone, laptop, FakeServer(), habitServer)
+        phone.syncHabits(habitServer)
+        laptop.syncHabits(habitServer)
+        devices.syncBlocks()
+        return devices
+    }
+
+    @Test
+    fun i23_manualToggleIgnoredOnHabitItem() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push")), "c1" to listOf("push"))
+        world = on(world, clock, BlockEvent.ToggleChecklistItem("c1-push", true))
+        assertFalse(world.items("c1").single().done)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+    }
+
+    @Test
+    fun i23_yesterdayItemCountsYesterdaysTick() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val item = habitItem("c1", "journal", day = LinkedDay.YESTERDAY)
+        var world = habitWorld(clock, listOf(habit("journal", HabitKind.CHECK)), mapOf("c1" to listOf(item)))
+        world = log(world, clock, "journal", 1)
+        assertEquals("today's tick isn't yesterday's", BlockState.ARMED, world.state("c1"))
+        world = set(world, clock, "journal", today - 1, HabitEntry.YES_MANUAL)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i23_goalItemCountsAutomaticTicks() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val weekly = habit("gym", HabitKind.CHECK, freqNum = 1, freqDen = 7)
+        var world = habitWorld(
+            clock,
+            listOf(weekly),
+            mapOf("c1" to listOf(habitItem("c1", "gym", countsGoal = true)), "c2" to listOf(habitItem("c2", "gym"))),
+        )
+        world = set(world, clock, "gym", today - 3, HabitEntry.YES_MANUAL) // this week's one time
+        assertEquals("the week's goal is met today too", BlockState.EARNED, world.state("c1"))
+        assertEquals("without the goal, only a tick today counts", BlockState.ARMED, world.state("c2"))
+
+        clock.advance(4 * day) // a week after the tick: a new week, not done yet
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+    }
+
+    @Test
+    fun i23_dayStartsAtTheTrackersHour() {
+        val clock = FakeClock(wall = at("2026-01-16T01:00:00Z"))
+        val date = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("push")), "c1" to listOf("push")).copy(habitDayStartHour = 3)
+        world = log(world, clock, "push", units(10))
+        assertEquals("before 3 am it is still yesterday's habit day", units(10), world.entry("push", date - 1)?.value)
+        assertNull(world.entry("push", date))
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i23_linkedItemsBecomeHabitItems() {
+        val clock = FakeClock()
+        val linked = linkedItem("c1", "meditate").copy(spentEpochDay = clock.epochDay())
+        var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)), mapOf("c1" to listOf(linked)))
+        world = on(world, clock, BlockEvent.Tick)
+        val item = world.items("c1").single()
+        assertEquals("meditate", item.habitId)
+        assertNull(item.externalHabitId)
+        assertEquals("a spent Loop tick is one check spent", 1L, item.spentAmount)
+        world = log(world, clock, "meditate", 1)
+        assertEquals("today's tick already paid for an unlock", BlockState.ARMED, world.state("c1"))
+    }
+
+    @Test
+    fun i24_checkOpensEachBlockOncePerDay() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate"), "c2" to listOf("meditate"))
+        world = log(world, clock, "meditate", 1)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        assertEquals("one habit opens every block that asks for it", BlockState.EARNED, world.state("c2"))
+
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        assertEquals(clock.epochDay(), world.items("c1").single().spentEpochDay)
+        clock.advance(5 * minute)
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        world = log(world, clock, "meditate", 1)
+        assertEquals("a check can't be done twice in a day", BlockState.ARMED, world.state("c1"))
+        assertEquals(BlockState.EARNED, world.state("c2"))
+    }
+
+    @Test
+    fun i24_expiredCreditDoesNotSpend() {
+        val clock = FakeClock(wall = at("2026-01-15T08:00:00Z"))
+        var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate"))
+        world = log(world, clock, "meditate", 1)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        clock.advance(Defaults.CREDIT_TTL_MS + 1)
+        world = on(world, clock, BlockEvent.Tick)
+        assertNull(world.items("c1").single().spentEpochDay)
+        assertEquals("the tick still pays for an unlock", BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i24_nextDayCanEarnAgain() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate"))
+        world = log(world, clock, "meditate", 1)
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        clock.advance(day)
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals("not ticked today yet", BlockState.ARMED, world.state("c1"))
+        world = log(world, clock, "meditate", 1)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i24_eveningTickDoesNotPayAgainAfterMidnight() {
+        val clock = FakeClock(wall = at("2026-01-15T23:00:00Z"))
+        var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate")).copy(habitDayStartHour = 3)
+        world = log(world, clock, "meditate", 1)
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        clock.advance(2 * 60 * minute) // 01:00: a new date, the same habit day
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+
+        clock.advance(3 * 60 * minute) // 04:00: a new habit day
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        world = log(world, clock, "meditate", 1)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i24_yesterdayItemSpendsYesterdaysTick() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val item = habitItem("c1", "journal", day = LinkedDay.YESTERDAY)
+        var world = habitWorld(clock, listOf(habit("journal", HabitKind.CHECK)), mapOf("c1" to listOf(item)))
+        world = set(world, clock, "journal", today - 1, HabitEntry.YES_MANUAL)
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        assertEquals(today - 1, world.items("c1").single().spentEpochDay)
+
+        clock.advance(day) // tomorrow: "yesterday" is the day just gone
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        world = set(world, clock, "journal", today, HabitEntry.YES_MANUAL)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i24_redeemSpendsOneUnitAndKeepsTheRest() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push", goal = 10)), "c1" to listOf("push"))
+        world = log(world, clock, "push", units(25))
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        val item = world.items("c1").single()
+        assertEquals(clock.epochDay(), item.spentEpochDay)
+        assertEquals(units(10), item.spentAmount)
+
+        clock.advance(5 * minute) // the unlock runs out; 15 left is another unlock's worth
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        assertEquals(units(20), world.items("c1").single().spentAmount)
+
+        clock.advance(5 * minute) // 5 left: not enough
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        assertEquals(units(5), engine.habitAvailable(world, world.items("c1").single(), clock))
+        world = log(world, clock, "push", units(5))
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i27_adoptedUnlockSpendsHereWhatTheRedeemerDidNot() {
+        val d = twoDevicesWithHabits(listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate"))
+        // The phone ticks and earns; the laptop hasn't had the tick from the habit server yet,
+        // so it redeems the phone's credit and spends nothing of its own.
+        d.phone.on(BlockEvent.LogHabit("meditate", 1))
+        d.syncBlocks()
+        d.laptop.on(BlockEvent.Redeem("c1"))
+        assertNull(d.laptop.world.items("c1").single().spentEpochDay)
+        d.syncBlocks()
+
+        assertEquals(BlockState.UNLOCKED, d.phone.block("c1").state)
+        assertEquals("the phone's tick pays for it", 1L, d.phone.world.items("c1").single().spentAmount)
+        advanceAll(5 * minute, d.phone, d.laptop)
+        d.phone.on(BlockEvent.Tick)
+        assertEquals("one tick, one unlock", BlockState.ARMED, d.phone.block("c1").state)
+        d.syncBlocks()
+        assertEquals(1L, d.laptop.world.items("c1").single().spentAmount)
+    }
+
+    @Test
+    fun i27_habitItemDoneIsNeverShared() {
+        val d = twoDevicesWithHabits(listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate"))
+        d.phone.on(BlockEvent.LogHabit("meditate", 1))
+        assertTrue(d.phone.world.items("c1").single().done)
+        d.syncBlocks()
+
+        assertEquals(BlockState.EARNED, d.laptop.block("c1").state) // the credit is shared
+        assertFalse("the tick is the laptop's own to work out", d.laptop.world.items("c1").single().done)
+        assertFalse(SharedState.of(d.phone.world).items.getValue("c1-meditate").done)
+    }
+
+    @Test
+    fun i35_logAddsToTodaysEntry() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push", goal = 30)))
+        world = log(world, clock, "push", units(12))
+        world = log(world, clock, "push", units(10))
+        assertEquals(units(22), world.entry("push", clock.epochDay())?.value)
+        world = log(world, clock, "nope", units(5))
+        assertEquals("an unknown habit logs nothing", 1, world.habitEntries.size)
+    }
+
+    @Test
+    fun i35_checkLogsYesOrNo() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)))
+        world = log(world, clock, "meditate", 1)
+        world = log(world, clock, "meditate", 1)
+        assertEquals(HabitEntry.YES_MANUAL, world.entry("meditate", today)?.value)
+        world = log(world, clock, "meditate", -1)
+        assertEquals(HabitEntry.NO, world.entry("meditate", today)?.value)
+    }
+
+    @Test
+    fun i35_undoNeverGoesBelowZero() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push")))
+        world = log(world, clock, "push", units(5))
+        world = log(world, clock, "push", -units(10))
+        assertEquals(0L, world.entry("push", clock.epochDay())?.value)
+    }
+
+    @Test
+    fun i35_setEntryEditsAPastDay() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("push"), habit("meditate", HabitKind.CHECK)))
+        world = set(world, clock, "push", today - 10, units(7), "sore")
+        assertEquals(HabitEntry(units(7), "sore", clock.nowWallMs(), dirty = true), world.entry("push", today - 10))
+        world = set(world, clock, "push", today + 1, units(7))
+        assertNull("not a day that hasn't come", world.entry("push", today + 1))
+        world = set(world, clock, "push", today - 1, -5)
+        assertNull("not below zero", world.entry("push", today - 1))
+
+        world = set(world, clock, "meditate", today - 2, HabitEntry.SKIP)
+        world = set(world, clock, "meditate", today - 2, 7)
+        assertEquals("a check takes Loop's values only", HabitEntry.SKIP, world.entry("meditate", today - 2)?.value)
+    }
+
+    @Test
+    fun i35_writesAreMarkedForSync() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val fromServer = HabitEntry(units(5), "", mtime = 1, seq = 4)
+        var world = habitWorld(clock, listOf(habit("push"))).copy(habitEntries = mapOf(HabitEntry.key("push", today) to fromServer))
+        clock.advance(minute)
+        world = log(world, clock, "push", units(3))
+        assertEquals(HabitEntry(units(8), "", clock.nowWallMs(), seq = 4, dirty = true, baseValue = units(5)), world.entry("push", today))
+        world = log(world, clock, "push", units(2))
+        assertEquals("still based on the server's", units(5), world.entry("push", today)!!.baseValue)
+        assertEquals(units(10), world.entry("push", today)!!.value)
+    }
+
+    @Test
+    fun i36_habitItemEarnsWhenGoalMet() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push", goal = 20)), "c1" to listOf("push"))
+        world = log(world, clock, "push", units(15))
+        assertFalse(world.items("c1").single().done)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        world = log(world, clock, "push", units(5))
+        assertTrue(world.items("c1").single().done)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i36_weeklyGoalOpensPerDaysShare() {
+        val clock = FakeClock()
+        val weekly = habit("pages", goal = 70, freqDen = 7)
+        assertEquals(units(10), weekly.unlockUnit)
+        var world = habitWorld(clock, listOf(weekly), "c1" to listOf("pages"))
+        world = log(world, clock, "pages", units(9))
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        world = log(world, clock, "pages", units(1))
+        assertEquals(BlockState.EARNED, world.state("c1"))
+    }
+
+    @Test
+    fun i36_atMostHabitNeverOpens() {
+        val clock = FakeClock()
+        val coffee = habit("coffee", goal = 2, targetType = TargetType.AT_MOST)
+        assertNull(coffee.unlockUnit)
+        var world = habitWorld(clock, listOf(coffee), "c1" to listOf("coffee"))
+        world = log(world, clock, "coffee", units(1))
+        world = log(world, clock, "coffee", units(5))
+        assertEquals(BlockState.ARMED, world.state("c1"))
+    }
+
+    @Test
+    fun i36_deletedHabitKeepsTheBlockClosed() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push")), "c1" to listOf("push"))
+        world = world.withoutHabit("push", clock.nowWallMs())
+            .copy(habitEntries = mapOf(HabitEntry.key("push", clock.epochDay()) to HabitEntry(units(50))))
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals("push", world.items("c1").single().habitId)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+    }
+
+    @Test
+    fun i36_adoptedUnlockDoesNotSpendAgain() {
+        val d = twoDevicesWithHabits(listOf(habit("push", goal = 10)), "c1" to listOf("push"))
+        d.phone.on(BlockEvent.LogHabit("push", units(10)))
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        assertEquals("the laptop works it out from the entry", BlockState.EARNED, d.laptop.block("c1").state)
+        d.laptop.on(BlockEvent.Redeem("c1"))
+        d.syncBlocks()
+        assertEquals(BlockState.UNLOCKED, d.phone.block("c1").state)
+        assertEquals("spent once, by the device that redeemed", units(10), d.phone.world.items("c1").single().spentAmount)
+    }
+
+    @Test
+    fun i36_otherDevicesWritesCount() {
+        val d = twoDevicesWithHabits(listOf(habit("push", goal = 20)), "c1" to listOf("push"))
+        d.phone.on(BlockEvent.LogHabit("push", units(8)))
+        d.laptop.on(BlockEvent.LogHabit("push", units(12)))
+        assertEquals(BlockState.ARMED, d.phone.block("c1").state)
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        assertEquals(BlockState.EARNED, d.phone.block("c1").state)
+        assertEquals(units(20), d.habits.entries.values.single().value)
+    }
+
+    @Test
+    fun i36_untickAfterEarnTakesTheEarnBack() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("plank", HabitKind.CHECK)), "c1" to listOf("plank"))
+        world = set(world, clock, "plank", today, HabitEntry.YES_MANUAL)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+
+        // Unticked before the unlock is used: no unlock for nothing, and no second one later.
+        world = set(world, clock, "plank", today, HabitEntry.NO)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        assertNull(world.credits["c1"])
+        assertFalse(world.items("c1").single().done)
+        assertEquals(BlockState.ARMED, on(world, clock, BlockEvent.Redeem("c1")).state("c1"))
+
+        // Ticked again: earned again, and the unlock spends that tick.
+        world = set(world, clock, "plank", today, HabitEntry.YES_MANUAL)
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        assertEquals(BlockState.UNLOCKED, world.state("c1"))
+        assertEquals(today, world.items("c1").single().spentEpochDay)
+    }
+
+    @Test
+    fun i36_untickDoesNotTakeBackWhatOtherItemsStillEarn() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val items = listOf(habitItem("c1", "plank", 0), habitItem("c1", "read", 1))
+        var world = buildWorld(listOf(checklistBlock("c1", required = 1)), mapOf("c1" to items), clock)
+            .copy(habits = listOf(habit("plank", HabitKind.CHECK), habit("read", HabitKind.CHECK)), deviceId = "here")
+        world = set(world, clock, "plank", today, HabitEntry.YES_MANUAL)
+        world = set(world, clock, "read", today, HabitEntry.YES_MANUAL)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        world = set(world, clock, "plank", today, HabitEntry.NO)
+        assertEquals("one of two is still enough", BlockState.EARNED, world.state("c1"))
+        world = set(world, clock, "read", today, HabitEntry.NO)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+    }
+
+    @Test
+    fun i36_adoptedEarnIsNotTakenBackBeforeTheEntriesArrive() {
+        val d = twoDevicesWithHabits(listOf(habit("plank", HabitKind.CHECK)), "c1" to listOf("plank"))
+        val day = d.laptop.world.habitDay(d.laptop.clock)
+        d.laptop.on(BlockEvent.SetHabitEntry("plank", day, HabitEntry.YES_MANUAL))
+        assertEquals(BlockState.EARNED, d.laptop.block("c1").state)
+        d.syncBlocks() // the phone hears of the earn before the tick
+        assertEquals(BlockState.EARNED, d.phone.block("c1").state)
+        d.phone.on(BlockEvent.Tick)
+        assertEquals("not seen here yet, not undone here", BlockState.EARNED, d.phone.block("c1").state)
+
+        // Unticked on the laptop: the earn goes there, and the phone follows.
+        d.laptop.on(BlockEvent.SetHabitEntry("plank", day, HabitEntry.NO))
+        assertEquals(BlockState.ARMED, d.laptop.block("c1").state)
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        d.syncBlocks()
+        assertEquals(BlockState.ARMED, d.phone.block("c1").state)
+        assertEquals(BlockState.ARMED, d.laptop.block("c1").state)
+    }
+
+    @Test
+    fun i37_focusCountsMonotonicAndFoldsOnPause() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("study", HabitKind.TIMER, 30)))
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        clock.advance(10 * minute)
+        clock.advanceWallOnly(60 * minute) // moving the clock forward doesn't count
+        assertEquals(units(10), engine.habitAmount(world, "study", today, clock))
+        assertNull("nothing written while it runs", world.entry("study", today))
+
+        world = on(world, clock, BlockEvent.PauseFocus())
+        assertFalse(world.focus!!.running)
+        assertEquals(units(10), world.entry("study", today)?.value)
+        clock.advance(10 * minute)
+        assertEquals(units(10), engine.habitAmount(world, "study", today, clock))
+
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        clock.advance(5 * minute)
+        world = on(world, clock, BlockEvent.EndFocus)
+        assertNull(world.focus)
+        assertEquals(units(15), world.entry("study", today)?.value)
+    }
+
+    @Test
+    fun i37_focusEarnsWhileRunning() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("study", HabitKind.TIMER, 30)), "c1" to listOf("study"))
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        clock.advance(29 * minute)
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        clock.advance(minute)
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        assertTrue("the timer keeps going past the goal", world.focus!!.running)
+    }
+
+    @Test
+    fun i37_breakResumesByItself() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("study", HabitKind.TIMER, 30)))
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        clock.advance(5 * minute)
+        world = on(world, clock, BlockEvent.PauseFocus(Defaults.FOCUS_BREAK_MS))
+        clock.advance(4 * minute)
+        world = on(world, clock, BlockEvent.Tick)
+        assertFalse(world.focus!!.running)
+        clock.advance(minute)
+        world = on(world, clock, BlockEvent.Tick)
+        assertTrue(world.focus!!.running)
+        clock.advance(3 * minute)
+        assertEquals(units(8), engine.habitAmount(world, "study", today, clock))
+    }
+
+    @Test
+    fun i37_focusSurvivesReboot() {
+        val clock = FakeClock(mono = 50 * minute)
+        var world = habitWorld(clock, listOf(habit("study", HabitKind.TIMER, 30)))
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        clock.advance(10 * minute)
+        clock.setMono(1_000) // reboot: the monotonic clock starts over
+        clock.advanceWallOnly(2 * minute)
+        world = on(world, clock, BlockEvent.BootOrColdStart)
+        assertEquals(units(12), engine.habitAmount(world, "study", clock.epochDay(), clock))
+    }
+
+    @Test
+    fun i37_focusAcrossMidnightFoldsIntoItsDay() {
+        val clock = FakeClock(wall = at("2026-01-15T23:50:00Z"))
+        val firstDay = clock.epochDay()
+        var world = habitWorld(clock, listOf(habit("study", HabitKind.TIMER, 30)))
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        clock.advance(20 * minute) // 00:10
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(units(20), world.entry("study", firstDay)?.value)
+        clock.advance(5 * minute)
+        assertEquals(units(5), engine.habitAmount(world, "study", firstDay + 1, clock))
+    }
+
+    @Test
+    fun i37_onlyTimerHabitsFocus() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push"), habit("study", HabitKind.TIMER, 30)))
+        world = on(world, clock, BlockEvent.StartFocus("push"))
+        assertNull(world.focus)
+        world = on(world, clock, BlockEvent.StartFocus("study"))
+        assertEquals("study", world.focus!!.habitId)
+        world = world.copy(habits = world.habits.filterNot { it.id == "study" }) // deleted elsewhere
+        world = on(world, clock, BlockEvent.Tick)
+        assertNull(world.focus)
+    }
+
+    @Test
+    fun i38_serverRecordsAreTakenWhenNothingChangedHere() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val server = FakeHabitServer()
+        server.put(HabitRecord("push", HabitRecords.data(habit("push", goal = 20)), BASE_WALL))
+        server.put(EntryRecord("push", HabitRecords.date(today), units(5), "", BASE_WALL))
+        val phone = Device("phone", World(), clock)
+        phone.syncHabits(server)
+        assertEquals(units(20), phone.world.habit("push")!!.goal)
+        assertEquals(HabitEntry(units(5), "", BASE_WALL, seq = 2), phone.world.entry("push", today))
+        assertEquals(2L, phone.world.habitSyncSeq)
+
+        server.put(EntryRecord("push", HabitRecords.date(today), units(9), "", BASE_WALL + 1)) // the web app
+        phone.syncHabits(server)
+        assertEquals(HabitEntry(units(9), "", BASE_WALL + 1, seq = 3), phone.world.entry("push", today))
+    }
+
+    @Test
+    fun i38_amountsAddedOnTwoDevicesAddUp() {
+        val d = twoDevicesWithHabits(listOf(habit("push", goal = 50)))
+        val today = d.phone.clock.epochDay()
+        d.phone.on(BlockEvent.LogHabit("push", units(5)))
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        // Both add while apart.
+        d.phone.on(BlockEvent.LogHabit("push", units(3)))
+        d.laptop.on(BlockEvent.LogHabit("push", units(4)))
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        assertEquals(units(12), d.phone.world.entry("push", today)?.value)
+        assertEquals(units(12), d.laptop.world.entry("push", today)?.value)
+        assertFalse(d.phone.world.entry("push", today)!!.dirty || d.laptop.world.entry("push", today)!!.dirty)
+    }
+
+    @Test
+    fun i38_laterCheckWins() {
+        val d = twoDevicesWithHabits(listOf(habit("meditate", HabitKind.CHECK)))
+        val today = d.phone.clock.epochDay()
+        d.phone.on(BlockEvent.LogHabit("meditate", 1))
+        advanceAll(minute, d.phone, d.laptop)
+        d.laptop.on(BlockEvent.LogHabit("meditate", -1)) // a minute later, on the laptop
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        assertEquals(HabitEntry.NO, d.phone.world.entry("meditate", today)?.value)
+        assertEquals(HabitEntry.NO, d.laptop.world.entry("meditate", today)?.value)
+
+        d.laptop.on(BlockEvent.LogHabit("meditate", 1))
+        advanceAll(minute, d.phone, d.laptop)
+        d.phone.on(BlockEvent.SetHabitEntry("meditate", today, HabitEntry.SKIP)) // later again, now on the phone
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits) // the laptop's earlier tick loses
+        assertEquals(HabitEntry.SKIP, d.laptop.world.entry("meditate", today)?.value)
+        assertFalse(d.laptop.world.entry("meditate", today)!!.dirty)
+    }
+
+    @Test
+    fun i38_pushCleansOnlyWhatWasSent() {
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val server = FakeHabitServer()
+        server.put(HabitRecord("push", HabitRecords.data(habit("push")), BASE_WALL))
+        val phone = Device("phone", World(), clock)
+        phone.syncHabits(server)
+        phone.on(BlockEvent.LogHabit("push", units(3)))
+        val (habits, entries, sent) = HabitRecords.pending(phone.world)
+        phone.on(BlockEvent.LogHabit("push", units(2))) // while the push is on its way
+        val result = server.write(HabitWrite(habits, entries))
+        phone.on(BlockEvent.HabitServerPushed(sent, result.acceptance()))
+        val entry = phone.world.entry("push", today)!!
+        assertEquals(units(5), entry.value)
+        assertTrue("the last 2 still have to go", entry.dirty)
+        assertEquals(units(3), entry.baseValue)
+
+        phone.syncHabits(server)
+        assertEquals(units(5), server.entries.values.single().value)
+        assertFalse(phone.world.entry("push", today)!!.dirty)
+    }
+
+    @Test
+    fun i38_rejectedWriteIsRebased() {
+        val d = twoDevicesWithHabits(listOf(habit("push", goal = 50)))
+        val today = d.phone.clock.epochDay()
+        d.phone.on(BlockEvent.LogHabit("push", units(5)))
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        d.phone.on(BlockEvent.LogHabit("push", units(3)))
+        d.phone.syncHabits(d.habits) // the server has 8 now
+        d.laptop.on(BlockEvent.LogHabit("push", units(4)))
+
+        val (habits, entries, sent) = HabitRecords.pending(d.laptop.world) // sent without reading first
+        val result = d.habits.write(HabitWrite(habits, entries))
+        assertEquals(1, result.rejected.entries.size)
+        d.laptop.on(BlockEvent.HabitServerPushed(sent, result.acceptance(), result.rejected.habits, result.rejected.entries))
+        assertEquals(units(12), d.laptop.world.entry("push", today)?.value)
+        assertTrue(d.laptop.world.entry("push", today)!!.dirty)
+
+        d.laptop.syncHabits(d.habits)
+        assertEquals(units(12), d.habits.entries.values.single().value)
+    }
+
+    @Test
+    fun i38_editBeatsDelete() {
+        val d = twoDevicesWithHabits(listOf(habit("push"), habit("read")))
+        // Deleted on the phone, then edited on the laptop, which syncs first.
+        d.phone.world = d.phone.world.withoutHabit("push", d.phone.clock.nowWallMs())
+        advanceAll(minute, d.phone, d.laptop)
+        d.laptop.world = d.laptop.world.withHabit(d.laptop.world.habit("push")!!.copy(name = "Push-ups"), d.laptop.clock.nowWallMs())
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        assertEquals("Push-ups", d.phone.world.habit("push")?.name)
+        assertFalse(d.habits.habits.getValue("push").deleted)
+
+        // Deleted on the phone, which syncs first; edited later on the laptop.
+        d.phone.world = d.phone.world.withoutHabit("read", d.phone.clock.nowWallMs())
+        d.phone.syncHabits(d.habits)
+        assertTrue(d.habits.habits.getValue("read").deleted)
+        advanceAll(minute, d.phone, d.laptop)
+        d.laptop.world = d.laptop.world.withHabit(d.laptop.world.habit("read")!!.copy(name = "Read more"), d.laptop.clock.nowWallMs())
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        assertFalse(d.habits.habits.getValue("read").deleted)
+        assertEquals("Read more", d.phone.world.habit("read")?.name)
+
+        // Deleted with nothing edited since: gone everywhere.
+        d.phone.world = d.phone.world.withoutHabit("read", d.phone.clock.nowWallMs())
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        assertNull(d.laptop.world.habit("read"))
+        assertTrue(d.phone.world.habitTombstones.isEmpty())
+    }
+
+    @Test
+    fun i38_restoredServerGetsBackWhatItLost() {
+        val d = twoDevicesWithHabits(listOf(habit("push", goal = 50), habit("meditate", HabitKind.CHECK), habit("old")))
+        val today = d.phone.clock.epochDay()
+        d.phone.on(BlockEvent.LogHabit("push", units(5)))
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        val backup = d.habits.backup()
+
+        // After the backup: more push-ups, a tick, a new habit, a deleted one. Both devices see them.
+        // (A delete the server took is forgotten here, so the restore brings "old" back: §2.5.)
+        advanceAll(minute, d.phone, d.laptop)
+        d.phone.on(BlockEvent.LogHabit("push", units(3)))
+        d.phone.on(BlockEvent.LogHabit("meditate", 1))
+        d.phone.world = d.phone.world.withHabit(habit("stretch"), d.phone.clock.nowWallMs())
+        d.phone.world = d.phone.world.withoutHabit("old", d.phone.clock.nowWallMs())
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        assertNull(d.laptop.world.habit("old"))
+
+        // The server is put back from its backup, and the web app ticks something there meanwhile.
+        d.habits.restore(backup)
+        advanceAll(minute, d.phone, d.laptop)
+        d.habits.put(EntryRecord("push", HabitRecords.date(today - 1), units(10), "", d.phone.clock.nowWallMs()))
+        assertTrue(d.habits.seq < d.laptop.world.habitSyncSeq)
+
+        d.laptop.syncHabits(d.habits)
+        d.phone.syncHabits(d.habits)
+        d.laptop.syncHabits(d.habits)
+        for (device in listOf(d.phone, d.laptop)) {
+            assertEquals(units(8), device.world.entry("push", today)?.value)
+            assertEquals(HabitEntry.YES_MANUAL, device.world.entry("meditate", today)?.value)
+            assertEquals(units(10), device.world.entry("push", today - 1)?.value) // written after the restore
+            assertNotNull(device.world.habit("stretch"))
+            assertNotNull(device.world.habit("old"))
+            assertTrue(device.world.habitEntries.values.none { it.dirty })
+            assertEquals(d.habits.seq, device.world.habitSyncSeq)
+        }
+        assertEquals(units(8), d.habits.entries.getValue("push@${HabitRecords.date(today)}").value)
+        assertNotNull(d.habits.habits["stretch"])
+    }
+
+    @Test
+    fun i38_theEpochIsKeptEvenWhenNothingElseIsNew() {
+        val d = twoDevicesWithHabits(listOf(habit("push")))
+        // A device that synced before the server had epochs: nothing new, but the epoch is.
+        d.phone.world = d.phone.world.copy(habitServerEpoch = null)
+        d.phone.syncHabits(d.habits)
+        assertEquals(d.habits.epoch, d.phone.world.habitServerEpoch)
+        assertTrue(HabitRecords.nothingNew(d.phone.world, d.habits.changes(d.phone.world.habitSyncSeq)))
+    }
+
+    @Test
+    fun i38_dayStartHourComesFromTheServer() {
+        val clock = FakeClock(wall = at("2026-01-16T01:00:00Z"))
+        val phone = Device("phone", World(), clock)
+        phone.syncHabits(FakeHabitServer(dayStartHour = 3))
+        assertEquals(3, phone.world.habitDayStartHour)
+        assertEquals(clock.epochDay() - 1, phone.world.habitDay(clock))
     }
 }

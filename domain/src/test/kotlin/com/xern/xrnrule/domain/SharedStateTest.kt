@@ -19,13 +19,14 @@ class SharedStateTest {
     private fun merge(base: SharedState?, local: SharedState, remote: SharedState) = SharedState.merge(base, local, remote)
 
     @Test
-    fun projection_dropsMonotonicStampsAndLinkedTicks() {
+    fun projection_dropsMonotonicStampsAndHabitTicks() {
         val clock = FakeClock(mono = 123_456)
         val block = checklistBlock("c1")
-        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1) + linkedItem("c1", "meditate", order = 1)), clock)
+        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1) + habitItem("c1", "meditate", order = 1)), clock)
+            .copy(habits = listOf(habit("meditate", HabitKind.CHECK)))
         val engine = BlockEngine()
         world = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-i0", true), clock).world
-        world = engine.reduce(world, BlockEvent.ExternalHabitsSynced(clock.epochDay(), setOf("meditate")), clock).world
+        world = engine.reduce(world, BlockEvent.LogHabit("meditate", 1), clock).world
         assertEquals(BlockState.EARNED, world.block("c1")!!.state)
 
         val shared = SharedState.of(world)
@@ -36,7 +37,7 @@ class SharedStateTest {
         val manual = shared.items.getValue("c1-i0")
         assertTrue(manual.done)
         assertNull(manual.doneAtMonotonic)
-        assertFalse("a linked tick is each device's own", shared.items.getValue("c1-meditate").done)
+        assertFalse("a habit item's tick is each device's own", shared.items.getValue("c1-meditate").done)
     }
 
     @Test
@@ -218,5 +219,15 @@ class SharedStateTest {
         // Unknown fields from a newer device must not break an older one.
         val lenient = Json { ignoreUnknownKeys = true }
         assertEquals(SharedState(), lenient.decodeFromString(SharedState.serializer(), """{"somethingNew":1}"""))
+    }
+
+    @Test
+    fun habitItemsSpendTheLaterDayOrTheMostThatDay() {
+        val item = habitItem("c1", "push")
+        val base = SharedState(items = mapOf(item.id to item))
+        fun spent(day: Long, amount: Long) = SharedState(items = mapOf(item.id to item.copy(spentEpochDay = day, spentAmount = amount)))
+        assertEquals(20L, merge(base, spent(5, 20), spent(5, 10)).items.getValue(item.id).spentAmount)
+        assertEquals(10L, merge(base, spent(5, 20), spent(6, 10)).items.getValue(item.id).spentAmount)
+        assertEquals(6L, merge(base, spent(5, 20), spent(6, 10)).items.getValue(item.id).spentEpochDay)
     }
 }

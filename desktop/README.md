@@ -9,7 +9,7 @@ bought minutes, the daily unlock limit, the 15-minute break and lockdowns are sh
 ```
  xrnrule-desktop (systemd user service, JVM, runs :domain's engine)
    ├─ syncs the shared state with xrnrule-sync     (server/xrnrule-sync.py)
-   ├─ reads habit ticks from xrnloops-sync           (../xrnloops/server)
+   ├─ shares habits and ticks with xrnloops-sync   (../xrnloops/server)
    ├─ D-Bus  ← KWin script (kwin/): which window is in front; closes blocked ones
    └─ http://127.0.0.1:47321
         ├─ the local page: blocks, unlocks, laptop apps & sites per block
@@ -76,8 +76,9 @@ the phone.
 - **Buying minutes.** On a daily limit's or a schedule's block page, **Buy … minutes** starts
   a wait; then type the sentence it shows. The sentence, the wait, the minutes and how many a
   day are in **Settings** on the local page (shared with the phone; easing them waits 60 s).
-- **Unlocking** works as on the phone. Tick the habit (in xrnloops or on the habits web page,
-  for linked items), tick a to-do item, or wait out a timer *on the block page*: it stands in
+- **Unlocking** works as on the phone. Tick or log the habit (on the block's card, the phone, in
+  xrnloops or on the habits web page: they share one habit server), tick a to-do item, or wait
+  out a timer *on the block page*: it stands in
   for the blocked app, as the phone's shield does. Then press **Open**.
 - **When an unlock runs out**, open blocked apps are closed and blocked tabs move to the
   block page within a few seconds.
@@ -109,5 +110,6 @@ qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded xrnrule   #
 curl -s http://127.0.0.1:47321/api/state | head -c 400
 ```
 
-State lives in `~/.local/share/xrnrule/` (`world.json`, and `shared-base.json`: the copy last
-agreed with the server).
+State lives in `~/.local/share/xrnrule/` (owner-only): `world.json`, `habit-entries.json` (the
+habit history), `shared-base.json` (the copy last agreed with the server), and `site-icons/`
+(each blocked website's own icon, asked of that site, served to the page at `/api/site-icon`).

@@ -4,7 +4,8 @@ Rules for your phone and your laptop. Distracting apps and websites stay behind 
 you've done a habit, used up today's minutes, or are inside the hours you set; then they open
 for a while and lock again on their own. No accounts, no cloud: everything stays on the phone,
 unless you turn on sync with a server of your own, which also brings the same blocks to a
-Linux laptop.
+Linux laptop. (The one other thing asked of the internet: each website you name is asked for
+its own icon, once a month at most, never through an icon service that would see the list.)
 
 xrnrule was called xrnhabit until 24 Oct 2026, when it took in
 [xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension that put time limits on
@@ -53,6 +54,12 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Status at a glance.** The notification shows what's open and for how long, warns 30 s
   before an unlock ends, and says so if blocking stops working. On limited sites the extension
   can show a corner clock of what runs out first, and warns at 10, 5, 3 and 1 minutes left.
+- **App lock.** Opening the app, or coming back to it after 30 seconds away, asks for your
+  fingerprint (or the phone's screen-lock PIN). The block screen isn't behind it: that's how you
+  get through a block. Settings → App lock turns it off. Android 9 or later.
+- **Keeps itself up to date** (sideload build). New versions come from your server, at the sync
+  address and with its login, and install the next time the screen goes off; Settings → Updates
+  → Check now installs at once. See [Updates](#updates).
 - **Backup.** Export your blocks to a file and import them on a new install.
 - **Insights.** Per-app screen time, time per site, habits done, times blocked and your streak.
 - Built to survive reboots, process death and OEM battery killers.
@@ -71,12 +78,39 @@ Back) closes the block screen at once and steps the tab back to where you were, 
 it has nothing to go back to, so the rest of the browser stays yours.
 
 - **Laptop (Helium or another Chromium browser):** extensions page → Developer mode → Load
-  unpacked → `extension/`.
-- **Phone (Quetta):** `scripts/pack-extension.sh` makes `dist/xrnrule-extension.zip`; copy it to
-  the phone, then in Quetta: extensions page → Developer mode → "(from .zip/.crx/.user.js)".
+  unpacked → `extension/`. It reloads itself whenever that folder's `manifest.json` names a new
+  version (a pull, or a release).
+- **Phone (Quetta):** open `https://<your server>/xrnrule/update/xrnrule.crx` in Quetta →
+  **Download anyway** → **OK** (or hand the file to its extensions page: Developer mode → "(from
+  .zip/.crx/.user.js)"). From then on it fetches each new version from your server by itself.
+  A copy installed from a `.zip` (`scripts/pack-extension.sh`) works too, but never updates, and
+  each one gets a new extension ID, so remove it before installing the `.crx`.
 
+The extension's settings page shows its version and where it updates from, with **Check now**.
 The phone app warns when a browser is in front and the extension says nothing, so a browser
 without it (Chrome on Android has no extensions) doesn't quietly let sites through.
+
+## Updates
+
+`node scripts/release.mjs` publishes both halves to your server; `… extension` or `… app` does
+one. It bumps the version past what the server already has, since a browser or phone only takes
+a newer one, and needs `~/.config/xrnrule/release.json`:
+
+```json
+{ "server": "https://<your server>/xrnrule", "ssh": ["<ssh host>", "<another way in>"] }
+```
+
+- **The extension** is signed with `~/.config/xrnrule/extension.pem`, made on the first release.
+  **Back it up.** The key is the extension's identity: an update signed with another one is
+  refused, and the phone would have to install afresh under a new ID.
+- **The app** is the sideload release build, signed with the key it shares with xrnloops
+  (`../xrn-signing.properties`; the release refuses to go without it, since the phone only takes
+  an update signed like the app it has). On the phone, Settings → Updates → **Allow installing
+  updates** once; after that
+  Android 12 and later install updates without asking. Where Android still wants a tap, a
+  notification says the update is ready. The first build with the updater has to be installed
+  by hand: `./gradlew :app:installSideloadRelease`, or open
+  `https://<your server>/xrnrule/update/xrnrule.apk` on the phone and sign in with the sync login.
 
 ## Security
 
@@ -85,6 +119,10 @@ without it (Chrome on Android has no extensions) doesn't quietly let sites throu
   websites can't add (a CORS preflight that is never approved), and the request must name that
   address as its Host, which shuts out DNS-rebinding pages too. The laptop's pages can't be put
   in another site's frame and run no scripts but their own.
+- **Website icons** are fetched over HTTPS from each named site itself (its home page's
+  `<link rel="icon">`, then `/favicon.ico`), with no login and no cookies, and only for real
+  domain names, never an IP address or `localhost`. Only PNG, ICO, JPEG, GIF and WebP are
+  kept, checked by their first bytes (no SVG: on the laptop page's origin it could carry script).
 - **Other apps on the phone** can reach `127.0.0.1:47321` as well. They can read which sites are
   blocked and report a site in front, nothing more, and nothing they send can crash the app.
   If xrnrule were down and another app took the port, the extension would still send blocked
@@ -98,6 +136,13 @@ without it (Chrome on Android has no extensions) doesn't quietly let sites throu
   else: a script bug anywhere on the host can't walk off with the password. The cookie only
   counts with a header other sites can't send, and a new password ends every session. The
   pages run only their own scripts and can't be put in another site's frame.
+- **Updates** can only come from you. The server takes no uploads (releases arrive over ssh),
+  the extension's files are public because a browser's updater sends no login (it's the
+  extension's own code, nothing of yours), and the app's need the sync login. A browser takes
+  only a `.crx` signed with the extension's key, and Android only an APK signed with the app's;
+  the app also checks the hash, package and build number before installing.
+- **The app lock** keeps the app's screens to whoever can unlock the phone. It's a door, not a
+  vault: blocks are enforced by the service, which doesn't wait for it.
 - **Secrets** stay where they're used: the sync password in the phone app's private storage
   (never backed up) and in a file only you can read on the laptop. The hardcore password exists
   only as a salted hash on the phone and is never synced or exported.
@@ -116,8 +161,9 @@ Requirements: **JDK 17** (Gradle 8.11.1 doesn't run on newer JDKs) and the Andro
 ./gradlew :app:assemblePlayDebug       # Play-safe build: no Device Admin
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
 ./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
-node --test extension/test             # the extension's helpers
-scripts/pack-extension.sh              # the extension as a .zip, for Quetta
+node --test extension/test             # the extension's helpers and its signed .crx
+node scripts/release.mjs               # publish the extension and the app; see Updates
+scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
 ```
 
 The two flavors exist because the distribution channel is undecided: anti-uninstall uses
@@ -132,14 +178,19 @@ notifications, and exemption from battery optimization. On Xiaomi/MIUI also enab
 autostart. The Settings screen shows what's missing and links to each one. Sites need the
 browser extension (above); the app only listens for it on `127.0.0.1`.
 
-## Companion app: xrnloops
+## Habits, and xrnloops
 
-[Loop Habit Tracker](https://github.com/iSoron/uhabits) doesn't let other apps read its data,
-so habit-linked checklist items need **xrnloops**, a small GPLv3 fork of Loop kept as a
-separate project. It shares today's ticks through a signature-protected content provider and
-pings xrnrule whenever something is ticked. Both apps must be signed with the same key.
-xrnrule itself contains no Loop code. xrnloops can also sync its habits with your server,
-which serves a web page for ticking and reviewing them from a laptop.
+Habits live on your server's habit service (xrnloops-sync, from xrnloops, a GPLv3 fork of
+[Loop Habit Tracker](https://github.com/iSoron/uhabits)). xrnrule
+on the phone and on the laptop, xrnloops and the habits web page all read and write the same
+habits and ticks there, so a habit ticked anywhere opens the blocks that ask for it everywhere.
+Amounts logged on two devices at once add up; nothing needs to be installed next to xrnrule.
+
+xrnloops is being folded into xrnrule (from November 2026): xrnrule takes over Loop's habit
+screens, reminders and widgets, with Loop's rules for scores, streaks and automatic ticks ported
+into `:domain`. Until that's done, both apps run side by side: xrnloops still tells xrnrule the
+moment something is ticked in it (a signature-protected broadcast, so both apps must be signed
+with the same key).
 
 ## Project layout
 
@@ -152,5 +203,12 @@ which serves a web page for ticking and reviewing them from a laptop.
 | `extension/` | The browser extension, for both devices |
 | `server/` | `xrnrule-sync.py`, the tiny sync server (Python), and its status page |
 
-The engine's rules (states, transitions, invariants I1–I34, multi-device sync in §2.4) are
+The engine's rules (states, transitions, invariants I1–I38, multi-device sync in §2.4) are
 specified in `docs/domain-contract.md`, which is in Vietnamese.
+
+## License
+
+xrnrule is free software under the GNU General Public License, version 3 or later; see
+[LICENSE](LICENSE). Parts of it are ported from [Loop Habit Tracker](https://github.com/iSoron/uhabits)
+(also GPLv3), copyright Álinson Santos Xavier and its contributors; those files say so at the
+top.

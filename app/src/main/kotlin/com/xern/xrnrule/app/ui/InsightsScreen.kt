@@ -17,11 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -339,19 +337,7 @@ private fun AppUsageRow(app: AppUsage, fraction: Float, isBlocked: Boolean) =
 
 @Composable
 private fun SiteUsageRow(host: String, ms: Long, fraction: Float, isBlocked: Boolean) =
-    UsageRow(host, ms, fraction, isBlocked) {
-        Box(
-            Modifier.size(36.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.Language,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
+    UsageRow(host, ms, fraction, isBlocked) { SiteIcon(host, size = 36.dp) }
 
 @Composable
 private fun UsageRow(label: String, ms: Long, fraction: Float, isBlocked: Boolean, leading: @Composable () -> Unit) {

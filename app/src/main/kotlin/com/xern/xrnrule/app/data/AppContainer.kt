@@ -4,6 +4,8 @@ import android.content.Context
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.hardcore.createHardcoreGuard
 import com.xern.xrnrule.app.loop.LoopHabits
+import com.xern.xrnrule.app.update.AppUpdates
+import com.xern.xrnrule.app.update.createAppUpdates
 import com.xern.xrnrule.app.web.ExtensionServer
 import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.domain.BlockEngine
@@ -44,11 +46,23 @@ class AppContainer(context: Context) {
 
     val siteUsage = SiteUsageLog(File(context.filesDir, "site_usage.json"), clock)
 
-    /** Habit ticks from xrnloops, our Loop fork (`../xrnloops`), for checklist items linked to it (I23). */
-    val loop = LoopHabits(context, store, appScope)
+    /** Websites' own icons, asked of each site and kept on the phone. */
+    val siteIcons = SiteIconCache(context, appScope)
 
     /** Unlocks, breaks and blocks shared with the laptop through the home server (contract §2.4). */
     val shared = SharedSync(context, store, telemetry, appScope)
+
+    /** Habits and their entries, shared with xrnloops, the web app and the laptop (contract §2.5). */
+    val habits = HabitSync(context, store, shared.settings, appScope)
+
+    /** xrnloops, our Loop fork (`../xrnloops`), while both apps are in use: its ticks reach us through the habit server. */
+    val loop = LoopHabits(context, habits, appScope)
+
+    /** New versions of the app from the same home server — real in `sideload`, a no-op in `play`. */
+    val updates: AppUpdates = createAppUpdates(context, shared.settings, appScope)
+
+    /** The fingerprint step in front of the app's screens. */
+    val appLock = AppLock(context)
 
     init {
         // This install's name in the shared state (whose allowance use is whose, §2.4).
@@ -57,6 +71,8 @@ class AppContainer(context: Context) {
             store.edit { it.copy(deviceId = id) }
         }
         shared.start()
+        habits.start()
         extensionServer.start()
+        updates.start()
     }
 }

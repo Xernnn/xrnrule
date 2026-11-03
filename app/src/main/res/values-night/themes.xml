@@ -2,7 +2,7 @@
 <resources>
     <!-- Dark launch shell — matches ui/Theme.kt's dark background so there's no white flash. -->
     <style name="Theme.Xrnrule" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#121214</item>
+        <item name="android:windowBackground">#1F1F23</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>

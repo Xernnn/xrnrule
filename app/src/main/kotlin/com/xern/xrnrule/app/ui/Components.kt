@@ -2,40 +2,47 @@
 
 package com.xern.xrnrule.app.ui
 
+import com.xern.xrnrule.app.XrnruleApp
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.foundation.layout.offset
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -43,34 +50,40 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.xern.xrnrule.app.data.InstalledApp
 import com.xern.xrnrule.app.ui.theme.ChartPalette
+import com.xern.xrnrule.app.ui.theme.GeistMono
+import com.xern.xrnrule.app.ui.theme.KindColors
 import com.xern.xrnrule.app.ui.theme.StatusPalette
 import com.xern.xrnrule.app.ui.theme.StatusStyle
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockState
-import com.xern.xrnrule.domain.CombineMode
-import com.xern.xrnrule.domain.TriggerType
-import com.xern.xrnrule.domain.World
 
 /** Outer padding for every screen body. */
-val ScreenPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+val ScreenPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+
+/** Corner radius of cards, and of the rows inside the block form. */
+val CardShape = RoundedCornerShape(22.dp)
+val RowShape = RoundedCornerShape(16.dp)
 
 /**
  * Bumps on every `ON_RESUME` so Settings rows can re-read permission state the user changed
@@ -121,57 +134,11 @@ fun chartSeriesColor(): Color =
 private fun Color.luminanceIsDark(): Boolean =
     (0.299 * red + 0.587 * green + 0.114 * blue) < 0.5
 
-private fun checklistFraction(block: Block, world: World): Float {
-    val items = world.items(block.id)
-    return if (items.isEmpty()) 0f else items.count { it.done }.toFloat() / items.size
-}
-
-private fun timerFraction(block: Block, world: World): Float {
-    val done = world.progress[block.id]?.accumulatedMs ?: 0
-    return if (block.trigger.requiredAmount == 0L) 0f else (done.toFloat() / block.trigger.requiredAmount).coerceIn(0f, 1f)
-}
-
-/** "3 of 4 done" / "18 of 30 min" / "4:12 left" — the human-readable progress line. */
-fun progressLine(block: Block, world: World): String = when {
-    block.state == BlockState.UNLOCKED -> {
-        val s = world.sessions[block.id] ?: return stateVerbose(block.state)
-        "${formatMs(s.durationMs)} unlock window"
-    }
-    block.state == BlockState.EARNED ->
-        "${block.reward.unlockDurationMs / 60_000}-min unlock ready"
-    block.trigger.type == TriggerType.CHECKLIST -> {
-        val items = world.items(block.id)
-        "${items.count { it.done }} of ${items.size} tasks done"
-    }
-    block.trigger.type == TriggerType.TIMER -> {
-        val done = world.progress[block.id]?.accumulatedMs ?: 0
-        "${done / 60_000} of ${block.trigger.requiredAmount / 60_000} min"
-    }
-    block.trigger.type == TriggerType.COMBINED -> {
-        val items = world.items(block.id)
-        val doneMin = (world.progress[block.id]?.accumulatedMs ?: 0) / 60_000
-        val reqMin = block.trigger.requiredAmount / 60_000
-        val joiner = if (block.trigger.combineMode == CombineMode.AND) "and" else "or"
-        "${items.count { it.done }} of ${items.size} tasks $joiner $doneMin of $reqMin min"
-    }
-    else -> stateVerbose(block.state)
-}
-
-fun triggerFraction(block: Block, world: World): Float = when (block.trigger.type) {
-    TriggerType.CHECKLIST -> checklistFraction(block, world)
-    TriggerType.TIMER -> timerFraction(block, world)
-    TriggerType.COMBINED -> {
-        val checklist = checklistFraction(block, world)
-        val timer = timerFraction(block, world)
-        if (block.trigger.combineMode == CombineMode.AND) minOf(checklist, timer) else maxOf(checklist, timer)
-    }
-}
-
 /** A block's apps and websites at a glance: "Instagram + youtube.com", "Reddit + 2 more". */
 fun targetSummary(block: Block, labels: Map<String, String>): String =
     summarizeNames(block.targetPackages.map { labels[it] ?: it } + block.targetSites.sorted(), empty = "Nothing")
 
-private fun summarizeNames(names: List<String>, empty: String): String {
+fun summarizeNames(names: List<String>, empty: String): String {
     if (names.isEmpty()) return empty
     return when (names.size) {
         1 -> names[0]
@@ -185,15 +152,47 @@ fun formatMs(ms: Long): String {
     return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
-// ---- building blocks ------------------------------------------------------------------
+// ---- page furniture -------------------------------------------------------------------
 
+/** A small caps heading over a group: "FROM YOUR PHONE". */
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text.uppercase(),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(top = 20.dp, bottom = 8.dp),
+        modifier = modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp),
+    )
+}
+
+/** The big lowercase page title ("settings", "insights") with optional actions on the right. */
+@Composable
+fun PageTitle(
+    title: String,
+    modifier: Modifier = Modifier,
+    leading: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 20.dp, end = 16.dp, top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leading?.let { it(); WGap(10) }
+        Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+    }
+}
+
+/** "xrnrule" in the mono face, for the Blocks page header and the block screen. */
+@Composable
+fun Wordmark(modifier: Modifier = Modifier, size: Int = 24) {
+    Text(
+        "xrnrule",
+        modifier = modifier,
+        fontFamily = GeistMono,
+        fontWeight = FontWeight.Bold,
+        fontSize = size.sp,
+        color = MaterialTheme.colorScheme.onBackground,
     )
 }
 
@@ -221,6 +220,29 @@ fun HFTopAppBar(
     )
 }
 
+/** A circular button on the raised grey, for page headers: "+", close, back. */
+@Composable
+fun RoundIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = 44.dp,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+    container: Color = MaterialTheme.colorScheme.surfaceVariant,
+) {
+    Box(
+        modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(container)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(size * 0.48f))
+    }
+}
+
 @Composable
 fun Hairline(modifier: Modifier = Modifier) {
     HorizontalDivider(modifier, color = MaterialTheme.colorScheme.outlineVariant)
@@ -230,14 +252,15 @@ fun Hairline(modifier: Modifier = Modifier) {
 @Composable
 fun HFCard(
     modifier: Modifier = Modifier,
-    padding: PaddingValues = PaddingValues(16.dp),
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+    padding: PaddingValues = PaddingValues(18.dp),
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+            .clip(CardShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CardShape)
             .padding(padding),
         content = content,
     )
@@ -245,26 +268,409 @@ fun HFCard(
 
 /** Rounded progress meter. */
 @Composable
-fun MeterBar(fraction: Float, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.primary) {
+fun MeterBar(
+    fraction: Float,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary,
+    track: Color = MaterialTheme.colorScheme.surfaceVariant,
+    height: Dp = 8.dp,
+) {
     val animated by animateFloatAsState(fraction.coerceIn(0f, 1f), label = "meter")
     Box(
         modifier
             .fillMaxWidth()
-            .height(8.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp)),
+            .height(height)
+            .clip(RoundedCornerShape(height / 2))
+            .background(track),
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth(animated)
-                .height(8.dp)
-                .background(color, RoundedCornerShape(4.dp)),
+        if (animated > 0f) {
+            Box(
+                Modifier
+                    .fillMaxWidth(animated)
+                    .height(height)
+                    .clip(RoundedCornerShape(height / 2))
+                    .background(color),
+            )
+        }
+    }
+}
+
+/** The main action of a page: a full-width green pill. */
+@Composable
+fun PillButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+    container: Color = MaterialTheme.colorScheme.primary,
+    content: Color = MaterialTheme.colorScheme.onPrimary,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().height(54.dp),
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = container,
+            contentColor = content,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            WGap(8)
+        }
+        Text(text, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** A quieter full-width pill: outlined on the card grey. */
+@Composable
+fun OutlinePill(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    enabled: Boolean = true,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().height(50.dp),
+        shape = CircleShape,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            WGap(8)
+        }
+        Text(text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** A small rounded tag: "DO BOTH", "HARDCORE". */
+@Composable
+fun Tag(text: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, letterSpacing = 0.8.sp),
+        color = color,
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    )
+}
+
+/** On/off switch in the app's colours: green when on, a grey ring when off. */
+@Composable
+fun XSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        modifier = modifier,
+        enabled = enabled,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = Color.White,
+            checkedTrackColor = MaterialTheme.colorScheme.primary,
+            checkedBorderColor = MaterialTheme.colorScheme.primary,
+            uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            uncheckedTrackColor = Color.Transparent,
+            uncheckedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+    )
+}
+
+// ---- grouped rows (settings style) ------------------------------------------------------
+
+/** A card of rows separated by inset hairlines, like a settings group. */
+@Composable
+fun GroupCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CardShape),
+        content = content,
+    )
+}
+
+/**
+ * One row of a [GroupCard]: an icon, a title with an optional line under it, and whatever goes
+ * on the right (a value, a switch, a chevron). Draws the hairline above itself unless [first].
+ */
+@Composable
+fun GroupRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    subtitle: String? = null,
+    subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    first: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    chevron: Boolean = onClick != null,
+    /** In place of [icon]: a picture, such as a site's own icon. */
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
+) {
+    if (!first) Hairline(Modifier.padding(start = if (icon != null || leading != null) 58.dp else 18.dp))
+    Row(
+        modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .heightIn(min = 60.dp)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (leading != null) {
+            Box(Modifier.width(28.dp).offset(x = (-3).dp), contentAlignment = Alignment.Center) { leading() }
+            WGap(12)
+        } else if (icon != null) {
+            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp))
+            WGap(18)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = subtitleColor)
+            }
+        }
+        if (trailing != null) {
+            WGap(12)
+            trailing()
+        }
+        if (chevron) {
+            WGap(6)
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+/** A [GroupRow] whose right side is a switch, the whole row toggling it. */
+@Composable
+fun SwitchRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    icon: ImageVector? = null,
+    subtitle: String? = null,
+    first: Boolean = false,
+    enabled: Boolean = true,
+) {
+    GroupRow(
+        title = title,
+        icon = icon,
+        subtitle = subtitle,
+        first = first,
+        onClick = if (enabled) ({ onCheckedChange(!checked) }) else null,
+        chevron = false,
+    ) {
+        XSwitch(checked = checked, onCheckedChange = { onCheckedChange(it) }, enabled = enabled)
+    }
+}
+
+/** A grey explanation line under a group. */
+@Composable
+fun FootNote(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+    )
+}
+
+// ---- habit rows ---------------------------------------------------------------------
+
+/**
+ * One thing a block asks for, as its card shows it: the kind's icon in the kind's colour, a
+ * label, how far along it is ("12 / 30 min"), a thin bar, and the action for it on the right.
+ */
+@Composable
+fun HabitRow(
+    icon: ImageVector,
+    kind: KindColors,
+    label: String,
+    modifier: Modifier = Modifier,
+    value: String? = null,
+    fraction: Float? = null,
+    note: String? = null,
+    dim: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = kind.color, modifier = Modifier.size(20.dp))
+        WGap(14)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (value != null) {
+                    WGap(8)
+                    Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (fraction != null) {
+                Gap(5)
+                MeterBar(fraction, color = kind.color, track = kind.fill, height = 5.dp)
+            }
+            if (note != null) {
+                Gap(2)
+                Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (action != null) {
+            WGap(10)
+            action()
+        }
+    }
+}
+
+/** The round button at the end of a [HabitRow]: filled (start a timer) or ringed (tick, add). */
+@Composable
+fun RowAction(
+    icon: ImageVector,
+    contentDescription: String,
+    color: Color,
+    filled: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .then(if (filled) Modifier.background(color) else Modifier.border(2.dp, color, CircleShape))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = if (filled) onKind(color) else color,
+            modifier = Modifier.size(20.dp),
         )
     }
 }
 
+// ---- app icons ----------------------------------------------------------------------
+
 @Composable
-fun StatusChip(state: BlockState, modifier: Modifier = Modifier) =
-    StatusChip(stateVerbose(state), stateIcon(state), state, modifier)
+fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp) {
+    val context = LocalContext.current
+    val icon = remember(packageName) {
+        runCatching {
+            context.packageManager.getApplicationIcon(packageName).toBitmap(width = 144, height = 144).asImageBitmap()
+        }.getOrNull()
+    }
+    if (icon != null) {
+        Image(bitmap = icon, contentDescription = null, modifier = modifier.size(size))
+    } else {
+        Box(modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)))
+    }
+}
+
+/**
+ * A website's own icon (asked of the site, kept on the phone; [SiteIconCache]) on a small white
+ * tile, so a dark icon still shows on the dark theme; a globe until it arrives or if it has none.
+ */
+@Composable
+fun SiteIcon(host: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fallback: (@Composable () -> Unit)? = null) {
+    val icons = (LocalContext.current.applicationContext as XrnruleApp).container.siteIcons
+    val loaded by icons.loaded.collectAsState()
+    val icon = remember(host, loaded) { icons.icon(host) }
+    if (icon != null) {
+        Box(
+            modifier.size(size).clip(RoundedCornerShape(size * 0.22f)).background(Color.White),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(bitmap = icon, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.size(size * 0.84f))
+        }
+    } else if (fallback != null) {
+        fallback()
+    } else {
+        Box(modifier.size(size), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(size * 0.8f))
+        }
+    }
+}
+
+/**
+ * The square at the left of a block card: the blocked apps' and then sites' icons, up to four
+ * in a grid, or [fallback] (a shield for nothing) on the raised grey.
+ */
+@Composable
+fun AppTile(
+    packages: List<String>,
+    fallback: ImageVector,
+    modifier: Modifier = Modifier,
+    size: Dp = 60.dp,
+    extra: Int = 0,
+    sites: List<String> = emptyList(),
+) {
+    // An app's package, or (true) a site's host.
+    val icons: List<Pair<String, Boolean>> = packages.map { it to false } + sites.map { it to true }
+
+    @Composable
+    fun TileIcon(icon: Pair<String, Boolean>, side: Dp) = if (icon.second) SiteIcon(icon.first, size = side) else AppIcon(icon.first, size = side)
+    Box(
+        modifier
+            .size(size)
+            .clip(RoundedCornerShape(size * 0.26f))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        when (icons.size) {
+            0 -> Icon(fallback, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(size * 0.45f))
+            1 -> TileIcon(icons[0], size * (if (packages.isEmpty()) 0.62f else 0.78f))
+            else -> Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                icons.take(4).chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        pair.forEach { TileIcon(it, size * 0.38f) }
+                    }
+                }
+            }
+        }
+        val hidden = extra + (icons.size - 4).coerceAtLeast(0)
+        if (hidden > 0) {
+            Text(
+                "+$hidden",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .clip(RoundedCornerShape(topStart = 6.dp))
+                    .background(MaterialTheme.colorScheme.outline)
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+// ---- misc (Insights, dialogs) --------------------------------------------------------
 
 @Composable
 fun StatusChip(status: BlockStatusUi, modifier: Modifier = Modifier) =
@@ -282,12 +688,7 @@ fun StatusChip(label: String, icon: ImageVector, tone: BlockState, modifier: Mod
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Icon(icon, contentDescription = null, tint = style.content, modifier = Modifier.size(14.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = style.content,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = style.content)
     }
 }
 
@@ -339,86 +740,5 @@ fun Gap(height: Int = 12) = Spacer(Modifier.height(height.dp))
 @Composable
 fun WGap(width: Int = 12) = Spacer(Modifier.width(width.dp))
 
-// ---- app picker ------------------------------------------------------------------------
-
-/**
- * Search + multi-select app list with icons, and the current selection shown as removable
- * chips above it. Used both for the apps a block locks and for an optional "do the habit in a
- * different app" picker — selection is just a `Set<String>` of package names either way.
- */
-@Composable
-fun AppPicker(
-    apps: List<InstalledApp>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    searchPlaceholder: String = "Search apps",
-    listHeight: Dp = 260.dp,
-) {
-    var query by remember { mutableStateOf("") }
-    val filtered = remember(query, apps) {
-        if (query.isBlank()) apps else apps.filter { it.label.contains(query, ignoreCase = true) }
-    }
-    Column(modifier.fillMaxWidth()) {
-        if (selected.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                selected.forEach { pkg ->
-                    val label = apps.firstOrNull { it.packageName == pkg }?.label ?: pkg
-                    InputChip(
-                        selected = true,
-                        onClick = { onToggle(pkg) },
-                        label = { Text(label) },
-                        trailingIcon = {
-                            Icon(Icons.Filled.Close, contentDescription = "Remove $label", modifier = Modifier.size(16.dp))
-                        },
-                    )
-                }
-            }
-            Gap(8)
-        }
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text(searchPlaceholder) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Gap(8)
-        LazyColumn(Modifier.fillMaxWidth().height(listHeight)) {
-            items(filtered, key = { it.packageName }) { app ->
-                AppPickerRow(app, checked = app.packageName in selected, onToggle = { onToggle(app.packageName) })
-            }
-        }
-    }
-}
-
-@Composable
-fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp) {
-    val context = LocalContext.current
-    val icon = remember(packageName) {
-        runCatching {
-            context.packageManager.getApplicationIcon(packageName).toBitmap(width = 96, height = 96).asImageBitmap()
-        }.getOrNull()
-    }
-    if (icon != null) {
-        Image(bitmap = icon, contentDescription = null, modifier = modifier.size(size))
-    } else {
-        Box(modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)))
-    }
-}
-
-@Composable
-private fun AppPickerRow(app: InstalledApp, checked: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AppIcon(app.packageName)
-        WGap(12)
-        Text(app.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Checkbox(checked = checked, onCheckedChange = { onToggle() })
-    }
-}
+/** Text or an icon on a filled kind colour: dark on the bright ones (the limit yellow), else white. */
+fun onKind(color: Color): Color = if (color.luminance() > 0.5f) Color(0xFF1F1F23) else Color.White

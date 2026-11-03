@@ -146,7 +146,7 @@ object BlockForms {
 
     fun linkHabit(world: World, blockId: String, habit: LinkedHabit): World {
         val existing = world.items(blockId)
-        if (existing.any { it.externalHabitId == habit.uuid }) return world
+        if (existing.any { (it.habitId ?: it.externalHabitId) == habit.uuid }) return world
         return world.copy(checklist = world.checklist + (blockId to existing + linkedItem(blockId, habit, existing.size)))
     }
 
@@ -191,13 +191,13 @@ object BlockForms {
         }
     }
 
-    /** A checklist item only the habit tracker can tick (contract I23); the habit's name is its text. */
+    /** A habit item (contract I23, I36): its habit's entries tick it; the habit's name is its text. */
     private fun linkedItem(blockId: String, habit: LinkedHabit, order: Int) = ChecklistItem(
         id = "$blockId-${UUID.randomUUID()}",
         blockId = blockId,
         text = habit.name,
         order = order,
-        externalHabitId = habit.uuid,
+        habitId = habit.uuid,
         linkedDay = if (habit.yesterday) LinkedDay.YESTERDAY else LinkedDay.TODAY,
         countsGoal = habit.goal,
     )

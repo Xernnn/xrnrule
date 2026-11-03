@@ -17,12 +17,16 @@ dưới đây phải có unit test tương ứng trong `:domain/src/test`.
 | **Website target** | Một tên miền trong `block.targetSites`, đã chuẩn hóa (chữ thường, bỏ scheme/path/port, bỏ `www.`). Host `h` khớp target `t` ⟺ `h == t` hoặc `h` kết thúc bằng `"." + t` (chặn `youtube.com` thì chặn luôn `m.youtube.com`). Host đang mở được lớp Android đọc từ thanh địa chỉ của trình duyệt foreground. |
 | **BlockMode** | Cách một Block quyết định có đang chặn hay không: `HABIT` (máy trạng thái §2 — mặc định), `ALLOWANCE` (hạn mức dùng mỗi ngày), `SCHEDULE` (chặn theo lịch), `LOCKDOWN` (chặn một khoảng thời gian tính từ lúc bắt đầu). Xem §2.2. |
 | **Lockdown** | Một lần chặn `LOCKDOWN` đang chạy: `{startedAtMonotonic, startedAtWall, durationMs}`, lưu ở `World.lockdowns`. |
-| **Trigger** | Điều kiện để ARMED → EARNED. Một trong: `TIMER`, `CHECKLIST`, `COMBINED` (TIMER + CHECKLIST cùng lúc). (`COUNT` cũ đã bỏ: không có gì đếm được nó.) |
+| **Trigger** | Điều kiện để ARMED → EARNED. Một trong: `TIMER`, `CHECKLIST`, `COMBINED` (TIMER + CHECKLIST cùng lúc). (`COUNT` cũ đã bỏ: không có gì đếm được nó; habit đếm được giờ là habit item trong CHECKLIST, I36.) |
 | **CombineMode** | Chỉ dùng khi `trigger.type == COMBINED`: `AND` (cần cả hai) hoặc `OR` (cần một trong hai). |
 | **Habit app** | `trigger.habitPackages` — app(s) nơi đồng hồ TIMER đếm giờ. Rỗng (mặc định) nghĩa là "đếm giờ trong chính app Target"; nếu khác rỗng, đếm giờ trong (các) app này thay vì Target — cho phép habit "mở app khác N phút để unlock app bị chặn". |
 | **ChecklistItem** | Một mục to-do thuộc một Block (chỉ dùng khi `trigger.type` là `CHECKLIST` hoặc `COMBINED`). |
-| **External habit** | Một habit được theo dõi ở app khác — hiện là xrnloops, bản fork Loop Habit Tracker của xrnrule (project riêng `../xrnloops`). `:domain` chỉ biết nó qua một id chuỗi ổn định (`uuid` của Loop) và hai tập "đã xong hôm nay" / "đã xong hôm qua" mà lớp Android đọc rồi gửi vào bằng `ExternalHabitsSynced`. |
-| **Linked item** | `ChecklistItem` có `externalHabitId != null`. Chỉ `ExternalHabitsSynced` mới tick/untick nó, user không bấm được (I23). `linkedDay` chọn tick của ngày nào được tính: `TODAY` (mặc định) hoặc `YESTERDAY` (cho habit thường tick vào cuối ngày). `countsGoal`: tính ngày mà app ngoài báo **đạt mục tiêu** (gồm cả ngày nó tự điền cho habit kiểu "3 lần/tuần"), thay vì chỉ ngày có tick. Một lần tick ngoài chỉ trả cho một lần mở khóa mỗi ngày (I24, qua `spentEpochDay`). `tickEpochDay`: ngày (theo app ngoài) của tick mà app ngoài đang báo cho item, null nếu không có; chỉ ở máy này, như `done`. |
+| **Habit** | Một habit có tên trong **danh sách habit duy nhất** (`World.habits`), dùng chung giữa các thiết bị qua **habit server** (§2.5), không qua `SharedState`; nhiều block cùng trỏ tới một habit được. Mô hình là của Loop Habit Tracker (xrnloops, bản fork Loop đang được gộp vào xrnrule) cộng thêm đồng hồ và icon: `kind` `CHECK` (Loop: yes/no), `COUNT` (Loop: số, có `unit`), `TIMER` (Loop: số, đơn vị phút, đếm bằng đồng hồ tập trung, I37); `goal` (số, xem *Lượng*), `targetType` `AT_LEAST`/`AT_MOST` (habit số), `freqNum`/`freqDen` (`CHECK`: `freqNum` lần trong `freqDen` ngày; habit số: `goal` cho mỗi `freqDen` ngày), `color` (chỉ số bảng màu Loop 0–19), `icon`, `question`, `description`, `archived`, `position`, `reminder`. |
+| **Lượng** | Theo cách mã hóa của Loop: số nguyên **phần nghìn** đơn vị của habit (20 cái = 20 000). Đơn vị của `TIMER` là phút: 1 phút = 1000, nên `ms` của đồng hồ = `ms / 60`. |
+| **Ngày habit** | Ngày mà habit được ghi: ngày local của `now_wall − habitDayStartHour giờ` (`World.habitDayStartHour`, 0–23, lấy từ habit server: Loop "kéo dài ngày qua nửa đêm" = 3). Tick lúc 1 giờ sáng khi giờ bắt đầu là 3 thuộc về hôm trước. Chỉ habit dùng ngày này; block, hạn mức, lịch vẫn theo nửa đêm. |
+| **Habit entry** | `World.habitEntries["habitId@epochDay"]` (ngày habit) = `HabitEntry(value, notes, mtime, seq, dirty, baseValue)`, giữ **toàn bộ** lịch sử. `value` theo Loop: habit `CHECK` có `UNKNOWN=-1`, `NO=0`, `YES_AUTO=1` (Loop tự điền, không bao giờ lưu), `YES_MANUAL=2`, `SKIP=3`; habit số là lượng. `seq`, `dirty`, `baseValue`: sổ sách đồng bộ (I38). |
+| **Habit item** | `ChecklistItem` có `habitId != null`: block cần habit đó. `linkedDay` chọn ngày habit nào được tính: `TODAY` (mặc định) hoặc `YESTERDAY` (habit thường tick cuối ngày). `countsGoal` (habit `CHECK` không hằng ngày, kiểu "3 lần/tuần"): tính cả ngày Loop tự điền vì đã đạt mục tiêu. Xong khi habit có đủ **một phần mở khóa** trong ngày đó mà block này chưa tiêu (I23, I24, I36). User không tick tay được. *Linked item* cũ (`externalHabitId`, khi habit còn nằm ở xrnloops) được đổi thành habit item cùng id (I23). |
+| **Focus run** | `World.focus`: đồng hồ tập trung đang chạy (hoặc đang dừng) cho một habit `TIMER`. Chỉ ở máy này (I37). |
 | **Credit** | Quyền mở khóa đã kiếm được, có hạn dùng (TTL). |
 | **Pause** | Giờ nghỉ ngắn (mặc định 15 phút, tối đa một lần mỗi ngày local) gỡ chặn mọi block `SOFT` không phải `LOCKDOWN` (I25). |
 | **Unlock session** | Khoảng thời gian shield tắt sau khi redeem credit. |
@@ -40,7 +44,7 @@ Ba trạng thái: `ARMED`, `EARNED`, `UNLOCKED`. Một Block luôn ở đúng m�
 
 ```
 ARMED    ──[triggerMet]──────────────▶ EARNED
-EARNED   ──[creditExpired|dayRollover|userReset]──▶ ARMED
+EARNED   ──[creditExpired|dayRollover|userReset|habitUndone]──▶ ARMED
 EARNED   ──[redeem]────────────────────▶ UNLOCKED
 UNLOCKED ──[timeUp|tamper]─────────────▶ ARMED
 ```
@@ -54,8 +58,8 @@ thiết bị khác, §2.4: máy này thấy block mở vì máy kia đã redeem 
 | Transition | Guard | Side effect (theo thứ tự) |
 |---|---|---|
 | `ARMED → EARNED` | `triggerMet(progress, trigger)` == true | 1. persist state=EARNED + tạo `EarnedCredit`  2. shield vẫn ON (no-op) |
-| `EARNED → ARMED` | `now_monotonic ≥ credit.expiresAtMonotonic` **hoặc** ngày local đổi so với `progress.windowStart` **hoặc** user bấm "hủy" | 1. persist state=ARMED  2. **reset `HabitProgress` về 0**  3. **reset mọi `ChecklistItem.done = false`**  4. xóa `EarnedCredit`  5. shield vẫn ON |
-| `EARNED → UNLOCKED` | user bấm "Redeem" **và** `dailyUnlockUsedMs + credit.amountMs ≤ dailyCapMs` (I9) | 1. persist state=UNLOCKED + `UnlockSession{startedAtMonotonic=now_mono, startedAtWall=now_wall, durationMs=credit.amountMs}` + ghi `spentEpochDay = tickEpochDay` (ngày của chính tick đó) lên mọi linked item đang done (I24)  2. xóa `EarnedCredit`  3. **gỡ shield** (OFF) |
+| `EARNED → ARMED` | `now_monotonic ≥ credit.expiresAtMonotonic` **hoặc** ngày local đổi so với `progress.windowStart` **hoặc** user bấm "hủy" **hoặc** `habitUndone` (I36: habit item đã xong ở máy này không còn đủ lượng và trigger không còn đạt) | 1. persist state=ARMED  2. **reset `HabitProgress` về 0**  3. **reset mọi `ChecklistItem.done = false`**  4. xóa `EarnedCredit`  5. shield vẫn ON |
+| `EARNED → UNLOCKED` | user bấm "Redeem" **và** `dailyUnlockUsedMs + credit.amountMs ≤ dailyCapMs` (I9) | 1. persist state=UNLOCKED + `UnlockSession{startedAtMonotonic=now_mono, startedAtWall=now_wall, durationMs=credit.amountMs}` + tiêu một phần mở khóa của mọi habit item đủ lượng (I24)  2. xóa `EarnedCredit`  3. **gỡ shield** (OFF) |
 | `UNLOCKED → ARMED` | `elapsedMonotonic ≥ session.durationMs` (timeUp) **hoặc** `tamperDetected` (I3) | 1. persist state=ARMED  2. cộng thời gian đã dùng vào `dailyUnlockUsedMs`  3. reset `HabitProgress` + `ChecklistItem.done` (như EARNED→ARMED)  4. **áp lại shield** (ON) |
 
 `triggerMet`:
@@ -110,8 +114,12 @@ Ngoài sự kiện, user còn sửa cấu hình block (lớp app gọi `WorldSto
 `HARDCORE`. Sửa chỉ làm chặt hơn thì áp dụng ngay. `BlockEdits.loosens(old, new)` là định nghĩa
 chuẩn (bỏ target, giảm timer, `AND → OR`, đổi habit app, tăng thời gian mở khóa / TTL / hạn mức,
 giảm độ dài lockdown, đổi lịch, `HARDCORE → SOFT`, đổi mode hay loại trigger). Ngoài ra cũng
-là nới lỏng: xóa block, xóa một mục checklist, đổi `linkedDay`/`countsGoal` của linked item,
-tăng `dailyCapMs`, và bắt đầu Pause (I25). Với các luật mới: thêm một `exceptSites`, tắt hay
+là nới lỏng: xóa block, xóa một mục checklist, đổi `linkedDay`/`countsGoal` của habit item,
+tăng `dailyCapMs`, và bắt đầu Pause (I25). Với habit (`BlockEdits.habitLoosens`, chỉ khi có block
+dùng nó): phần mở khóa (I36) nhỏ đi, đổi `kind`, hay tần suất `freqNum/freqDen` của habit `CHECK`
+thấp đi (Loop tự điền nhiều ngày hơn). Xóa habit **không** nới lỏng: habit item của nó ở lại và
+không bao giờ xong nữa (I36), muốn bỏ thì sửa block. Sửa habit ở xrnloops hay web app (§2.5) không
+qua guard: đó là app theo dõi của chính user, như trước khi gộp. Với các luật mới: thêm một `exceptSites`, tắt hay
 tăng `sessionMs`, giảm `sessionBreakMs`, chuyển `perDevice` sang `true` (mỗi máy có nguyên hạn
 mức), bỏ hay đổi một khung lịch (I30). Ở Settings: cụm từ override ngắn hơn, giảm
 `overrideWaitMs`, tăng `overrideGrantMs` hay `overridesPerDay` (`BlockEdits.settingsLoosen`). Ngoại lệ duy nhất: lockdown **không đang chạy** thì
@@ -128,8 +136,9 @@ credit, session, lockdown, `pause`, `lastPauseEpochDay`, `settings`, nhật ký 
 (`unlockLog`, I28), lượng ALLOWANCE đã dùng hôm nay và lượt dùng liên tục của từng thiết bị
 (I19, I32), override đang chạy và nhật ký override hôm nay (I34). Chỉ thời gian
 **wall** đi qua máy khác: mọi mốc monotonic bị đặt 0 khi chiếu và được neo lại khi nhận (như I8).
-**Không** chung: `done` của linked item (mỗi máy tự suy từ Loop, để máy có dữ liệu cũ không lật
-qua lật lại), tiến độ timer HABIT, foreground, `appliedShield`, override đang chờ (`pendingOverride`).
+**Không** chung qua đây: habit và habit entry (đi qua habit server, §2.5), `done` của habit item
+(mỗi máy tự suy từ entry của nó, I36; `spentEpochDay`/`spentAmount` thì chung), tiến độ timer
+HABIT, foreground, `appliedShield`, override đang chờ (`pendingOverride`), focus run (`focus`, I37).
 
 **Một vòng đồng bộ:** đọc bản của server → `SharedStateMerged(base, remote)` → engine trộn **ba
 chiều** bản chiếu hiện tại với `remote`, so với `base` (bản hai bên đã thống nhất lần trước; null ở
@@ -143,7 +152,7 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | lockdown | kết thúc muộn hơn; một bên xóa → bên còn |
 | pause | bắt đầu sớm hơn; một bên null → bên còn; `lastPauseEpochDay` lấy lớn hơn |
 | block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn) |
-| checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; sửa vs xóa → giữ |
+| checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ |
 | settings | từng trường: `dailyCapMs`, `skewToleranceMs`, `overrideGrantMs`, `overridesPerDay` lấy nhỏ hơn; `unlockWarningMs`, `overrideWaitMs` lấy lớn hơn; `overridePhrase` lấy cái dài hơn; `showClock` lấy `false` |
 | `unlockLog` | ngày lớn hơn thắng cả; cùng ngày → hợp, mỗi khóa lấy max |
 | allowance | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32) |
@@ -152,9 +161,36 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 
 Nhận kết quả (I27): credit/session/lockdown/pause mới được neo monotonic theo wall; `state` của
 block suy ra lại (có session → `UNLOCKED`, có credit → `EARNED`, không → `ARMED`; mode khác HABIT
-luôn `ARMED`); rời EARNED/UNLOCKED theo cách này thì reset như I10; vào `UNLOCKED` theo cách này
-thì ghi `spentEpochDay = tickEpochDay` lên linked item đang done ở máy này (I24). Sau đó sweep chạy như
-mọi sự kiện. Test: `SharedStateTest` (bảng trên), I26–I28.
+luôn `ARMED`); rời EARNED/UNLOCKED theo cách này thì reset như I10; vào `UNLOCKED` theo cách này thì habit item mà máy đã redeem đã tiêu
+(`spentEpochDay`/`spentAmount` đổi qua lần trộn) **không** tiêu thêm, còn item nó không tiêu (có thể
+nó chưa có entry mới) thì tiêu ở đây như redeem (I24), để một lần tick không trả cho hai lần mở. Sau đó sweep chạy như mọi sự kiện. Test: `SharedStateTest` (bảng trên), I26–I28.
+
+### 2.5 Habit server: danh sách habit chung
+
+Habit và entry đi qua **habit server** (`xrnloops-sync`, trước là server của xrnloops), không qua
+`xrnrule-sync`: mỗi habit và mỗi (habit, ngày) là một bản ghi riêng có `mtime` và `seq` của server,
+và người viết sau thắng theo từng bản ghi. xrnloops (đến khi gộp xong) và web app habit cũng ghi
+vào đây theo cách đó. xrnrule thì ghi kèm `baseSeq` (bản nó dựa vào): server chỉ nhận nếu đó vẫn
+là bản đang lưu, không thì trả bản mới hơn để trộn lại (I38). Server giữ các trường mà người viết
+không gửi (`icon`, `timer` mà xrnloops không biết).
+
+**Một vòng:** đọc các bản ghi mới hơn `World.habitSyncSeq` (theo trang) → `HabitServerPulled` (engine
+trộn từng bản ghi, I38) → đẩy mọi bản ghi `dirty` kèm `baseSeq` → `HabitServerPushed` (bản được
+nhận thì sạch, bản bị từ chối thì trộn lại) → còn `dirty` thì đẩy lại (có giới hạn số lần). Lớp
+ngoài chọn lúc chạy; engine chỉ nhận hai sự kiện đó. Ngày gửi lên là ngày habit (`YYYY-MM-DD`).
+
+**Server lùi lại** (khôi phục từ bản sao lưu): server có một `epoch` (số ngẫu nhiên, lưu cùng dữ liệu).
+Máy gửi kèm `epoch` nó biết; máy nào đã đọc quá `seq` của server (`since > seq`) mà vẫn cùng `epoch` thì
+server đổi `epoch` mới, nên **mọi** máy đều biết, kể cả máy mà `seq` server đã vượt lại (do máy khác gửi
+lại bản bị mất). `World.habitServerEpoch` khác `epoch` server trả (hoặc server không có epoch mà trả `seq`
+nhỏ hơn số máy này đã đọc) → lớp ngoài
+đọc lại **toàn bộ** từ 0 rồi gửi một `HabitServerPulled(full = true)` với mọi bản ghi; engine trộn
+như thường, trừ: bản ghi sạch mà máy này đã thấy ở `seq` lớn hơn bản server giờ có (server mất bản đó
+khi khôi phục) → giữ bản ở máy này, `dirty`, `seq` = của server (để đẩy lại thắng), và bản ghi máy này
+có mà server không có → `dirty`, `seq = 0` (đẩy lại); tombstone mà server không có habit → bỏ. Rồi
+`habitSyncSeq = seq` của server (có thể nhỏ hơn trước). Giới hạn đã biết: habit xóa sau bản sao lưu
+mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombstone đã gửi); xóa lại là xong. **Mất file entry ở máy này** (hỏng, bị xóa):
+`habitSyncSeq = 0`, đọc lại hết.
 
 ---
 
@@ -173,7 +209,7 @@ mọi sự kiện. Test: `SharedStateTest` (bảng trên), I26–I28.
 | **I9** | `redeem` bị từ chối nếu `usedToday + amount > dailyCapMs` (mặc định 60 phút), với `usedToday = dailyUnlockUsedMs + Σ unlockLog` của ngày `dailyUsageEpochDay` (0 nếu là ngày khác; `dailyUnlockUsedMs` chỉ còn cho dữ liệu cũ, xem I28). Block ở lại EARNED. | `dailyUsed=58phút, credit=5phút, cap=60 → redeem → vẫn EARNED, reason=CAP_REACHED` |
 | **I10** | Bất kỳ transition nào về ARMED → `HabitProgress` reset (0 / windowStart=today) **và** mọi `ChecklistItem.done=false`, `doneAtMonotonic=null`. | `checklist 3/3 done → EARNED → creditExpired → ARMED → assert 0/3 done` |
 | **I11** | CHECKLIST đủ ngưỡng ⟺ `doneCount ≥ (requiredAmount==-1 ? size : requiredAmount)` và `size > 0`. Checklist rỗng không bao giờ đủ ngưỡng. | bảng: (size,req,done)→expected; gồm ca size=0 |
-| **I12** | `toggleItem(itemId, done)` khi block ở EARNED hoặc UNLOCKED là **no-op** (không đổi state, không đổi `done`). Chỉ có tác dụng ở ARMED. | `EARNED → toggleItem(false) → item vẫn done, state vẫn EARNED` |
+| **I12** | `toggleItem(itemId, done)` khi block ở EARNED hoặc UNLOCKED là **no-op** (không đổi state, không đổi `done`). Chỉ có tác dụng ở ARMED. (Habit item không toggle được; bỏ tick habit ở EARNED thì xem I36.) | `EARNED → toggleItem(false) → item vẫn done, state vẫn EARNED` |
 | **I13** | `windowStart` của `HabitProgress` là **đầu ngày local** (00:00 theo `ZoneId` thiết bị). "Day rollover" so sánh `localDate(now_wall) != localDate(windowStart)`. | `windowStart = hôm qua 23:59 → tick lúc 00:01 hôm nay → ARMED + reset` |
 | **I14** | Nếu `trigger.type == CHECKLIST` mà block **không có** ChecklistItem nào → block coi như **không hợp lệ để ARMED-đủ-ngưỡng**; UI phải chặn tạo block kiểu này. Engine: `triggerMet` trả false. | `checklist rỗng → triggerMet == false mãi mãi` |
 | **I15** | `trigger.type == COMBINED`: `triggerMet` theo `combineMode` — `AND` cần `timerMet && checklistMet`, `OR` cần `timerMet \|\| checklistMet`, bất kể thứ tự hoàn thành (tick checklist trước hay chạy hết timer trước đều được). Cả hai đường dẫn hoàn thành (toggle checklist item, timer tick) đều phải gọi `triggerMet` theo cùng công thức này. | `i15_combinedAndRequiresBoth`: chỉ xong checklist hoặc chỉ xong timer → vẫn ARMED; xong cả hai (theo bất kỳ thứ tự nào) → EARNED. `i15_combinedOrRequiresEither`: xong một trong hai → EARNED ngay. |
@@ -184,11 +220,11 @@ mọi sự kiện. Test: `SharedStateTest` (bảng trên), I26–I28.
 | **I20** | `SCHEDULE`: đang chặn ⟺ `scheduleActive` (ngày trong `activeDays` và giờ trong `activeWindow`; window có `start > end` là vắt qua nửa đêm). Window vắt qua nửa đêm **thuộc về ngày nó bắt đầu**: phần sau 00:00 xét ngày hôm trước có trong `activeDays` không. Không có cách mở khóa; chỉ thời gian trôi. | `i20_scheduleBlocksOnlyInsideWindow`: window 09:00–17:00 → 08:59 không chặn, 09:00 chặn, 17:00 hết chặn; window 22:00–06:00 chặn lúc 23:00 và 05:00. `i20_overnightWindowBelongsToItsStartDay`: chỉ Thứ Sáu 23:00–07:00 → chặn Thứ Bảy 02:00, không chặn Thứ Sáu 02:00. |
 | **I21** | `LOCKDOWN`: `StartLockdown` tạo `Lockdown{startedAtMonotonic=now_mono, startedAtWall=now_wall, durationMs=block.lockdownMs}` (no-op nếu đang chạy). Còn lại = `durationMs − (now_mono − startedAtMonotonic)` — chỉnh **wall** clock không rút ngắn được. Hết giờ → sweep xóa Lockdown, hết chặn. Rebuild (I8) re-anchor `startedAtMonotonic` từ delta wall như UnlockSession. | `i21_lockdownIgnoresWallClockAndEnds`: start 1h → đẩy wall +5h, mono +1 phút → vẫn chặn; mono tới 1h → hết chặn, Lockdown bị xóa. |
 | **I22** | Gộp: target bị chặn ⟺ có block `ALLOWANCE`/`SCHEDULE`/`LOCKDOWN` phủ nó **đang chặn**, **hoặc** (có block `HABIT` phủ nó, không cái nào `UNLOCKED`, và ít nhất một cái `enabled && scheduleActive`). Unlock của HABIT **không** gỡ được chặn của các mode kia. I6 vẫn đúng cho phần HABIT. | `i22_habitUnlockDoesNotLiftStrictBlock`: cùng target, HABIT ở UNLOCKED + SCHEDULE đang trong giờ → vẫn chặn; ngoài giờ → không chặn. |
-| **I23** | Linked item (`externalHabitId != null`): `ToggleChecklistItem` trên nó là **no-op** — chỉ app ngoài mới xác nhận được. `ExternalHabitsSynced(epochDay, doneHabitIds, doneYesterdayHabitIds)` bị bỏ qua nếu `epochDay != epochDay(now)` (kết quả cũ chạy đua qua nửa đêm). Các tập là của **ngày theo app ngoài** `trackerEpochDay` (mặc định = `epochDay`) và ngày trước đó: app ngoài có thể kéo dài ngày qua nửa đêm (Loop "ngày bắt đầu lúc 3 giờ sáng"), khi đó tick lúc 1 giờ sáng thuộc về ngày hôm trước. Nếu không bị bỏ qua: với mọi block `HABIT` đang `ARMED`, mỗi linked item có `tickDay = trackerEpochDay` (`TODAY`) hoặc `trackerEpochDay − 1` (`YESTERDAY`), `tickEpochDay = tickDay` nếu `externalHabitId ∈ S` (không thì null), và `done = tickEpochDay != null && spentEpochDay != tickEpochDay`, với `S` chọn theo `linkedDay` và `countsGoal`: `doneHabitIds` / `doneYesterdayHabitIds`, hoặc `goalMetHabitIds` / `goalMetYesterdayHabitIds` khi `countsGoal` (bỏ tick ở app ngoài thì item cũng bỏ tick), rồi kiểm `triggerMet` theo đúng công thức của toggle (I11/I15). Block `EARNED`/`UNLOCKED`: no-op, như I12. | `i23_manualToggleIgnoredOnLinkedItem`, `i23_syncTicksLinkedItemAndEarns`, `i23_syncUnticksWhileArmed`, `i23_syncForAnotherDayIsIgnored`, `i23_syncIgnoredUnlessArmed`, `i23_yesterdayItemCountsYesterdaysTick`, `i23_goalItemCountsGoalMetDays`, `i23_tickAfterMidnightCountsForTheTrackersDay`. |
-| **I24** | Một lần tick ở app ngoài trả cho **tối đa một lần mở khóa mỗi block**: `EARNED → UNLOCKED` (redeem) ghi `spentEpochDay = tickEpochDay` (ngày của chính tick đó theo app ngoài; item cũ chưa có `tickEpochDay` thì `today`) lên mọi linked item đang done; về lại ARMED (I10) xóa `done` nhưng **giữ** `spentEpochDay` và `tickEpochDay`, nên sync sau đó không tick lại được bằng tick của cùng ngày đó, kể cả khi đã qua nửa đêm mà ngày của app ngoài chưa sang; app hiện item đó là "đã dùng" (`tickEpochDay == spentEpochDay`) thay vì chưa tick. Ghi lúc redeem chứ **không** lúc earn: credit hết hạn (I1) hoặc user hủy khi chưa dùng thì tick chưa bị tiêu, sync kế tiếp kiếm lại được. Sang ngày mới thì tick lại được. | `i24_externalTickEarnsOncePerDay`: earn → redeem → hết giờ → sync cùng habit → item vẫn chưa tick, block vẫn ARMED. `i24_expiredCreditDoesNotSpendTick`. `i24_nextDaySameHabitCanEarnAgain`. `i24_spentTickIsStillKnownAsTicked`. `i24_eveningTickDoesNotPayAgainAfterMidnight`. `i24_yesterdayItemSpendsYesterdaysTick`. |
+| **I23** | Habit item (`habitId != null`): `ToggleChecklistItem` trên nó là **no-op**. Ngày của item `d` = ngày habit hôm nay (`TODAY`) hoặc hôm qua (`YESTERDAY`). Lượng của item trong ngày `d`: habit `CHECK` → 1 nếu entry ngày `d` là `YES_MANUAL`, hoặc `countsGoal` và luật tự điền của Loop (`LoopRules.computeEntries`, chỉ với `freqNum/freqDen < 1`) cho `YES_AUTO` ở ngày `d`; không thì 0 (`SKIP` = 0). Habit số `AT_LEAST` → `max(0, value)` cộng phần đang chạy của focus run nếu run thuộc ngày `d` (I37). `AT_MOST` → không bao giờ xong. Sweep đổi linked item cũ (`externalHabitId`) thành habit item: `habitId = externalHabitId`, giữ `linkedDay`, `countsGoal`, `spentEpochDay` (`spentAmount = 1` nếu có). | `i23_manualToggleIgnoredOnHabitItem`, `i23_yesterdayItemCountsYesterdaysTick`, `i23_goalItemCountsAutomaticTicks`, `i23_dayStartsAtTheTrackersHour`, `i23_linkedItemsBecomeHabitItems`. |
+| **I24** | Redeem (`EARNED → UNLOCKED`) tiêu đúng **một phần mở khóa** `u` (I36) của mọi habit item có `available ≥ u`, tính từ entry chứ không theo `done` (block nhận `EARNED` từ máy khác chưa từng được tính item ở máy này): `spentAmount = spentOn(d) + u`, `spentEpochDay = d` (ngày của item, I23); phần dư tính cho lần sau. Ghi lúc redeem chứ **không** lúc earn: credit hết hạn (I1) hoặc user hủy khi chưa dùng thì chưa tiêu gì, kiếm lại được ngay. Về ARMED (I10) giữ `spentEpochDay`/`spentAmount`. Sang ngày habit mới thì kiếm lại được; tick buổi tối không trả lại lần nữa sau nửa đêm nếu ngày habit chưa sang. | `i24_checkOpensEachBlockOncePerDay`, `i24_expiredCreditDoesNotSpend`, `i24_nextDayCanEarnAgain`, `i24_eveningTickDoesNotPayAgainAfterMidnight`, `i24_yesterdayItemSpendsYesterdaysTick`, `i24_redeemSpendsOneUnitAndKeepsTheRest`. |
 | **I25** | `StartPause(durationMs)` tạo `Pause{startedAtMonotonic, startedAtWall, durationMs}` và ghi `lastPauseEpochDay = today`; no-op nếu đang nghỉ hoặc hôm nay đã nghỉ. Trong lúc nghỉ, các block `SOFT` không phải `LOCKDOWN` coi như không chặn (bỏ khỏi phép gộp I22); block `HARDCORE` và lockdown vẫn chặn. Còn lại = `durationMs − (now_mono − startedAtMonotonic)` như I21; hết giờ → sweep xóa `Pause`; `EndPause` xóa ngay. Rebuild (I8) re-anchor như Lockdown. Accrual ALLOWANCE vẫn cộng lúc nghỉ (đó là dùng thật). | `i25_pauseLiftsSoftBlocksOnly`, `i25_pauseEndsAndIsOncePerDay`, `i25_pauseSurvivesRebootViaWallDelta`. |
 | **I26** | `SharedStateMerged(base, remote)` trộn ba chiều (§2.4): khóa chỉ một bên đổi so với `base` lấy giá trị bên đó, kể cả khi bên đó **xóa** khóa; hai bên đổi khác nhau → theo bảng §2.4. Credit đã dùng hay hết hạn ở một máy không bao giờ sống lại vì máy kia chưa biết. | `i26_creditUsedElsewhereIsNotResurrected`: base có credit, remote đã redeem (bỏ credit, thêm session) → máy này UNLOCKED, không còn credit. `i26_offlineDoubleRedeemKeepsLaterSession`. `i26_sessionEndedElsewhereEndsHere` (vd máy kia phát hiện tamper). |
-| **I27** | Nhận trạng thái chung: mốc monotonic mới = `now_mono − (now_wall − startedAtWall)` (không báo tamper giả); `state` suy từ session/credit; rời EARNED/UNLOCKED → reset như I10; vào UNLOCKED → `spentEpochDay = tickEpochDay` cho linked item đang done ở máy này (I24); `done` và `tickEpochDay` của linked item **không bao giờ** lấy từ máy khác. | `i27_adoptedSessionRunsOutOnTime`, `i27_adoptedUnlockSpendsLocalTick`, `i27_linkedDoneIsNeverShared`. |
+| **I27** | Nhận trạng thái chung: mốc monotonic mới = `now_mono − (now_wall − startedAtWall)` (không báo tamper giả); `state` suy từ session/credit; rời EARNED/UNLOCKED → reset như I10; vào UNLOCKED → habit item mà máy đã redeem đã tiêu thì giữ đúng phần đó, item nó không tiêu thì tiêu ở đây như redeem (I24); `done` của habit item **không bao giờ** lấy từ máy khác. | `i27_adoptedSessionRunsOutOnTime`, `i27_adoptedUnlockSpendsHereWhatTheRedeemerDidNot`, `i27_habitItemDoneIsNeverShared`. |
 | **I28** | Thời gian mở khóa đã dùng hôm nay là `unlockLog`: session kết thúc (hết giờ hay tamper) ghi `unlockLog["blockId@startedAtWall"] = consumed`, nên hai máy cùng kết thúc một session chung chỉ tính **một lần**. Qua ngày mới thì xóa. | `i28_sharedSessionCountsOnceTowardCap`: hai máy đều kết thúc session 5 phút → trộn → `usedToday == 5 phút`. |
 | **I29** | `block.targetDesktopApps` là target như `targetPackages`: nằm trong `blockedPackages`, foreground khớp thì bị chặn, ALLOWANCE/timer cộng giờ, và bỏ một desktop app là nới lỏng (§2.3). | `i29_desktopAppTargetsActLikePackages`. |
 | **I30** | `Schedule.moreWindows`: thêm khung giờ, mỗi khung có ngày riêng. `scheduleActive` ⟺ khung chính (`activeDays` + `activeWindow`) **hoặc** bất kỳ khung nào trong `moreWindows` đang active, mỗi khung theo luật I20 (vắt qua nửa đêm thuộc về ngày bắt đầu). | `i30_anyScheduleWindowCounts`: 00:00–14:00 mọi ngày + 18:00–22:00 mọi ngày → chặn 10:00 và 19:00, không chặn 15:00 và 23:00. |
@@ -196,6 +232,11 @@ mọi sự kiện. Test: `SharedStateTest` (bảng trên), I26–I28.
 | **I32** | Luật liên tục (`ALLOWANCE`, `sessionMs > 0`): mỗi máy giữ `RunUse(ms, lastActiveWall, breakUntilWall)` trong `runs`. Accrual (cùng điều kiện như I19): nếu `now_wall − lastActiveWall ≥ sessionBreakMs` thì `ms` về 0 trước khi cộng (nghỉ đủ lâu = đã nghỉ, kể cả nghỉ tự nguyện); cộng delta; `lastActiveWall = now_wall`. "Liên tục đã dùng" = `ms` của máy này + (nếu không `perDevice`) `ms` của máy khác có `now_wall − lastActiveWall < sessionBreakMs`. Khi ≥ `sessionMs` → `breakUntilWall = now_wall + sessionBreakMs`. Block chặn khi `now_wall < breakUntilWall` của máy này, hoặc của máy khác nếu không `perDevice`. Override (I34) **không** gỡ được lúc nghỉ bắt buộc. `dailyAllowanceMs = 0` ⟺ không có hạn mức ngày, chỉ có luật liên tục. | `i32_rowRuleForcesABreak`: 15 phút liên tục / nghỉ 15 → phút 15 bị chặn, 15 phút sau mở lại với lượt mới. `i32_restingLongEnoughStartsAFreshRow`. `i32_rowCountsAcrossDevices`. |
 | **I33** | `block.perDevice`: hạn mức ngày (I19) và luật liên tục (I32) chỉ tính phần của máy này; nghỉ bắt buộc của máy khác không chặn ở đây; override (I34) chỉ mở trên máy đã mua (`OverrideGrant.deviceId`). Mặc định `false`: các máy dùng chung. | `i33_perDeviceLimitIgnoresOtherDevices`. |
 | **I34** | Override (mua thêm phút): `BeginOverride(blockIds)` chỉ nhận khi **mọi** block đang chặn target là `SOFT`, mode `ALLOWANCE`/`SCHEDULE`, không đang nghỉ bắt buộc (I32), và còn lượt hôm nay (`overridesPerDay` mỗi block, đếm qua `overrideLog` chung); ghi `pendingOverride` (chỉ ở máy này). `ClaimOverride(phrase)` nhận khi đã chờ ≥ `overrideWaitMs` theo monotonic và chưa quá `overrideWaitMs + 10 phút`, cụm từ khớp `overridePhrase` (bỏ dấu, không phân biệt hoa thường, gộp khoảng trắng), và điều kiện trên vẫn đúng; tạo `OverrideGrant` cho từng block (`durationMs = overrideGrantMs`, đếm monotonic như lockdown, re-anchor như I8/I27) và ghi `overrideLog["blockId@startedAtWall"]`. Lúc grant còn, block coi như không chặn (trừ nghỉ bắt buộc). Qua ngày mới `overrideLog` về rỗng. | `i34_overrideNeedsTheWaitAndThePhrase`, `i34_overrideLiftsLimitButNotABreak`, `i34_overridesPerDayAreShared`, `i34_habitOrLockdownIsNotOverridable`. |
+
+| **I35** | Ghi habit (ngày habit, §1). `LogHabit(habitId, amount)`: habit không có → no-op. Habit số: entry hôm nay = `max(0, value cũ + amount)` (chưa có hay `UNKNOWN` = 0). Habit `CHECK`: `amount > 0` → `YES_MANUAL`, `amount < 0` → `NO`. `SetHabitEntry(habitId, epochDay, value, notes)`: đặt entry của một ngày bất kỳ `≤` hôm nay (habit `CHECK`: `NO`/`YES_MANUAL`/`SKIP`/`UNKNOWN`; habit số: `≥ 0`). Không đổi gì (cùng `value` và `notes`) → no-op. Mọi lần ghi ở máy này: `mtime = now_wall`, `dirty = true`, và lần ghi đầu tiên kể từ lần đồng bộ trước giữ `baseValue` = giá trị trước đó (I38). Không bao giờ tỉa: lịch sử là của biểu đồ. | `i35_logAddsToTodaysEntry`, `i35_checkLogsYesOrNo`, `i35_undoNeverGoesBelowZero`, `i35_setEntryEditsAPastDay`, `i35_writesAreMarkedForSync`. |
+| **I36** | Phần mở khóa `u` của habit: `CHECK` → 1; habit số `AT_LEAST` → `⌈goal / freqDen⌉` (ít nhất 1); `AT_MOST` → không mở. Sau mọi sự kiện (sau sweep), với mọi block `HABIT` đang `ARMED`, mỗi habit item có `available = lượng(d) − spentOn(d)` (I23) và `done = habit còn && available ≥ u`; rồi kiểm `triggerMet` (I11/I15) → `EARNED`. Habit bị xóa → item ở lại và không bao giờ xong. Vậy habit `CHECK` mở mỗi block một lần mỗi ngày; habit số thì làm thêm một `u` nữa để mở lại. Ghi ở máy kia (qua habit server, I38) cũng làm block ở đây `EARNED`. Ở `EARNED` cũng tính lại `done` của habit item; habit item **đã xong ở máy này** mà không còn đủ lượng (bỏ tick, bớt lượng, ở đâu cũng vậy) và trigger không còn đạt → về `ARMED` như user hủy (I10), rồi tính lại habit item. Không vậy thì bỏ tick xong vẫn mở được, mà không tiêu gì (I24), rồi tick lại kiếm thêm lần nữa. Chỉ khi chính máy này thấy item từ xong thành chưa xong: block nhận `EARNED` từ máy khác lúc entry ở đây chưa tới thì không bị lấy lại. | `i36_habitItemEarnsWhenGoalMet`, `i36_weeklyGoalOpensPerDaysShare`, `i36_atMostHabitNeverOpens`, `i36_deletedHabitKeepsTheBlockClosed`, `i36_adoptedUnlockDoesNotSpendAgain`, `i36_otherDevicesWritesCount`, `i36_untickAfterEarnTakesTheEarnBack`, `i36_untickDoesNotTakeBackWhatOtherItemsStillEarn`, `i36_adoptedEarnIsNotTakenBackBeforeTheEntriesArrive`. |
+| **I37** | Focus run (chỉ habit `TIMER`, chỉ ở máy này): `StartFocus(habitId)` — run của habit khác đang có thì fold rồi bỏ; run của cùng habit đang dừng thì chạy tiếp; đang chạy thì no-op. Đang chạy: `FocusRun{habitId, epochDay = ngày habit, startedAtMonotonic=now_mono, startedAtWall=now_wall, running=true}`; phần đang chạy = `(now_mono − startedAtMonotonic) / 60` phần nghìn phút (monotonic: chỉnh giờ không ăn gian được). **Fold** = ghi phần đang chạy vào entry ngày `epochDay` của run như `LogHabit` (I35) rồi dời `startedAtMonotonic` tới đúng phần đã ghi (phần lẻ dưới 60 ms ở lại). `PauseFocus(breakMs)`: fold, `running=false`; `breakMs > 0` → `resumeAtWall = now_wall + breakMs`, sweep tự chạy lại khi tới giờ. `EndFocus`: fold rồi xóa run. Sweep: run đang chạy mà `epochDay` khác ngày habit → fold vào ngày của nó, đoạn mới thuộc ngày mới. Rebuild (I8) re-anchor `startedAtMonotonic` từ delta wall như session. Phần đang chạy tính vào lượng (I23), nên block có thể `EARNED` giữa lúc chạy. | `i37_focusCountsMonotonicAndFoldsOnPause`, `i37_focusEarnsWhileRunning`, `i37_breakResumesByItself`, `i37_focusSurvivesReboot`, `i37_focusAcrossMidnightFoldsIntoItsDay`, `i37_onlyTimerHabitsFocus`. |
+| **I38** | Trộn với habit server (§2.5). `HabitServerPulled(habits, entries, seq, dayStartHour)`: mỗi bản ghi entry — ở máy này không có hay không `dirty` → lấy bản server (`dirty = false`). `dirty` và habit là số → `value = max(0, server + (local − baseValue))` (phần đã thêm ở máy này cộng lên bản mới; `baseValue` null = 0), `baseValue = server`, `notes` theo `mtime` muộn hơn, vẫn `dirty`. `dirty` và `CHECK` → `mtime` muộn hơn thắng (máy này thắng thì vẫn `dirty`, `baseValue = server`). Mọi trường hợp: `seq = seq server`. Habit: như entry `CHECK`, `editedAtWall` so với `mtime`; server báo xóa → bỏ habit (trừ khi máy này đã sửa sau đó); habit xóa ở máy này (`habitTombstones`) mà server đã có bản sửa mới hơn bản nó dựa vào → sửa thắng xóa, habit trở lại. Rồi `habitSyncSeq = seq`, `habitDayStartHour = dayStartHour`. `HabitServerPushed(sent, accepted, rejected)`: bản được nhận mà ở máy này **chưa đổi** từ lúc gửi → `dirty = false`, `baseValue = null`, `seq` mới (tombstone thì bỏ); đã đổi tiếp → giữ `dirty`, `seq` mới, `baseValue = giá trị đã gửi`. Bản bị từ chối → trộn như `HabitServerPulled`. `habitServerEpoch = epoch` khi server có. `full = true` (server lùi lại, §2.5): bản sạch mà máy này đã thấy ở `seq` lớn hơn → giữ bản này, `dirty`; bản server không có → `dirty`, `seq = 0`; tombstone server không có → bỏ; `habitSyncSeq = seq` (không lấy max). | `i38_serverRecordsAreTakenWhenNothingChangedHere`, `i38_amountsAddedOnTwoDevicesAddUp`, `i38_laterCheckWins`, `i38_pushCleansOnlyWhatWasSent`, `i38_rejectedWriteIsRebased`, `i38_editBeatsDelete`, `i38_dayStartHourComesFromTheServer`, `i38_restoredServerGetsBackWhatItLost`. |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 
@@ -208,6 +249,7 @@ overridePhrase     = "I choose to keep scrolling"   // I34
 overrideWaitMs     = 45_000                  // I34
 overrideGrantMs    = 10 * 60 * 1000          // I34
 overridesPerDay    = 2                       // I34, mỗi block
+focusBreakMs       = 5 * 60 * 1000           // I37, nút "Nghỉ 5 phút"
 ```
 
 ---
@@ -261,14 +303,20 @@ sealed interface BlockEvent {
     data class UserResetEarned(val blockId: String)         : BlockEvent
     data class TimerControl(val blockId: String, val running: Boolean)     : BlockEvent  // nút "Bắt đầu"
     data class StartLockdown(val blockId: String)           : BlockEvent   // I21
-    data class ExternalHabitsSynced(val epochDay: Long, val doneHabitIds: Set<String>, val doneYesterdayHabitIds: Set<String> = emptySet(),
-                                    val goalMetHabitIds: Set<String> = emptySet(), val goalMetYesterdayHabitIds: Set<String> = emptySet()) : BlockEvent  // I23
     data class StartPause(val durationMs: Long = 15 * 60 * 1000) : BlockEvent  // I25
     data object EndPause                                     : BlockEvent   // I25
     data class SharedStateMerged(val base: SharedState?, val remote: SharedState) : BlockEvent  // §2.4, I26/I27
     data class BeginOverride(val blockIds: Set<String>)     : BlockEvent   // I34
     data object CancelOverride                               : BlockEvent   // I34
     data class ClaimOverride(val phrase: String)            : BlockEvent   // I34
+    data class LogHabit(val habitId: String, val amount: Long) : BlockEvent   // I35
+    data class SetHabitEntry(val habitId: String, val epochDay: Long, val value: Long, val notes: String) : BlockEvent  // I35
+    data class HabitServerPulled(val habits: List<HabitRecord>, val entries: List<EntryRecord>, val seq: Long, val dayStartHour: Int?) : BlockEvent  // I38
+    data class HabitServerPushed(val sent: HabitPush, val accepted: HabitAcceptance, val rejectedHabits: List<HabitRecord>,
+                                 val rejectedEntries: List<EntryRecord>) : BlockEvent  // I38
+    data class StartFocus(val habitId: String)              : BlockEvent   // I37
+    data class PauseFocus(val breakMs: Long = 0)            : BlockEvent   // I37
+    data object EndFocus                                     : BlockEvent   // I37
     data object BootOrColdStart                              : BlockEvent
 }
 ```
@@ -278,17 +326,16 @@ sealed interface BlockEvent {
   `pkg` là trình duyệt và lớp Android đọc được host; màn hình tắt ⇒ lớp Android gửi
   `ForegroundChanged(null)` để không cộng giờ lúc máy khóa.
 - `Tick`: kiểm I1 (credit hết hạn), I3 (tamper), UNLOCKED timeUp, phát cảnh báo 30s.
-- `ToggleChecklistItem`: chỉ hiệu lực khi block ARMED (I12) và item không phải linked item (I23);
+- `ToggleChecklistItem`: chỉ hiệu lực khi block ARMED (I12) và item không phải habit item (I23);
   sau khi toggle, kiểm `triggerMet`.
-- `ExternalHabitsSynced`: ảnh chụp đầy đủ các external habit đã xong trong ngày `epochDay` (ngày
-  local của xrnrule) và trong ngày hôm trước (`doneYesterdayHabitIds`, cho linked item
-  `YESTERDAY`). Lớp Android gửi nó khi app ngoài báo có thay đổi, khi service khởi động, khi mở
-  khóa màn hình, khi qua ngày, khi mở app và khi shield hiện ra cho block có linked item. Phải
-  đọc được **cả hai** ngày mới gửi; đọc thất bại thì **không** gửi gì (không được coi "đọc lỗi"
-  là "chưa xong" rồi bỏ tick hàng loạt). Xem I23/I24.
 - `SharedStateMerged`: lớp ngoài (điện thoại: `SharedSync`; laptop: daemon) gửi sau khi đọc server;
   engine trộn và nhận ngay trong `reduce`, dưới mutex của store, nên không chạy đua với sự kiện
   khác. Xem §2.4.
+- `LogHabit` / `SetHabitEntry` / `StartFocus` / `PauseFocus` / `EndFocus`: ghi habit (I35) và đồng
+  hồ tập trung (I37); habit item của mọi block `ARMED` được tính lại sau mọi sự kiện (I36), nên ghi
+  ở máy kia (qua `HabitServerPulled`) cũng làm block ở đây `EARNED`.
+- `HabitServerPulled` / `HabitServerPushed`: một vòng đồng bộ với habit server (§2.5, I38). Đọc
+  thất bại thì lớp ngoài **không** gửi gì; engine không bao giờ coi "không đọc được" là "chưa làm".
 - `BootOrColdStart`: `rebuild()` — xem I8.
 
 ---
@@ -299,8 +346,10 @@ sealed interface BlockEvent {
 - Cách biết trình duyệt đang mở site nào (extension của xrnrule trong trình duyệt, báo host cho
   app/daemon qua `127.0.0.1`) và thống kê thời gian theo website — chi tiết lớp ngoài; engine chỉ
   nhận `site` qua `ForegroundChanged`.
-- Cách đọc habit từ Loop (ContentProvider có quyền `signature` trong bản fork `../xrnloops`, cộng
-  broadcast khi có thay đổi) — chi tiết Android; engine chỉ nhận `ExternalHabitsSynced`.
+- Habit server (`xrnloops-sync`), giao thức HTTP của nó và lúc nào đồng bộ; nhắc nhở, widget, biểu
+  đồ — chi tiết lớp ngoài; engine chỉ nhận `HabitServerPulled`/`HabitServerPushed` (§2.5). Luật
+  điểm số, chuỗi ngày và tự điền của Loop nằm ở `LoopRules` trong `:domain` (port từ Loop, test bằng
+  số liệu test của Loop), dùng chung cho engine (I23) và biểu đồ.
 - Server đồng bộ (`server/xrnrule-sync.py`), giao thức HTTP, lúc nào đồng bộ và cách laptop phát
   hiện app/website — chi tiết lớp ngoài; engine chỉ nhận `SharedStateMerged` (§2.4).
 - Giao diện overlay, layout 3 màn hình — xem brainstorm §5.
@@ -313,6 +362,6 @@ sealed interface BlockEvent {
 ## 7. Ghi chú test
 
 - `:domain` dùng `FakeClock`, `InMemoryPersist`, `RecordingShield` — không JUnit-Android, không Robolectric.
-- Mỗi bất biến I1–I34 có ít nhất một test đặt tên `i01_...` ... `i34_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
+- Mỗi bất biến I1–I38 có ít nhất một test đặt tên `i01_...` ... `i38_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
 - Acceptance của brainstorm §1 map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
   chạy chuỗi sự kiện end-to-end trên engine.

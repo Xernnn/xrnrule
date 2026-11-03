@@ -1,8 +1,12 @@
 package com.xern.xrnrule.desktop
 
 import com.xern.xrnrule.domain.BlockEvent
+import com.xern.xrnrule.domain.HabitChanges
+import com.xern.xrnrule.domain.HabitRecords
+import com.xern.xrnrule.domain.HabitWrite
+import com.xern.xrnrule.domain.HabitWriteResult
 import com.xern.xrnrule.domain.SharedState
-import com.xern.xrnrule.domain.epochDay
+import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -17,10 +21,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import java.io.File
@@ -30,8 +30,6 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
-import java.time.Instant
-import java.time.LocalDate
 import java.util.Base64
 
 /** How the last attempt went, for the local page. */
@@ -193,115 +191,118 @@ class SharedSyncClient(
 }
 
 /**
- * Habit ticks for linked checklist items (I23), from xrnloops-sync's `/api/status` rather than
- * the phone's content provider: today and yesterday, the same four sets `LoopHabits` builds on
- * the phone. Re-read when the habit feed moves (a long-poll), at local midnight and when
- * xrnloops' own day turns, and when an item gets linked. Nothing is sent unless both days were
- * read.
- *
- * "Today" is xrnloops' day: with its "Extend the day past midnight" on, the phone reports that
- * its day starts at 3 am (`dayStartHour`), and until then a tick belongs to the day before.
+ * The laptop's side of the habit server (contract §2.5), the same rounds as the phone's
+ * `HabitSync`: read every record after [World.habitSyncSeq] → [BlockEvent.HabitServerPulled],
+ * send what changed here naming the version it was made from → [BlockEvent.HabitServerPushed].
+ * The server is long-polled, so a tick on the phone or in the web app shows up here within a
+ * second or two.
  */
-class LoopClient(
+class HabitClient(
     private val config: Config,
     private val store: Store,
     private val scope: CoroutineScope,
 ) {
     private val http = Http(config.user, config.password)
+    private val json = HabitRecords.json
+    private val requests = Channel<Unit>(Channel.CONFLATED)
     private val _status = MutableStateFlow<SyncStatus?>(null)
     val status: StateFlow<SyncStatus?> = _status.asStateFlow()
-    private val kicks = Channel<Unit>(Channel.CONFLATED)
-
-    /** The hour xrnloops' day starts, as the server last said. */
-    @Volatile
-    private var dayStartHour = 0
-
-    /** Read the habits again now: an item was just linked. */
-    fun kick() {
-        kicks.trySend(Unit)
-    }
-
-    private fun anyLinked() = store.world.value.checklist.values.any { items -> items.any { it.externalHabitId != null } }
-
-    /** xrnloops' today: until its day-start hour it's still the day before. */
-    private fun loopDay(hour: Int = dayStartHour): LocalDate =
-        Instant.ofEpochMilli(store.clock.nowWallMs()).atZone(store.clock.zone()).minusHours(hour.toLong()).toLocalDate()
 
     fun start() {
         if (!config.syncConfigured) return
-        scope.launch {
-            store.world.map { anyLinked() }.distinctUntilChanged().collect { if (it) kicks.trySend(Unit) }
-        }
         scope.launch(Dispatchers.IO) {
-            var seq = -1L
-            var day = store.clock.epochDay()
-            var tracked = loopDay()
-            while (true) {
+            for (r in requests) {
                 try {
-                    if (!anyLinked()) {
-                        kicks.receive()
-                        continue
-                    }
-                    seq = read()
-                    day = store.clock.epochDay()
-                    tracked = loopDay()
-                    // Wait for a change in the feed, a new day, or a kick (the long-poll ends every 50 s).
-                    while (store.clock.epochDay() == day && loopDay() == tracked && kicks.tryReceive().isFailure) {
-                        val r = http.send("${config.loopUrl}/api/changes?since=$seq&wait=50", timeoutS = 65)
-                        check(r.statusCode() == 200) { "server answered ${r.statusCode()}" }
-                        val page = json.parseToJsonElement(r.body()).jsonObject
-                        if (page["habits"]!!.jsonArray.isNotEmpty() || page["entries"]!!.jsonArray.isNotEmpty()) break
-                        if ((page["dayStartHour"]?.jsonPrimitive?.int ?: 0) != dayStartHour) break
-                        seq = page["seq"]!!.jsonPrimitive.long
-                    }
+                    _status.value = SyncStatus(System.currentTimeMillis(), true, round())
                 } catch (e: Exception) {
                     _status.value = SyncStatus(System.currentTimeMillis(), false, describe(e))
-                    delay(10_000)
+                    delay(5_000)
+                    requests.trySend(Unit)
+                }
+            }
+        }
+        // Local changes: a log, a tick, an edit (after a second, so a run of clicks goes as one).
+        scope.launch {
+            store.world
+                .map { w -> w.habits.count { it.dirty } + w.habitTombstones.size + w.habitEntries.values.count { it.dirty } }
+                .distinctUntilChanged()
+                .collect { dirty ->
+                    if (dirty > 0) {
+                        delay(1_000)
+                        request()
+                    }
+                }
+        }
+        // Remote changes: a long-poll that answers as soon as anything is written.
+        scope.launch(Dispatchers.IO) {
+            request()
+            while (true) {
+                try {
+                    val seq = store.world.value.habitSyncSeq
+                    val page = changes(seq, waitS = 50)
+                    if (page.seq > seq || HabitRecords.wentBack(store.world.value, page) || (page.dayStartHour != null && page.dayStartHour != store.world.value.habitDayStartHour)) {
+                        request()
+                        delay(1_000) // let the round move the seq on before asking again
+                    }
+                } catch (_: Exception) {
+                    delay(10_000) // a round says whether the server is really out of reach
+                    request()
                 }
             }
         }
     }
 
-    /** Reads both days and dispatches them; returns the feed position to wait from. */
-    private suspend fun read(): Long {
-        var loopDay = loopDay()
-        var (seq, todays, hour) = status(loopDay.toString())
-        if (hour != dayStartHour) { // the phone changed when its day starts: that was the wrong date
-            dayStartHour = hour
-            loopDay = loopDay(hour)
-            val again = status(loopDay.toString())
-            seq = again.seq
-            todays = again.habits
+    fun request() {
+        requests.trySend(Unit)
+    }
+
+    private suspend fun round(): String {
+        var world = pull()
+        var sent = 0
+        repeat(4) {
+            val (habits, entries, push) = HabitRecords.pending(world)
+            if (push.isEmpty) return if (sent == 0) "Up to date" else "Sent $sent"
+            val r = http.send("${config.loopUrl}/api/changes", "POST", json.encodeToString(HabitWrite.serializer(), HabitWrite(habits, entries)))
+            check(r.statusCode() == 200) { "server answered ${r.statusCode()}" }
+            val result = json.decodeFromString(HabitWriteResult.serializer(), r.body())
+            sent += result.accepted.habits.size + result.accepted.entries.size
+            world = store.dispatchAndGet(
+                BlockEvent.HabitServerPushed(push, result.acceptance(), result.rejected.habits, result.rejected.entries),
+            )
         }
-        val yesterdays = status(loopDay.minusDays(1).toString()).habits
-        fun ids(habits: List<JsonObject>, key: String) =
-            habits.filter { it[key]!!.jsonPrimitive.boolean }.map { it["uuid"]!!.jsonPrimitive.content }.toSet()
-        store.dispatchAndGet(
-            BlockEvent.ExternalHabitsSynced(
-                epochDay = store.clock.epochDay(),
-                doneHabitIds = ids(todays, "done"),
-                doneYesterdayHabitIds = ids(yesterdays, "done"),
-                goalMetHabitIds = ids(todays, "goal_met"),
-                goalMetYesterdayHabitIds = ids(yesterdays, "goal_met"),
-                trackerEpochDay = loopDay.toEpochDay(),
-            ),
+        throw IOException("the server kept changing; will try again")
+    }
+
+    /** Every record after what the laptop has read, a page at a time. */
+    private suspend fun pull(): World {
+        var world = store.world.value
+        repeat(200) {
+            val page = changes(world.habitSyncSeq)
+            if (HabitRecords.wentBack(world, page)) {
+                // §2.5: the server went back (restored from a backup). Read all of it again and
+                // send back whatever it lost; otherwise nothing it gets until it passes our seq shows here.
+                val all = HabitRecords.readAll(200) { changes(it) }
+                return store.dispatchAndGet(
+                    BlockEvent.HabitServerPulled(all.habits, all.entries, all.seq, all.dayStartHour, full = true, epoch = all.epoch),
+                )
+            }
+            if (HabitRecords.nothingNew(world, page)) return world
+            world = store.dispatchAndGet(BlockEvent.HabitServerPulled(page.habits, page.entries, page.seq, page.dayStartHour, epoch = page.epoch))
+            if (!page.more) return world
+        }
+        return world
+    }
+
+    private fun changes(since: Long, waitS: Int = 0): HabitChanges {
+        val r = http.send(
+            // The epoch the laptop knows: one that has gone back gets everyone a new one (§2.5).
+            "${config.loopUrl}/api/changes?since=$since" + (store.world.value.habitServerEpoch?.let { "&epoch=$it" } ?: "") +
+                if (waitS > 0) "&wait=$waitS" else "",
+            timeoutS = if (waitS > 0) waitS + 15L else 20,
         )
-        _status.value = SyncStatus(System.currentTimeMillis(), true, "Read ${todays.size} habits")
-        return seq
-    }
-
-    private data class DayStatus(val seq: Long, val habits: List<JsonObject>, val dayStartHour: Int)
-
-    private fun status(date: String): DayStatus {
-        val r = http.send("${config.loopUrl}/api/status?date=$date")
         check(r.statusCode() == 200) { "server answered ${r.statusCode()}" }
-        val body = json.parseToJsonElement(r.body()).jsonObject
-        val habits = body["habits"]!!.jsonArray.map { it.jsonObject }.filter { it["countable"]?.jsonPrimitive?.boolean != false }
-        return DayStatus(body["seq"]!!.jsonPrimitive.long, habits, body["dayStartHour"]?.jsonPrimitive?.int ?: 0)
+        return json.decodeFromString(HabitChanges.serializer(), r.body())
     }
-
-    /** All habits, for linking checklist items on the local page. */
-    fun habits(): List<JsonObject> = status(loopDay().toString()).habits
 }
 
 fun describe(e: Exception): String = when (e) {

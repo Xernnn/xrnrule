@@ -13,6 +13,6 @@ class LoopChangedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != LoopContract.ACTION_HABITS_CHANGED) return
         val pending = goAsync()
-        (context.applicationContext as XrnruleApp).container.loop.sync(fromServer = false, onDone = pending::finish) // the change is local to xrnloops
+        (context.applicationContext as XrnruleApp).container.loop.changed(onDone = pending::finish)
     }
 }

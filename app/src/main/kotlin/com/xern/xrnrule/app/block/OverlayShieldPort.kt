@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
@@ -23,10 +24,13 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.xern.xrnrule.app.data.HabitSync
 import com.xern.xrnrule.app.data.SharedSync
 import com.xern.xrnrule.app.data.WorldStore
-import com.xern.xrnrule.app.loop.LoopHabits
+import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.BlockOverlayContent
+import com.xern.xrnrule.app.ui.GoalInfo
+import com.xern.xrnrule.app.ui.goalInfo
 import com.xern.xrnrule.app.ui.freeAtWall
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
@@ -60,7 +64,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class OverlayShieldPort(
     private val context: Context,
     private val store: WorldStore,
-    private val loop: LoopHabits,
+    private val habits: HabitSync,
     private val shared: SharedSync,
     private val onEvent: (BlockEvent) -> Unit,
 ) : ShieldPort {
@@ -77,8 +81,8 @@ class OverlayShieldPort(
     /** Whether a block screen is up; the service syncs faster while it is. */
     val visible: StateFlow<Boolean> = _visible.asStateFlow()
 
-    /** Whether the block screen shows an item ticked in xrnloops. */
-    val showsLinkedItem: Boolean get() = uiState.value?.items?.any { it.externalHabitId != null } == true
+    /** Whether the block screen shows a habit item: a tick anywhere can lift it (I36). */
+    val showsHabitItem: Boolean get() = uiState.value?.items?.any { it.derived } == true
     private var windowOwner: OverlayWindowOwner? = null
     private val uiState = mutableStateOf<OverlayUi?>(null)
 
@@ -104,6 +108,7 @@ class OverlayShieldPort(
         val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
         uiState.value = OverlayUi(
             subject = if (appBlocked) appLabel(foregroundPkg!!) else foregroundSite!!,
+            pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,
             items = block?.let { world.items(it.id) }.orEmpty(),
@@ -119,6 +124,8 @@ class OverlayShieldPort(
             unlockUsedTodayMs = engine.unlockUsedTodayMs(world, clock),
             dailyCapMs = world.settings.dailyCapMs,
             rowBreakRemainingMs = block?.let { engine.rowBreakRemainingMs(world, it, clock) } ?: 0,
+            goals = block?.let { world.goalInfo(it.id, engine, clock) }.orEmpty(),
+            focusHabitId = world.focus?.takeIf { it.running }?.habitId,
             blockerIds = blockerIds,
             overrideRejection = if (blockers.isEmpty()) OverrideRejection.NOT_OVERRIDABLE else engine.overrideRejection(world, blockers, clock),
             overrideReadyAtElapsed = pending?.let { SystemClock.elapsedRealtime() + (it.sinceWall + world.settings.overrideWaitMs - clock.nowWallMs()) },
@@ -128,9 +135,9 @@ class OverlayShieldPort(
         )
         // If the OS dropped our window out from under us, rebuild it.
         if (view != null && view?.isAttachedToWindow != true) hide()
-        // Hitting the shield re-reads Loop, so a missed push or a credit that lapsed unused (I24)
-        // is caught now rather than at the next screen unlock.
-        if (view == null && showsLinkedItem) loop.sync()
+        // Hitting the shield asks the habit server, so a tick made elsewhere is caught now rather
+        // than at the next minute's check.
+        if (view == null && showsHabitItem) habits.request()
         // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
         if (view == null) shared.request()
         show()
@@ -157,19 +164,21 @@ class OverlayShieldPort(
         if (view != null) return
 
         val owner = OverlayWindowOwner().also { it.onCreate() }
-        // Opening Loop moves the foreground off the blocked app, which drops the overlay.
-        val openLoop: ((String) -> Unit)? = loop.launchIntent()?.let {
-            { uuid -> loop.openHabitIntent(uuid)?.let { runCatching { context.startActivity(it) } }; Unit }
-        }
         val composeView = ComposeView(context).apply {
             setContent {
                 BlockOverlayContent(
                     ui = uiState.value,
                     onToggleItem = { id, done -> onEvent(BlockEvent.ToggleChecklistItem(id, done)) },
+                    onLogHabit = { id, amount -> onEvent(BlockEvent.LogHabit(id, amount)) },
+                    onSetHabitEntry = { id, day, value -> onEvent(BlockEvent.SetHabitEntry(id, day, value)) },
+                    // The focus timer is a screen of the app: it comes up over the blocked one.
+                    onFocus = { id ->
+                        onEvent(BlockEvent.StartFocus(id))
+                        runCatching { context.startActivity(AppLinks.focusIntent(context, id)) }
+                    },
                     onSetTimer = { blockId, running -> onEvent(BlockEvent.TimerControl(blockId, running)) },
                     onRedeem = { blockId -> onEvent(BlockEvent.Redeem(blockId)) },
                     onLeave = ::leave,
-                    onOpenLoop = openLoop,
                     onBeginOverride = { ids -> onEvent(BlockEvent.BeginOverride(ids)) },
                     onClaimOverride = { phrase -> onEvent(BlockEvent.ClaimOverride(phrase)) },
                     onCancelOverride = { onEvent(BlockEvent.CancelOverride) },
@@ -206,6 +215,14 @@ class OverlayShieldPort(
             screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             // The override sentence is typed here: keep the field above the keyboard.
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            // From Android 11 an overlay stops short of the status and navigation bars, leaving
+            // the blocked app's own bar colour showing above the shield. Cover the whole screen;
+            // the content keeps clear of the bars itself.
+            // The status bar holds the camera cutout, which a window keeps out of by default.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = 0
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
         }
 
         runCatching { wm.addView(host, layout) }
@@ -233,6 +250,8 @@ class OverlayShieldPort(
     data class OverlayUi(
         /** The blocked app's name, or the blocked site's host. */
         val subject: String,
+        /** The blocked app, for its icon; null for a site. */
+        val pkg: String? = null,
         val isSite: Boolean,
         val block: Block?,
         val items: List<ChecklistItem>,
@@ -262,6 +281,10 @@ class OverlayShieldPort(
         val overridePhrase: String = "",
         val overrideGrantMs: Long = 0,
         val overrideWaitMs: Long = 0,
+        /** The block's habit items, by item id (contract I36). */
+        val goals: Map<String, GoalInfo> = emptyMap(),
+        /** The habit the focus timer is running for, if any (I37). */
+        val focusHabitId: String? = null,
     )
 }
 

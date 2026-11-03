@@ -9,6 +9,7 @@ import android.content.Intent
 import android.text.format.DateFormat
 import androidx.core.app.NotificationCompat
 import com.xern.xrnrule.app.R
+import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.MainActivity
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockState
@@ -32,9 +33,18 @@ class Notifications(private val context: Context) {
     }
 
     /** What the ongoing notification says. [endsInMs] drives a live countdown when set. */
-    data class Status(val title: String, val text: String, val endsInMs: Long? = null)
+    /** [endsInMs] counts down to that moment; [sinceMs] counts up from that long ago. */
+    data class Status(
+        val title: String,
+        val text: String,
+        val endsInMs: Long? = null,
+        val sinceMs: Long? = null,
+        /** Tapping it opens this habit's focus timer instead of the app's first screen. */
+        val focusHabitId: String? = null,
+    )
 
     fun status(world: World, engine: BlockEngine, clock: Clock): Status {
+        focusStatus(world, engine, clock)?.let { return it }
         val pauseMs = engine.pauseRemainingMs(world, clock)
         if (pauseMs > 0) return Status("On a break", "Blocks come back at ${clockTime(pauseMs)}", pauseMs)
 
@@ -61,14 +71,35 @@ class Notifications(private val context: Context) {
         return Status(context.getString(R.string.fgs_notification_title), text)
     }
 
+    /** The focus timer (contract I37), while it runs or is on a break: it's what you're doing. */
+    private fun focusStatus(world: World, engine: BlockEngine, clock: Clock): Status? {
+        val run = world.focus ?: return null
+        val habit = world.habit(run.habitId) ?: return null
+        // Amounts are thousandths of a minute (contract §1): x 60 is ms. The goal is the day's share.
+        val total = engine.habitAmount(world, habit.id, run.epochDay, clock) * 60
+        val left = (habit.unlockUnit ?: habit.goal) * 60 - total
+        val breakLeft = run.resumeAtWall?.let { it - clock.nowWallMs() }
+        return when {
+            run.running && left > 0 -> Status("Focus: ${habit.name}", "Goal at ${clockTime(left)}", endsInMs = left, focusHabitId = habit.id)
+            run.running -> Status("Focus: ${habit.name}", "Goal reached · today's total", sinceMs = total, focusHabitId = habit.id)
+            breakLeft != null -> Status("Focus: ${habit.name} · break", "Back to it at ${clockTime(breakLeft)}", endsInMs = breakLeft, focusHabitId = habit.id)
+            else -> null // paused: nothing running to show
+        }
+    }
+
     fun buildStatus(status: Status): Notification {
         val builder = NotificationCompat.Builder(context, CHANNEL_STATUS)
             .setContentTitle(status.title)
             .setContentText(status.text)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_stat_xrnrule)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setContentIntent(openApp())
+            .setContentIntent(status.focusHabitId?.let(::openFocus) ?: openApp())
+        status.sinceMs?.let { since ->
+            builder.setUsesChronometer(true)
+                .setShowWhen(true)
+                .setWhen(System.currentTimeMillis() - since)
+        }
         status.endsInMs?.let { left ->
             // The chronometer runs on the device's own clock, so anchor it there.
             builder.setUsesChronometer(true)
@@ -81,22 +112,28 @@ class Notifications(private val context: Context) {
 
     /** Re-posts the status notification only when what it says has changed. */
     fun updateStatus(status: Status) {
-        val comparable = status.copy(endsInMs = status.endsInMs?.let { it / 10_000 })
+        // Compared by the moments the clocks count to or from, which stay put while the time passes.
+        val now = System.currentTimeMillis()
+        val comparable = status.copy(
+            endsInMs = status.endsInMs?.let { (now + it) / 10_000 },
+            sinceMs = status.sinceMs?.let { (now - it) / 10_000 },
+        )
         if (comparable == lastStatus) return
         lastStatus = comparable
         nm.notify(STATUS_ID, buildStatus(status))
     }
 
-    fun alert(id: Int, title: String, text: String) {
+    /** [tap] opens the app unless it says otherwise (an update's install confirmation). */
+    fun alert(id: Int, title: String, text: String, tap: PendingIntent = openApp()) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_stat_xrnrule)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
-            .setContentIntent(openApp())
+            .setContentIntent(tap)
             .build()
         nm.notify(id, notification)
     }
@@ -105,6 +142,13 @@ class Notifications(private val context: Context) {
 
     private fun clockTime(fromNowMs: Long): String =
         DateFormat.getTimeFormat(context).format(Date(System.currentTimeMillis() + fromNowMs))
+
+    private fun openFocus(habitId: String): PendingIntent = PendingIntent.getActivity(
+        context,
+        1,
+        AppLinks.focusIntent(context, habitId),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     private fun openApp(): PendingIntent = PendingIntent.getActivity(
         context,
@@ -121,6 +165,7 @@ class Notifications(private val context: Context) {
         const val ALERT_WEBSITES_OFF = 13
         const val ALERT_WORLD_UNREADABLE = 14
         const val ALERT_SYNC_OFF = 15
+        const val ALERT_UPDATE = 16
         private const val CHANNEL_STATUS = "enforcement"
         private const val CHANNEL_ALERTS = "alerts"
     }

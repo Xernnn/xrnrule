@@ -8,8 +8,9 @@ import kotlinx.serialization.Serializable
  *
  * Only wall-clock times cross devices. [of] zeroes every monotonic stamp and
  * [BlockEvent.SharedStateMerged] anchors them again on arrival, as a cold start does (I8).
- * Not shared: a linked item's `done` and `tickEpochDay` (each device reads its own tracker), HABIT timer
- * progress, the foreground, the applied shield, an override waiting out its delay.
+ * Not shared here: habits and their entries (the habit server carries them, §2.5), a habit item's
+ * `done` (each device works it out from its entries, I36), HABIT timer progress, the foreground,
+ * the applied shield, an override waiting out its delay, the focus timer (I37).
  */
 @Serializable
 data class SharedState(
@@ -52,10 +53,9 @@ data class SharedState(
             return SharedState(
                 blocks = world.blocks.associate { it.id to it.copy(state = BlockState.ARMED) },
                 items = world.checklist.values.flatten().associate { item ->
-                    item.id to if (item.externalHabitId != null) {
-                        item.copy(done = false, doneAtMonotonic = null, tickEpochDay = null)
-                    } else {
-                        item.copy(doneAtMonotonic = null)
+                    item.id to when {
+                        item.derived -> item.copy(done = false, doneAtMonotonic = null)
+                        else -> item.copy(doneAtMonotonic = null)
                     }
                 },
                 credits = world.credits.mapValues { it.value.copy(earnedAtMonotonic = 0) },
@@ -102,9 +102,16 @@ data class SharedState(
                             // Text, order and link settings from whichever side changed them (remote if both).
                             val old = b.items[l.id]
                             val config = if (old != null && sameConfig(r, old)) l else r
+                            val ls = l.spentEpochDay ?: Long.MIN_VALUE
+                            val rs = r.spentEpochDay ?: Long.MIN_VALUE
                             config.copy(
                                 done = l.done || r.done,
                                 spentEpochDay = listOfNotNull(l.spentEpochDay, r.spentEpochDay).maxOrNull(),
+                                spentAmount = when { // I36: the later day's, or the most spent that day
+                                    ls == rs -> maxOf(l.spentAmount, r.spentAmount)
+                                    ls > rs -> l.spentAmount
+                                    else -> r.spentAmount
+                                },
                             )
                         }
                     }
@@ -184,7 +191,7 @@ data class SharedState(
 
         /** Equal apart from the tick and the spent day, which merge on their own. */
         private fun sameConfig(a: ChecklistItem, b: ChecklistItem): Boolean =
-            a.copy(done = b.done, doneAtMonotonic = b.doneAtMonotonic, spentEpochDay = b.spentEpochDay, tickEpochDay = b.tickEpochDay) == b
+            a.copy(done = b.done, doneAtMonotonic = b.doneAtMonotonic, spentEpochDay = b.spentEpochDay, spentAmount = b.spentAmount) == b
 
         /** Per key: unchanged on one side takes the other; changed on both goes to [resolve]. */
         private fun <V> mergeMaps(

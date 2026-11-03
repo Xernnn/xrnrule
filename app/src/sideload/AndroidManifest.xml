@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Updates from the home server (update/ApkUpdater.kt): installing them, and from Android 12
+         on without a confirmation each time. The Play build gets its updates from the store. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
+    <application>
+        <!-- Only the installer, through our own PendingIntent, reports here. -->
+        <receiver
+            android:name=".update.UpdateResultReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

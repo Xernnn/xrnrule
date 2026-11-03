@@ -3,6 +3,7 @@ package com.xern.xrnrule.app.data
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
+import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.Settings
 import com.xern.xrnrule.domain.World
 import kotlinx.serialization.Serializable
@@ -11,6 +12,8 @@ import kotlinx.serialization.json.Json
 /**
  * Blocks exported to a file, so a reinstall or a new phone doesn't mean building them again
  * (backups are off for xrnrule). Only the setup travels: no progress, credits or sessions.
+ * Habits are kept on the habit server (contract §2.5), which brings them back by itself; [habits]
+ * is written for reading, and an import leaves them alone.
  */
 @Serializable
 data class BlocksBackup(
@@ -18,6 +21,7 @@ data class BlocksBackup(
     val blocks: List<Block>,
     val checklist: Map<String, List<ChecklistItem>> = emptyMap(),
     val settings: Settings = Settings(),
+    val habits: List<Habit> = emptyList(),
 )
 
 object BlocksBackups {
@@ -34,13 +38,15 @@ object BlocksBackups {
             blocks = world.blocks.map { it.copy(state = BlockState.ARMED) },
             checklist = world.checklist.mapValues { (_, items) -> items.map(::fresh) },
             settings = world.settings,
+            habits = world.habits,
         ),
     )
 
     /**
      * Adds the backup's blocks that aren't here yet, fresh and locked. Importing never loosens
      * anything (contract §2.3): existing blocks are left alone and the daily unlock limit can
-     * only go down. Throws on a file that isn't a backup.
+     * only go down. Habits come along where there's none with their id; one that is here already
+     * stays as it is. Throws on a file that isn't a backup.
      */
     fun import(world: World, text: String): Pair<World, Int> {
         val backup = json.decodeFromString(BlocksBackup.serializer(), text)
@@ -57,5 +63,6 @@ object BlocksBackups {
         return imported to added.size
     }
 
-    private fun fresh(item: ChecklistItem) = item.copy(done = false, doneAtMonotonic = null, spentEpochDay = null, tickEpochDay = null)
+    private fun fresh(item: ChecklistItem) =
+        item.copy(done = false, doneAtMonotonic = null, spentEpochDay = null, spentAmount = 0)
 }

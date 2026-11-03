@@ -4,6 +4,7 @@ import android.app.Application
 import com.xern.xrnrule.app.block.BlockerForegroundService
 import com.xern.xrnrule.app.block.ServiceWatchdogWorker
 import com.xern.xrnrule.app.data.AppContainer
+import com.xern.xrnrule.app.ui.theme.Appearance
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -19,6 +20,7 @@ class XrnruleApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        Appearance.init(this)
         container = AppContainer(this)
         // The engine's core loop lives in the service so it survives the UI being gone.
         BlockerForegroundService.start(this)

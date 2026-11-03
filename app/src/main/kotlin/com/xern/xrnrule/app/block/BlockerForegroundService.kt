@@ -28,7 +28,6 @@ import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.World
-import com.xern.xrnrule.domain.epochDay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.coroutineScope
@@ -78,11 +77,13 @@ class BlockerForegroundService : LifecycleService() {
                 Intent.ACTION_SCREEN_OFF -> {
                     awake.value = false
                     container.persist.flush()
+                    // A downloaded update waits for this: its restart can't land mid-use.
+                    container.updates.onScreenOff()
                 }
                 Intent.ACTION_USER_PRESENT -> {
                     awake.value = true
-                    // Cheap safety net for a missed Loop push: re-read before the user can reach a blocked app.
-                    container.loop.sync()
+                    // Catch up with the home server before the user can reach a blocked app.
+                    container.habits.request()
                     container.shared.request()
                 }
                 Intent.ACTION_SCREEN_ON -> if (!keyguardLocked()) awake.value = true
@@ -105,7 +106,7 @@ class BlockerForegroundService : LifecycleService() {
         overlay = OverlayShieldPort(
             context = this,
             store = container.store,
-            loop = container.loop,
+            habits = container.habits,
             shared = container.shared,
             onEvent = container.store::dispatch,
         )
@@ -151,9 +152,9 @@ class BlockerForegroundService : LifecycleService() {
             }
         }
 
-        // 2. cold-start rebuild (I8), then catch up on Loop ticks made while we were down (I23)
+        // 2. cold-start rebuild (I8), then catch up on what the home server got while we were down
         container.store.dispatch(BlockEvent.BootOrColdStart)
-        container.loop.sync()
+        container.habits.request()
         container.shared.request()
         lifecycleScope.launch(Dispatchers.IO) { container.telemetry.prune(container.clock.nowWallMs()) }
         container.unreadableWorldCopy?.let { copy ->
@@ -166,10 +167,11 @@ class BlockerForegroundService : LifecycleService() {
 
         // 3. ~1s tick while anything time-based is live and the screen is on (nothing is shown
         //    while it's off, and the first event after waking catches up); book website time
-        //    every 30 s; re-read Loop at local midnight; check every 5 s that blocking still works.
+        //    every 30 s; work habit items out again when a new habit day starts (I23); check every
+        //    5 s that blocking still works.
         lifecycleScope.launch {
             var seconds = 0
-            var loopDay = container.clock.epochDay()
+            var habitDay = container.store.world.value.habitDay(container.clock)
             while (true) {
                 if (!awake.value) awake.first { it }
                 if (needsTicking(container.store.world.value)) {
@@ -181,10 +183,11 @@ class BlockerForegroundService : LifecycleService() {
                 }
                 if (seconds % 5 == 0) checkHealth(container.store.world.value)
                 seconds++
-                val today = container.clock.epochDay()
-                if (today != loopDay) {
-                    loopDay = today
-                    container.loop.sync()
+                val today = container.store.world.value.habitDay(container.clock)
+                if (today != habitDay) {
+                    habitDay = today
+                    container.store.dispatch(BlockEvent.Tick)
+                    container.habits.request()
                 }
                 delay(1_000)
             }
@@ -207,14 +210,14 @@ class BlockerForegroundService : LifecycleService() {
         }
 
         // 6. while a block screen is up, hear about the laptop and the web app within a second or
-        //    two: long-polls on the shared state and, through xrnloops, on habit ticks
+        //    two: long-polls on the shared state and on the habit server
         lifecycleScope.launch {
             overlay.visible.collectLatest { up ->
                 if (!up) return@collectLatest
                 // Scoped to this showing: both stop when the shield goes (collectLatest cancels).
                 coroutineScope {
                     launch { container.shared.watch() }
-                    container.loop.watch { overlay.showsLinkedItem }
+                    container.habits.watch { overlay.showsHabitItem }
                 }
             }
         }
@@ -265,15 +268,17 @@ class BlockerForegroundService : LifecycleService() {
         // Sync failing for an hour: unlocks and ticks from the laptop stop arriving, silently.
         val now = System.currentTimeMillis()
         val blocksStuck = container.shared.failingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
-        val habitsStuck = container.loop.serverFailingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
-        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck"
+        val habitsStuck = container.habits.failingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
+        val loopStuck = container.loop.serverFailingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
+        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck"
         if (health == lastHealth) return
         lastHealth = health
 
-        if (blocksStuck || habitsStuck) {
+        if (blocksStuck || habitsStuck || loopStuck) {
             val what = buildList {
                 if (blocksStuck) add("Blocks and unlocks (${container.shared.status.value?.message ?: "failing"}): xrnrule → Settings → Sync with laptop.")
-                if (habitsStuck) add("Habits: xrnloops → Settings → Sync with home server.")
+                if (habitsStuck) add("Habits (${container.habits.status.value?.message ?: "failing"}): xrnrule → Settings → Sync with laptop.")
+                if (loopStuck) add("xrnloops: its Settings → Sync with home server.")
             }
             notifications.alert(
                 Notifications.ALERT_SYNC_OFF,
@@ -356,7 +361,8 @@ class BlockerForegroundService : LifecycleService() {
         world.sessions.isNotEmpty() ||
             world.pause != null ||
             world.blocks.any { it.state == BlockState.EARNED || it.mode != BlockMode.HABIT } ||
-            world.progress.values.any { it.timerRunning }
+            world.progress.values.any { it.timerRunning } ||
+            world.focus?.let { it.running || it.resumeAtWall != null } == true // I37: goals reached mid-run, breaks ending
 
     // Lint false positive (sideload variant only): the merged manifest does declare
     // foregroundServiceType="specialUse" on this service.

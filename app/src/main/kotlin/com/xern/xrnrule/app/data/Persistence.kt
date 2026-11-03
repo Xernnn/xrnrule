@@ -2,20 +2,32 @@ package com.xern.xrnrule.app.data
 
 import androidx.core.util.AtomicFile
 import com.xern.xrnrule.domain.Clock
+import com.xern.xrnrule.domain.HabitEntry
 import com.xern.xrnrule.domain.PersistPort
 import com.xern.xrnrule.domain.World
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * Persists the whole [World] as one JSON document. The data is small and always read/written as
- * a unit, so a single file beats a relational schema here. [AtomicFile] syncs the new copy to
- * disk before swapping it in, so a crash or power cut mid-save leaves the previous copy intact.
+ * Persists the [World] as JSON: everything in [file], except the habit history
+ * ([World.habitEntries], years of days) in `habit-entries.json` next to it, written only when it
+ * changed. The data is always read/written as a unit, so files beat a relational schema here.
+ * [AtomicFile] syncs the new copy to disk before swapping it in, so a crash or power cut
+ * mid-save leaves the previous copy intact. The entries go first: a crash in between leaves them
+ * newer than the world, which only means a habit item is worked out again.
  */
 class FilePersistPort(private val file: File) : PersistPort {
 
     private val atomic = AtomicFile(file)
+    private val entriesFile = File(file.parentFile, "habit-entries.json")
+    private val entriesAtomic = AtomicFile(entriesFile)
+    private val entriesSerializer = MapSerializer(String.serializer(), HabitEntry.serializer())
+
+    /** The entries as last read or written: the same map again needs no write. */
+    private var savedEntries: Map<String, HabitEntry>? = null
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -35,22 +47,57 @@ class FilePersistPort(private val file: File) : PersistPort {
         } catch (_: FileNotFoundException) {
             return World() // first run
         }
-        return runCatching { json.decodeFromString(World.serializer(), bytes.decodeToString()) }
+        val world = runCatching { json.decodeFromString(World.serializer(), bytes.decodeToString()) }
             .getOrElse {
                 val copy = File(file.parentFile, "world.unreadable-${System.currentTimeMillis()}.json")
                 if (runCatching { copy.writeBytes(bytes) }.isSuccess) unreadableCopy = copy
-                World()
+                return World()
             }
+        val entries = loadEntries()
+        savedEntries = entries ?: emptyMap()
+        // Without its entries this phone reads the history from the habit server's start again (§2.5).
+        val lost = entries == null && world.habitEntries.isEmpty() && world.habitSyncSeq > 0
+        // Entries still inside the world file (written before they had their own) count too.
+        return world.copy(
+            habitEntries = world.habitEntries + (entries ?: emptyMap()),
+            habitSyncSeq = if (lost) 0 else world.habitSyncSeq,
+        )
+    }
+
+    /**
+     * An unreadable entries file is kept aside like the world's: the habit server has the history,
+     * so the next sync reads it back in, but anything not yet sent would be lost without the copy.
+     * Null when there are none to read.
+     */
+    private fun loadEntries(): Map<String, HabitEntry>? {
+        val bytes = try {
+            entriesAtomic.readFully()
+        } catch (_: FileNotFoundException) {
+            return null
+        }
+        return runCatching { json.decodeFromString(entriesSerializer, bytes.decodeToString()) }.getOrElse {
+            val copy = File(file.parentFile, "habit-entries.unreadable-${System.currentTimeMillis()}.json")
+            if (runCatching { copy.writeBytes(bytes) }.isSuccess) unreadableCopy = copy
+            null
+        }
     }
 
     @Synchronized
     override fun save(world: World) {
-        val out = atomic.startWrite()
+        if (world.habitEntries !== savedEntries) {
+            write(entriesAtomic, json.encodeToString(entriesSerializer, world.habitEntries))
+            savedEntries = world.habitEntries
+        }
+        write(atomic, json.encodeToString(World.serializer(), world.copy(habitEntries = emptyMap())))
+    }
+
+    private fun write(file: AtomicFile, text: String) {
+        val out = file.startWrite()
         try {
-            out.write(json.encodeToString(World.serializer(), world).encodeToByteArray())
-            atomic.finishWrite(out)
+            out.write(text.encodeToByteArray())
+            file.finishWrite(out)
         } catch (e: Throwable) {
-            atomic.failWrite(out)
+            file.failWrite(out)
             throw e
         }
     }

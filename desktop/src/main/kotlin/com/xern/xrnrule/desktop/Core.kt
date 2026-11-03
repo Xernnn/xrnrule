@@ -5,6 +5,7 @@ import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.Outcome
+import com.xern.xrnrule.domain.HabitEntry
 import com.xern.xrnrule.domain.PersistPort
 import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
@@ -21,6 +22,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -125,19 +128,40 @@ class FilePersist(private val file: File, private val clock: Clock) : PersistPor
     private var savedAtMono = 0L
     private var pending: World? = null
 
+    /** The habit history (contract §2.5) has its own file, written only when it changed. */
+    private val entriesFile = File(file.parentFile, "habit-entries.json")
+    private val entriesSerializer = MapSerializer(String.serializer(), HabitEntry.serializer())
+    private var savedEntries: Map<String, HabitEntry>? = null
+
     @Synchronized
     override fun loadWorld(): World {
-        val world = if (!file.exists()) World() else try {
+        var world = if (!file.exists()) World() else try {
             json.decodeFromString(World.serializer(), file.readText())
         } catch (e: Exception) {
-            val copy = File(file.parentFile, "world.unreadable-${System.currentTimeMillis()}.json")
-            file.copyTo(copy, overwrite = true)
-            System.err.println("world.json unreadable ($e); kept as ${copy.name}, starting empty")
+            keepUnreadable(file, e)
             World()
+        }
+        val entries = if (!entriesFile.exists()) null else try {
+            json.decodeFromString(entriesSerializer, entriesFile.readText())
+        } catch (e: Exception) {
+            keepUnreadable(entriesFile, e) // the habit server has them; unsent ones are in the copy
+            null
+        }
+        if (entries != null) {
+            savedEntries = entries
+            world = world.copy(habitEntries = world.habitEntries + entries)
+        } else if (world.habitEntries.isEmpty() && world.habitSyncSeq > 0) {
+            world = world.copy(habitSyncSeq = 0) // read the history from the habit server's start again (§2.5)
         }
         saved = world
         savedAtMono = clock.nowMonotonicMs()
         return world
+    }
+
+    private fun keepUnreadable(f: File, e: Exception) {
+        val copy = File(f.parentFile, "${f.nameWithoutExtension}.unreadable-${System.currentTimeMillis()}.json")
+        f.copyTo(copy, overwrite = true)
+        System.err.println("${f.name} unreadable ($e); kept as ${copy.name}, starting without it")
     }
 
     @Synchronized
@@ -158,19 +182,28 @@ class FilePersist(private val file: File, private val clock: Clock) : PersistPor
 
     private fun write(world: World) {
         file.parentFile.mkdirs()
-        val tmp = File(file.path + ".tmp")
-        FileChannel.open(tmp.toPath(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE).use { ch ->
-            ch.write(java.nio.ByteBuffer.wrap(json.encodeToString(World.serializer(), world).encodeToByteArray()))
-            ch.force(true)
+        // The entries first: a crash in between leaves them newer, which only means work again.
+        if (world.habitEntries !== savedEntries) {
+            writeAtomically(entriesFile, json.encodeToString(entriesSerializer, world.habitEntries))
+            savedEntries = world.habitEntries
         }
-        try {
-            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        } catch (e: IOException) {
-            throw IOException("can't replace $file", e)
-        }
+        writeAtomically(file, json.encodeToString(World.serializer(), world.copy(habitEntries = emptyMap())))
         saved = world
         savedAtMono = clock.nowMonotonicMs()
         pending = null
+    }
+
+    private fun writeAtomically(target: File, text: String) {
+        val tmp = File(target.path + ".tmp")
+        FileChannel.open(tmp.toPath(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE).use { ch ->
+            ch.write(java.nio.ByteBuffer.wrap(text.encodeToByteArray()))
+            ch.force(true)
+        }
+        try {
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: IOException) {
+            throw IOException("can't replace $target", e)
+        }
     }
 
     private fun World.withoutBookkeeping(): World = copy(

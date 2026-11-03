@@ -97,6 +97,18 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+// A website's own icon, served by the daemon (which asks the site once and keeps it). The page
+// redraws every second: one that isn't there yet is asked for again after 30 s, not every time.
+const iconMissing = new Map();
+function siteIcon(host) {
+  const since = iconMissing.get(host);
+  if (since && Date.now() - since < 30_000) return null;
+  return h("img", {
+    class: "favicon", alt: "", src: `/api/site-icon?host=${encodeURIComponent(host)}`,
+    onerror: (e) => { iconMissing.set(host, Date.now()); e.target.remove(); },
+  });
+}
+
 const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
 const min = (ms) => Math.max(0, Math.round(ms / 60000));
 const clock = (ms) => {
@@ -132,6 +144,38 @@ function status(b) {
       return b.lockdownRemainingMs > 0 ? ["blocked", `Locked down for ${clock(b.lockdownRemainingMs)}`] : ["idle", `Not running (${min(b.lockdownMs)} min when started)`];
   }
   return ["idle", b.mode];
+}
+
+/** Loop's entry values (contract §1). */
+const YES_MANUAL = 2, YES_AUTO = 1, NO = 0;
+
+/**
+ * A habit a block asks for (contract I23, I36): tick it (on the item's day), add to it, or run its
+ * focus timer. Amounts are thousandths of the unit (minutes for a timer).
+ */
+function habitItem(x) {
+  const units = (n) => +(n / 1000).toFixed(3);
+  const unit = x.unit && x.kind !== "TIMER" ? ` ${x.unit}` : "";
+  const day = x.yesterday ? " (yesterday)" : "";
+  if (x.kind === "CHECK") {
+    const ticked = x.dayValue === YES_MANUAL;
+    return h("label", {},
+      h("input", { type: "checkbox", checked: ticked || x.dayValue === YES_AUTO, onchange: () => act({ type: "set", habitId: x.id, day: x.day, value: ticked ? NO : YES_MANUAL }) }),
+      x.name + day,
+      x.unlock === null ? h("span", { class: "linked" }, "an \"at most\" habit can't open a block")
+        : x.spent > 0 && x.amount < 1 && h("span", { class: "linked" }, "done; that already opened this block"));
+  }
+  const toward = x.unlock === null ? "an \"at most\" habit can't open a block"
+    : x.kind === "TIMER" ? `${Math.floor(Math.min(x.amount, x.unlock) / 1000)} / ${units(x.unlock)} min` : `${units(Math.min(x.amount, x.unlock))} / ${units(x.unlock)}${unit}`;
+  return h("div", { class: "habit" },
+    h("div", { class: "actions" },
+      h("span", {}, x.name + day),
+      h("span", { class: "note" }, toward),
+      x.kind === "COUNT" && !x.yesterday && h("button", { class: "btn", onclick: () => act({ type: "log", habitId: x.id, amount: 1000 }) }, "+1"),
+      x.kind === "COUNT" && !x.yesterday && x.dayValue > 0 && h("button", { class: "btn", onclick: () => act({ type: "log", habitId: x.id, amount: -1000 }) }, "−1"),
+      x.kind === "TIMER" && !x.yesterday && h("button", { class: "btn", onclick: () => act({ type: x.focusing ? "focusPause" : "focus", habitId: x.id }) }, x.focusing ? "Pause" : x.onBreak ? "Resume" : "Focus"),
+      x.kind === "TIMER" && (x.focusing || x.onBreak) && h("button", { class: "btn", onclick: () => act({ type: "focusEnd" }) }, "End")),
+    h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (x.amount / Math.max(1, x.unlock ?? 1)) * 100)}%` })));
 }
 
 function how(b) {
@@ -180,17 +224,14 @@ function blockCard(b) {
         h("span", { class: "note" }, `${clock(b.timerMs)} of ${clock(b.requiredMs)}`),
         h("button", { class: "btn", onclick: () => act({ type: "timer", blockId: b.id, running: !b.timerRunning }) }, b.timerRunning ? "Pause" : "Start"),
         b.timerRunning && !onBlockPage && h("span", { class: "note" }, "It counts while you wait on this block's block page."))),
-    b.items.length > 0 && b.mode === "HABIT" && h("div", { class: "items" }, b.items.map((i) =>
+    b.items.length > 0 && b.mode === "HABIT" && h("div", { class: "items" }, b.items.map((i) => i.habit ? habitItem(i.habit) :
       h("label", {},
-        h("input", { type: "checkbox", checked: i.done || i.used, disabled: i.linked || !manualOpen, onchange: (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }) }),
-        i.text,
-        i.linked && (i.used
-          ? h("span", { class: "linked" }, i.yesterday ? "done yesterday; that tick already opened this block" : "done; that tick already opened this block today")
-          : h("span", { class: "linked" }, state.habitsUrl ? h("a", { href: state.habitsUrl, target: "_blank" }, i.yesterday ? "tick it in Habits (yesterday)" : "tick it in Habits") : "ticked in xrnloops"))))),
+        h("input", { type: "checkbox", checked: i.done, disabled: !manualOpen, onchange: (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }) }),
+        i.text))),
     how(b) && h("div", { class: "how" }, how(b)),
     h("div", { class: "targets" },
       b.phoneApps > 0 && h("span", { class: "target" }, `${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
-      b.sites.map((s) => h("span", { class: "target" }, s)),
+      b.sites.map((s) => h("span", { class: "target" }, siteIcon(s), s)),
       b.exceptSites.map((s) => h("span", { class: "target except", title: "Left alone" }, `not ${s}`)),
       b.desktopApps.map((a) => h("span", { class: "target" }, `💻 ${appName(a)}`))),
     actions.length > 0 && h("div", { class: "actions" }, actions),
@@ -347,7 +388,7 @@ function buildForm(b) {
           h("input", { type: "text", placeholder: "A new task", value: d.newTask, oninput: (e) => (d.newTask = e.target.value), onkeydown: (e) => e.key === "Enter" && addTask() }),
           h("button", { class: "btn", type: "button", onclick: addTask }, "Add")),
         Array.isArray(habits) && habits.length > 0 && h("div", { class: "row" },
-          h("select", { id: "link-pick" }, habits.filter((x) => !b.items.some((i) => i.linked && i.text === x.name)).map((x) => h("option", { value: x.uuid }, x.name))),
+          h("select", { id: "link-pick" }, habits.filter((x) => !b.items.some((i) => i.habit?.id === x.uuid)).map((x) => h("option", { value: x.uuid }, x.name))),
           h("button", {
             class: "btn", type: "button",
             onclick: () => {
@@ -404,7 +445,7 @@ function buildForm(b) {
 function itemRows(b) {
   if (!b.items.length) return [h("div", { class: "note" }, "No tasks yet.")];
   return b.items.map((i) => h("div", { class: "row item" },
-    h("span", {}, i.text, i.linked && h("small", {}, i.yesterday ? " · habit, yesterday's tick" : " · habit")),
+    h("span", {}, i.text, i.habit && h("small", {}, i.habit.yesterday ? " · habit, yesterday's tick" : " · habit")),
     h("button", { class: "btn ghost", type: "button", title: "Removing a task waits 60 s", onclick: () => itemOp({ op: "remove", itemId: i.id }, `Removing "${i.text}"`) }, "Remove")));
 }
 
@@ -610,7 +651,7 @@ function render() {
       return;
     }
     hero = h("section", { class: "card hero" + (still ? "" : " open") },
-      h("h2", {}, still ? `${what} is blocked` : `${what} is open`),
+      h("h2", {}, blockedSite && !blockedApp && siteIcon(blockedSite), still ? `${what} is blocked` : `${what} is open`),
       h("p", {}, still ? "Here's what opens it. You can wait on this page: a timer habit counts here." : blockedApp ? "You can start it again." : "Go back to it."),
       still && buyView());
     document.title = still ? `${what} is blocked · xrnrule` : "xrnrule";

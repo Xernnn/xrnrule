@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 
 /**
@@ -23,6 +25,8 @@ import java.util.UUID
 fun main() = runBlocking {
     val config = Config.load()
     config.dataDir.mkdirs()
+    // The habit history, blocks and event log are this user's alone: owner-only, like ~/.ssh.
+    runCatching { Files.setPosixFilePermissions(config.dataDir.toPath(), PosixFilePermissions.fromString("rwx------")) }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = DesktopClock()
     val persist = FilePersist(File(config.dataDir, "world.json"), clock)
@@ -38,13 +42,13 @@ fun main() = runBlocking {
     enforcer.foreground = foreground
     store.shield = enforcer
     val shared = SharedSyncClient(config, store, telemetry, scope)
-    val loop = LoopClient(config, store, scope)
+    val habits = HabitClient(config, store, scope)
 
     if (KWin.export(enforcer)) KWin.reloadScript() // our script lists the open windows again
-    LocalServer(config, store, foreground, enforcer, shared, loop).start()
+    LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope)).start()
     store.dispatch(BlockEvent.BootOrColdStart) // I8, and the first shield plan
     shared.start()
-    loop.start()
+    habits.start()
     Runtime.getRuntime().addShutdownHook(Thread { persist.flush() })
 
     // Engine effects -> desktop notifications.
@@ -92,7 +96,7 @@ fun main() = runBlocking {
             extensionAlerted = missing
 
             // Sync failing for an hour: the phone's unlocks and ticks stop arriving, silently.
-            val failing = listOfNotNull(shared.status.value, loop.status.value).firstOrNull { !it.ok }
+            val failing = listOfNotNull(shared.status.value, habits.status.value).firstOrNull { !it.ok }
             val wall = System.currentTimeMillis()
             syncFailingSince = if (failing == null) null else syncFailingSince ?: wall
             val stuck = syncFailingSince?.let { wall - it >= SYNC_ALERT_MS } == true
@@ -117,4 +121,5 @@ private fun needsTicking(world: World): Boolean =
     world.sessions.isNotEmpty() ||
         world.pause != null ||
         world.blocks.any { it.state == BlockState.EARNED || it.mode != BlockMode.HABIT } ||
-        world.progress.values.any { it.timerRunning }
+        world.progress.values.any { it.timerRunning } ||
+        world.focus?.let { it.running || it.resumeAtWall != null } == true // I37

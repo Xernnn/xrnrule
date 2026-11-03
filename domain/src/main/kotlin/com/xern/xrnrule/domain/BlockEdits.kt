@@ -44,6 +44,19 @@ object BlockEdits {
         !new.activeDays.containsAll(old.activeDays) || new.activeWindow != old.activeWindow ||
             !new.moreWindows.containsAll(old.moreWindows)
 
+    /**
+     * §2.3: a habit some block asks for ([World.blocksUsing]) gets easier: a smaller unlock's worth
+     * (I36), another kind, or a check due less often (Loop fills in more days by itself). Deleting
+     * one doesn't loosen: its items stay and can't be done any more.
+     */
+    fun habitLoosens(old: Habit, new: Habit): Boolean {
+        if (new.kind != old.kind) return true
+        val before = old.unlockUnit
+        val after = new.unlockUnit
+        if (after != null && (before == null || after < before)) return true
+        return !new.numerical && new.frequency < old.frequency
+    }
+
     /** I34: changes to the override settings that make buying minutes easier. */
     fun settingsLoosen(old: Settings, new: Settings): Boolean =
         Sites.normalizePhrase(new.overridePhrase).length < Sites.normalizePhrase(old.overridePhrase).length ||

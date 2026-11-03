@@ -153,7 +153,10 @@ fun items(blockId: String, count: Int, done: Int = 0): List<ChecklistItem> =
         ChecklistItem(id = "$blockId-i$i", blockId = blockId, text = "todo $i", order = i, done = i < done)
     }
 
-/** A checklist item ticked only by the external habit tracker (I23). Id is `"$blockId-$habitId"`. */
+/**
+ * A linked item from before the habit list moved into xrnrule (I23: the sweep makes it a habit
+ * item). Id is `"$blockId-$habitId"`.
+ */
 fun linkedItem(blockId: String, habitId: String, order: Int = 0, day: LinkedDay = LinkedDay.TODAY) =
     ChecklistItem(
         id = "$blockId-$habitId",
@@ -163,6 +166,46 @@ fun linkedItem(blockId: String, habitId: String, order: Int = 0, day: LinkedDay 
         externalHabitId = habitId,
         linkedDay = day,
     )
+
+/** [n] whole units (a count, or minutes for a TIMER) in the thousandths amounts are kept in (§1). */
+fun units(n: Long): Long = n * 1000
+
+/** A habit (§2.5); [goal] in whole units per [freqDen] days. Seq 1: as if read from the habit server. */
+fun habit(
+    id: String,
+    kind: HabitKind = HabitKind.COUNT,
+    goal: Long = 10,
+    freqNum: Int = 1,
+    freqDen: Int = 1,
+    targetType: TargetType = TargetType.AT_LEAST,
+) = Habit(
+    id = id,
+    name = id,
+    kind = kind,
+    goal = if (kind == HabitKind.CHECK) 0 else units(goal),
+    targetType = targetType,
+    freqNum = freqNum,
+    freqDen = freqDen,
+    unit = if (kind == HabitKind.TIMER) "min" else "",
+    seq = 1,
+)
+
+/** A checklist item asking for habit [habitId] (I36). Id is `"$blockId-$habitId"`. */
+fun habitItem(
+    blockId: String,
+    habitId: String,
+    order: Int = 0,
+    day: LinkedDay = LinkedDay.TODAY,
+    countsGoal: Boolean = false,
+) = ChecklistItem(
+    id = "$blockId-$habitId",
+    blockId = blockId,
+    text = habitId,
+    order = order,
+    habitId = habitId,
+    linkedDay = day,
+    countsGoal = countsGoal,
+)
 
 fun buildWorld(
     blocks: List<Block>,
@@ -224,6 +267,118 @@ class Device(
     }
 
     fun block(id: String): Block = world.block(id)!!
+}
+
+/**
+ * The habit server (`xrnloops-sync.py`, §2.5): a record per habit and per entry, each write takes
+ * the next seq, and a write naming the version it was made from wins only if that is still the
+ * stored one. Everything crosses as JSON, both ways, as on the wire.
+ */
+class FakeHabitServer(var dayStartHour: Int = 0) {
+    var seq = 0L
+        private set
+    val habits = linkedMapOf<String, HabitRecord>()
+    val entries = linkedMapOf<String, EntryRecord>()
+    private val json = HabitRecords.json
+
+    /** The server's epoch (§2.5): a client that has read past [seq] (a restore) gets everyone a new one. */
+    var epoch = 1L
+        private set
+
+    fun changes(since: Long, clientEpoch: Long? = null): HabitChanges {
+        if (clientEpoch == epoch && since > seq) epoch++
+        val out = HabitChanges(
+            seq = seq,
+            habits = habits.values.filter { it.seq > since }.sortedBy { it.seq },
+            entries = entries.values.filter { it.seq > since }.sortedBy { it.seq },
+            dayStartHour = dayStartHour,
+            epoch = epoch,
+        )
+        return json.decodeFromString(HabitChanges.serializer(), json.encodeToString(HabitChanges.serializer(), out))
+    }
+
+    fun write(sent: HabitWrite): HabitWriteResult {
+        val write = json.decodeFromString(HabitWrite.serializer(), json.encodeToString(HabitWrite.serializer(), sent))
+        val rejected = HabitWriteResult.HabitRows()
+        var rejectedHabits = rejected.habits
+        var rejectedEntries = rejected.entries
+        val acceptedHabits = mutableListOf<HabitWriteResult.HabitSeq>()
+        val acceptedEntries = mutableListOf<HabitWriteResult.EntrySeq>()
+        for (h in write.habits) {
+            val stored = habits[h.uuid]
+            val data = h.data ?: stored?.data ?: HabitData()
+            when {
+                stored == null -> {
+                    habits[h.uuid] = HabitRecord(h.uuid, data, h.mtime, h.deleted, ++seq)
+                    acceptedHabits += HabitWriteResult.HabitSeq(h.uuid, seq)
+                }
+                stored.data == data && stored.deleted == h.deleted -> acceptedHabits += HabitWriteResult.HabitSeq(h.uuid, stored.seq)
+                wins(h.baseSeq, stored.seq, h.mtime, stored.mtime) -> {
+                    habits[h.uuid] = HabitRecord(h.uuid, data, h.mtime, h.deleted, ++seq)
+                    acceptedHabits += HabitWriteResult.HabitSeq(h.uuid, seq)
+                }
+                else -> rejectedHabits = rejectedHabits + stored
+            }
+        }
+        for (e in write.entries) {
+            val key = "${e.habit}@${e.date}"
+            val stored = entries[key]
+            when {
+                stored == null -> {
+                    entries[key] = e.copy(seq = ++seq, baseSeq = null)
+                    acceptedEntries += HabitWriteResult.EntrySeq(e.habit, e.date, seq)
+                }
+                stored.value == e.value && stored.notes == e.notes -> acceptedEntries += HabitWriteResult.EntrySeq(e.habit, e.date, stored.seq)
+                wins(e.baseSeq, stored.seq, e.mtime, stored.mtime) -> {
+                    entries[key] = e.copy(seq = ++seq, baseSeq = null)
+                    acceptedEntries += HabitWriteResult.EntrySeq(e.habit, e.date, seq)
+                }
+                else -> rejectedEntries = rejectedEntries + stored
+            }
+        }
+        val out = HabitWriteResult(
+            seq,
+            HabitWriteResult.HabitRows(rejectedHabits, rejectedEntries),
+            HabitWriteResult.Accepted(acceptedHabits, acceptedEntries),
+        )
+        return json.decodeFromString(HabitWriteResult.serializer(), json.encodeToString(HabitWriteResult.serializer(), out))
+    }
+
+    /** A copy of everything, to [restore] later: a server put back from its backup (§2.5). */
+    fun backup(): Triple<Long, Map<String, HabitRecord>, Map<String, EntryRecord>> = Triple(seq, LinkedHashMap(habits), LinkedHashMap(entries))
+
+    /** The epoch comes back with the rest: it is stored with the records. */
+    fun restore(backup: Triple<Long, Map<String, HabitRecord>, Map<String, EntryRecord>>) {
+        seq = backup.first
+        habits.clear(); habits.putAll(backup.second)
+        entries.clear(); entries.putAll(backup.third)
+    }
+
+    /** Another client (xrnloops, the web app) writing without a base version: the later mtime wins. */
+    fun put(entry: EntryRecord) = write(HabitWrite(emptyList(), listOf(entry)))
+
+    fun put(habit: HabitRecord) = write(HabitWrite(listOf(habit), emptyList()))
+
+    private fun wins(baseSeq: Long?, storedSeq: Long, mtime: Long, storedMtime: Long) =
+        if (baseSeq != null) baseSeq == storedSeq else mtime > storedMtime
+}
+
+/** One habit round (§2.5): read what's new, then send what changed here; again while refused. */
+fun Device.syncHabits(server: FakeHabitServer) {
+    repeat(3) {
+        val changes = server.changes(world.habitSyncSeq, world.habitServerEpoch)
+        if (HabitRecords.wentBack(world, changes)) {
+            val all = HabitRecords.readAll(10) { server.changes(it) }
+            on(BlockEvent.HabitServerPulled(all.habits, all.entries, all.seq, all.dayStartHour, full = true, epoch = all.epoch))
+        } else if (!HabitRecords.nothingNew(world, changes)) { // as the phone and the laptop do
+            on(BlockEvent.HabitServerPulled(changes.habits, changes.entries, changes.seq, changes.dayStartHour, epoch = changes.epoch))
+        }
+        val (habits, entries, sent) = HabitRecords.pending(world)
+        if (sent.isEmpty) return
+        val result = server.write(HabitWrite(habits, entries))
+        on(BlockEvent.HabitServerPushed(sent, result.acceptance(), result.rejected.habits, result.rejected.entries))
+        if (result.rejected.habits.isEmpty() && result.rejected.entries.isEmpty()) return
+    }
 }
 
 /** Moves every device's clocks forward together. */

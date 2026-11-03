@@ -44,13 +44,20 @@ data class BlockStatusUi(
 fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): BlockStatusUi {
     val blocking = engine.isBlocking(world, block, clock)
     return when (block.mode) {
-        BlockMode.HABIT -> BlockStatusUi(
-            label = stateVerbose(block.state),
-            icon = stateIcon(block.state),
-            tone = block.state,
-            line = progressLine(block, world),
-            fraction = if (block.state == BlockState.UNLOCKED) null else triggerFraction(block, world),
-        )
+        BlockMode.HABIT -> {
+            val parts = world.habitParts(block, appLabel = null, engine, clock)
+            BlockStatusUi(
+                label = stateVerbose(block.state),
+                icon = stateIcon(block.state),
+                tone = block.state,
+                line = when (block.state) {
+                    BlockState.UNLOCKED -> "Open for ${formatRemaining(sessionLeftMs(world, block.id, clock))} more"
+                    BlockState.EARNED -> "${formatDuration(block.reward.unlockDurationMs)} unlock ready"
+                    BlockState.ARMED -> whatsLeft(block, parts) ?: stateVerbose(block.state)
+                },
+                fraction = if (block.state == BlockState.UNLOCKED) null else partsFraction(block, parts),
+            )
+        }
 
         BlockMode.ALLOWANCE -> {
             val used = engine.allowanceUsedMs(world, block, clock)

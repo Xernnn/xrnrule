@@ -54,7 +54,7 @@ class BlockFormsTest {
         assertEquals(EnforcementTier.SOFT, b.enforcementTier)
         val items = r.world.items(b.id)
         assertEquals(listOf("Stretch", "Plank"), items.map { it.text })
-        assertEquals("u1", items[1].externalHabitId)
+        assertEquals("u1", items[1].habitId)
         assertEquals(LinkedDay.YESTERDAY, items[1].linkedDay)
         assertTrue(items[1].countsGoal)
     }

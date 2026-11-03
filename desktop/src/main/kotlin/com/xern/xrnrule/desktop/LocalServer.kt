@@ -11,6 +11,8 @@ import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.ExtensionApi
+import com.xern.xrnrule.domain.HabitEntry
+import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.Settings
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TriggerType
@@ -30,6 +32,7 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.util.UUID
@@ -50,7 +53,8 @@ class LocalServer(
     private val foreground: Foreground,
     private val enforcer: Enforcer,
     private val shared: SharedSyncClient,
-    private val loop: LoopClient,
+    private val habitClient: HabitClient,
+    private val siteIcons: SiteIconCache,
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
 
@@ -84,6 +88,7 @@ class LocalServer(
         when {
             ex.requestMethod == "GET" && path == "/api/state" -> send(ex, 200, json.encodeToString(UiState.serializer(), view(query["app"], query["site"])))
             ex.requestMethod == "GET" && path == "/api/habits" -> send(ex, 200, habits())
+            ex.requestMethod == "GET" && path == "/api/site-icon" -> siteIcon(ex, query["host"].orEmpty())
             ex.requestMethod == "POST" && path == "/api/block" -> send(ex, 200, saveBlock(body(ex)))
             ex.requestMethod == "POST" && path == "/api/block/delete" -> send(ex, 200, deleteBlock(json.parseToJsonElement(body(ex)).jsonObject))
             ex.requestMethod == "POST" && path == "/api/item" -> send(ex, 200, item(json.parseToJsonElement(body(ex)).jsonObject))
@@ -197,6 +202,16 @@ class LocalServer(
             "timer" -> BlockEvent.TimerControl(blockId, body["running"]!!.jsonPrimitive.boolean)
             "toggle" -> BlockEvent.ToggleChecklistItem(body["itemId"]!!.jsonPrimitive.content, body["done"]!!.jsonPrimitive.boolean)
             "reset" -> BlockEvent.UserResetEarned(blockId)
+            // Shared habits (I35, I37): logged here, they count on the phone too.
+            "log" -> BlockEvent.LogHabit(body["habitId"]!!.jsonPrimitive.content, body["amount"]!!.jsonPrimitive.long)
+            "set" -> BlockEvent.SetHabitEntry(
+                body["habitId"]!!.jsonPrimitive.content,
+                body["day"]!!.jsonPrimitive.long,
+                body["value"]!!.jsonPrimitive.long,
+            )
+            "focus" -> BlockEvent.StartFocus(body["habitId"]!!.jsonPrimitive.content)
+            "focusPause" -> BlockEvent.PauseFocus()
+            "focusEnd" -> BlockEvent.EndFocus
             "endPause" -> BlockEvent.EndPause
             // A break lifts blocks: it waits like any loosening (contract §2.3, I25).
             "pause" -> return guarded { store.dispatchAndGet(BlockEvent.StartPause()) }
@@ -232,13 +247,11 @@ class LocalServer(
 
     private fun error(text: String) = """{"error":${json.encodeToString(String.serializer(), text)}}"""
 
-    /** The habits a checklist item can be linked to, from xrnloops-sync. */
-    private fun habits(): String = try {
-        val list = loop.habits().filter { it["archived"]?.jsonPrimitive?.booleanOrNull != true }
-            .map { buildJsonObject { put("uuid", it["uuid"]!!.jsonPrimitive.content); put("name", it["name"]!!.jsonPrimitive.content) } }
-        JsonArray(list).toString()
-    } catch (e: Exception) {
-        error("Can't read your habits: ${describe(e)}")
+    /** The habits a block can ask for (contract §2.5): not archived, and able to open one (I36). */
+    private fun habits(): String {
+        val list = store.world.value.habits.filter { !it.archived && it.unlockUnit != null }.sortedBy { it.position }
+            .map { buildJsonObject { put("uuid", it.id); put("name", it.name) } }
+        return JsonArray(list).toString()
     }
 
     /** Creates a block, or edits one ([BlockForms]); an edit that loosens it waits. */
@@ -253,7 +266,6 @@ class LocalServer(
             (BlockForms.create(world, form, store.clock) as? BlockForms.Result.Invalid)?.let { return error(it.reason) }
             // Built again inside the edit, against the world as it is by then.
             runBlocking { store.edit { w -> (BlockForms.create(w, form, store.clock) as? BlockForms.Result.Ok)?.world ?: w } }
-            if (form.linked.isNotEmpty()) loop.kick()
             return "{}"
         }
         val old = world.block(form.id) ?: return error("That block is gone.")
@@ -286,7 +298,6 @@ class LocalServer(
             "link" -> {
                 val habit = json.decodeFromJsonElement(BlockForms.LinkedHabit.serializer(), body["habit"]!!)
                 runBlocking { store.edit { w -> BlockForms.linkHabit(w, blockId, habit) } }
-                loop.kick()
                 "{}"
             }
             "remove" -> {
@@ -322,7 +333,35 @@ class LocalServer(
 
     @Serializable
     /** [used]: a linked item whose tick already opened the block (I24). */
-    data class UiItem(val id: String, val text: String, val done: Boolean, val linked: Boolean, val yesterday: Boolean, val used: Boolean = false)
+    data class UiItem(
+        val id: String,
+        val text: String,
+        val done: Boolean,
+        /** Set on a habit item (I23, I36): the habit and where it stands. */
+        val habit: UiHabit? = null,
+    )
+
+    /**
+     * A habit as a block's item shows it (I23, I36). Amounts are thousandths of the unit (minutes
+     * for a timer); a check's [amount] and [unlock] are 1. [amount] counts toward this block's
+     * next unlock, [spent] is what earlier ones used on [day], the habit day the item counts, and
+     * [dayValue] is that day's entry. [unlock] is null for an "at most" habit, which never opens.
+     */
+    @Serializable
+    data class UiHabit(
+        val id: String,
+        val name: String,
+        val kind: String,
+        val unit: String,
+        val unlock: Long?,
+        val amount: Long,
+        val spent: Long,
+        val day: Long,
+        val dayValue: Long,
+        val yesterday: Boolean,
+        val focusing: Boolean,
+        val onBreak: Boolean,
+    )
 
     @Serializable
     data class UiWindow(val days: List<Int>, val startMin: Int, val endMin: Int)
@@ -421,7 +460,7 @@ class LocalServer(
             unlockUsedMs = engine.unlockUsedTodayMs(world, clock),
             dailyCapMs = world.settings.dailyCapMs,
             sync = shared.status.value,
-            loop = loop.status.value,
+            loop = habitClient.status.value,
             syncConfigured = config.syncConfigured,
             habitsUrl = if (config.syncConfigured) "${config.loopUrl}/" else null,
             kwinSeenAgoMs = enforcer.kwinSeenAtMs.takeIf { it > 0 }?.let { System.currentTimeMillis() - it },
@@ -497,7 +536,34 @@ class LocalServer(
             overridesLeft = engine.overridesLeftToday(world, b.id, clock),
             timerMs = progress?.accumulatedMs ?: 0,
             timerRunning = progress?.timerRunning == true,
-            items = world.items(b.id).map { UiItem(it.id, it.text, it.done, it.externalHabitId != null, it.linkedDay.name == "YESTERDAY", it.tickSpent()) },
+            items = world.items(b.id).map { item ->
+                val habit = item.habitId?.let(world::habit)
+                UiItem(
+                    item.id, habit?.name ?: item.text, item.done,
+                    habit = habit?.let { h ->
+                        val focus = world.focus?.takeIf { it.habitId == h.id }
+                        val day = engine.itemDay(world, item, clock)
+                        UiHabit(
+                            id = h.id,
+                            name = h.name,
+                            kind = h.kind.name,
+                            unit = h.unit,
+                            unlock = h.unlockUnit,
+                            amount = engine.habitAvailable(world, item, clock),
+                            spent = item.spentOn(day),
+                            day = day,
+                            dayValue = when {
+                                h.numerical -> engine.habitAmount(world, h.id, day, clock)
+                                item.countsGoal -> engine.checkValue(world, h, day)
+                                else -> world.entry(h.id, day)?.value ?: HabitEntry.UNKNOWN
+                            },
+                            yesterday = item.linkedDay == LinkedDay.YESTERDAY,
+                            focusing = focus?.running == true,
+                            onBreak = focus?.resumeAtWall != null,
+                        )
+                    },
+                )
+            },
             redeemRejection = if (b.state == BlockState.EARNED) engine.redeemRejection(world, b.id, clock)?.name else null,
             scheduleText = scheduleText,
             scheduleDays = days.sorted(),
@@ -533,6 +599,16 @@ class LocalServer(
     }
 
     private fun body(ex: HttpExchange): String = ex.requestBody.use { it.readBytes().decodeToString() }
+
+    /** A website's own icon ([SiteIconCache]); 404 until the laptop has it. */
+    private fun siteIcon(ex: HttpExchange, host: String) {
+        val icon = siteIcons.icon(host) ?: return send(ex, 404, "no icon yet")
+        ex.responseHeaders.add("Content-Type", icon.type) // a raster type, from the bytes themselves
+        ex.responseHeaders.add("Cache-Control", "private, max-age=86400")
+        secure(ex)
+        ex.sendResponseHeaders(200, icon.bytes.size.toLong())
+        ex.responseBody.use { it.write(icon.bytes) }
+    }
 
     private fun send(ex: HttpExchange, code: Int, text: String) {
         val bytes = text.encodeToByteArray()

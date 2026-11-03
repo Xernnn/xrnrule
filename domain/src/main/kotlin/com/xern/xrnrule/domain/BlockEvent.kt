@@ -27,25 +27,6 @@ sealed interface BlockEvent {
     /** User pressed "Start" / "Pause" on a TIMER habit. */
     data class TimerControl(val blockId: String, val running: Boolean) : BlockEvent
 
-    /**
-     * A full snapshot from the external habit tracker for local day [epochDay] and the day before
-     * it ([LinkedDay.YESTERDAY] items): the habits ticked that day, and the habits whose goal is
-     * met that day ([ChecklistItem.countsGoal] items). Drives linked checklist items (I23, I24).
-     * Never sent unless both days were read.
-     *
-     * The sets are for the tracker's own day, [trackerEpochDay], and the day before it. That is
-     * [epochDay] unless the tracker extends its day past midnight (Loop's "day starts at 3 am"),
-     * when it lags by one for those hours: a tick made then belongs to the tracker's day.
-     */
-    data class ExternalHabitsSynced(
-        val epochDay: Long,
-        val doneHabitIds: Set<String>,
-        val doneYesterdayHabitIds: Set<String> = emptySet(),
-        val goalMetHabitIds: Set<String> = emptySet(),
-        val goalMetYesterdayHabitIds: Set<String> = emptySet(),
-        val trackerEpochDay: Long = epochDay,
-    ) : BlockEvent
-
     /** Starts a break from SOFT blocks, at most once per local day (I25). */
     data class StartPause(val durationMs: Long = Defaults.PAUSE_MS) : BlockEvent
 
@@ -71,6 +52,48 @@ sealed interface BlockEvent {
 
     /** Finishes the override waiting here: grants it if the wait is over and [phrase] matches (I34). */
     data class ClaimOverride(val phrase: String) : BlockEvent
+
+    /**
+     * Logs [amount] more of a habit on today's habit day (I35), in thousandths of its unit;
+     * negative takes some back, never below zero. For a check, positive ticks it and negative
+     * unticks it.
+     */
+    data class LogHabit(val habitId: String, val amount: Long) : BlockEvent
+
+    /** Sets a habit's entry on any habit day up to today: Loop's value and the day's notes (I35). */
+    data class SetHabitEntry(val habitId: String, val epochDay: Long, val value: Long, val notes: String = "") : BlockEvent
+
+    /**
+     * Records read from the habit server, after [seq] (§2.5): merged into this device's habits and
+     * entries (I38). [dayStartHour] is the server's habit-day start, when it says. [full]: these
+     * are all the server has, read again from the start because it went back (§2.5). [epoch] is
+     * the server's, when it says.
+     */
+    data class HabitServerPulled(
+        val habits: List<HabitRecord>,
+        val entries: List<EntryRecord>,
+        val seq: Long,
+        val dayStartHour: Int? = null,
+        val full: Boolean = false,
+        val epoch: Long? = null,
+    ) : BlockEvent
+
+    /** The habit server's answer to a push of [sent] (I38). */
+    data class HabitServerPushed(
+        val sent: HabitPush,
+        val accepted: HabitAcceptance,
+        val rejectedHabits: List<HabitRecord> = emptyList(),
+        val rejectedEntries: List<EntryRecord> = emptyList(),
+    ) : BlockEvent
+
+    /** Starts or resumes the focus timer for a TIMER habit, ending another habit's first (I37). */
+    data class StartFocus(val habitId: String) : BlockEvent
+
+    /** Pauses the focus timer, logging its time; with [breakMs] it goes on by itself after that long (I37). */
+    data class PauseFocus(val breakMs: Long = 0) : BlockEvent
+
+    /** Stops the focus timer, logging its time (I37). */
+    data object EndFocus : BlockEvent
 
     /** Process cold start or BOOT_COMPLETED — rebuild state and re-apply the shield (I8). */
     data object BootOrColdStart : BlockEvent

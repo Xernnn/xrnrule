@@ -5,7 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 
-data class InstalledApp(val packageName: String, val label: String)
+/** [category] is the app's own `ApplicationInfo.category` (CATEGORY_UNDEFINED = -1 when it names none). */
+data class InstalledApp(val packageName: String, val label: String, val category: Int = -1)
 
 /**
  * Launchable apps a block could target — the same universe a home-screen launcher would show.
@@ -31,10 +32,9 @@ object InstalledApps {
         }
         return resolveInfos
             .asSequence()
-            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
-            .filter { (pkg, _) -> pkg != context.packageName }
-            .distinctBy { (pkg, _) -> pkg }
-            .map { (pkg, label) -> InstalledApp(pkg, label) }
+            .map { InstalledApp(it.activityInfo.packageName, it.loadLabel(pm).toString(), it.activityInfo.applicationInfo.category) }
+            .filter { it.packageName != context.packageName }
+            .distinctBy { it.packageName }
             .sortedBy { it.label.lowercase() }
             .toList()
     }

@@ -25,6 +25,10 @@ fun Clock.localDate(): LocalDate = Instant.ofEpochMilli(nowWallMs()).atZone(zone
 
 fun Clock.epochDay(): Long = localDate().toEpochDay()
 
+/** The habit day (contract §1): the local date of now minus [startHour] hours. */
+fun Clock.habitEpochDay(startHour: Int): Long =
+    Instant.ofEpochMilli(nowWallMs() - startHour.coerceIn(0, 23) * 3_600_000L).atZone(zone()).toLocalDate().toEpochDay()
+
 fun Clock.startOfLocalDayMs(): Long =
     localDate().atStartOfDay(zone()).toInstant().toEpochMilli()
 
