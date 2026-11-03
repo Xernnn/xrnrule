@@ -43,6 +43,8 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -280,7 +282,7 @@ private fun XrnruleScreens(container: AppContainer) {
                 )
             }
             composable("focus/{habitId}") { entry ->
-                FocusScreen(store, entry.arguments?.getString("habitId").orEmpty(), onClose = { nav.popBackStack() })
+                FocusScreen(store, entry.arguments?.getString("habitId").orEmpty(), onClose = { nav.leave(entry) })
             }
             composable(Tab.Insights.route) {
                 InsightsScreen(world, container.websites, container.siteUsage, container.telemetry)
@@ -291,16 +293,16 @@ private fun XrnruleScreens(container: AppContainer) {
             composable("settings/{page}") { entry ->
                 val page = SettingsPage.entries.firstOrNull { it.name == entry.arguments?.getString("page") }
                 if (page == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack() }
+                    LaunchedEffect(Unit) { nav.leave(entry) }
                 } else {
-                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.popBackStack() })
+                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.leave(entry) })
                 }
             }
-            composable("createBlock") {
+            composable("createBlock") { entry ->
                 NewBlockScreen(
                     store = store,
                     websites = container.websites,
-                    onDone = { nav.popBackStack() },
+                    onDone = { nav.leave(entry) },
                 )
             }
             composable("block/{id}") { entry ->
@@ -309,11 +311,20 @@ private fun XrnruleScreens(container: AppContainer) {
                     websites = container.websites,
                     guard = hardcoreGuard,
                     blockId = entry.arguments?.getString("id").orEmpty(),
-                    onDone = { nav.popBackStack() },
+                    onDone = { nav.leave(entry) },
                 )
             }
         }
     }
+}
+
+/**
+ * Leaves [entry]'s screen, once: only while it is the top of the stack. A page also leaves by
+ * itself when its block is gone, and a deletion lands while the page is still animating out; a
+ * plain pop then would take the screen under it too.
+ */
+private fun NavController.leave(entry: NavBackStackEntry) {
+    if (currentBackStackEntry?.id == entry.id) popBackStack()
 }
 
 /** Links into a screen of the app from outside it: the block screen, the notification. */
