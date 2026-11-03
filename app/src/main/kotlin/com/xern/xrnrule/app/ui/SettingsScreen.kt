@@ -152,6 +152,7 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
     val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
     val loopStatus = remember(resume) { deps.loop.status() }
+    val loopUnreachable by deps.loop.unreachable.collectAsState()
     val theme by Appearance.themeMode.collectAsState()
     val lockOn by deps.appLock.enabled.collectAsStateWithLifecycle()
     run {
@@ -186,12 +187,13 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                 title = "xrnloops",
                 icon = Icons.Outlined.TaskAlt,
                 iconTint = kinds.loop.color,
-                subtitle = when (loopStatus) {
-                    LoopStatus.NOT_INSTALLED -> "Not installed · habits are here now"
-                    LoopStatus.NO_ACCESS -> "Signed with another key: it can't tell xrnrule about ticks"
-                    LoopStatus.READY -> "Same habits, through your home server"
+                subtitle = when {
+                    loopStatus == LoopStatus.NOT_INSTALLED -> "Not installed: it's where habits are kept and ticked"
+                    loopStatus == LoopStatus.NO_ACCESS -> "Signed with another key: it can't tell xrnrule about ticks"
+                    loopUnreachable -> "Not answering: turn on its Autostart in the phone's settings"
+                    else -> "Same habits, through your home server"
                 },
-                subtitleColor = if (loopStatus != LoopStatus.NO_ACCESS) MaterialTheme.colorScheme.onSurfaceVariant
+                subtitleColor = if (loopStatus != LoopStatus.NO_ACCESS && !loopUnreachable) MaterialTheme.colorScheme.onSurfaceVariant
                 else MaterialTheme.colorScheme.error,
                 first = true,
                 onClick = { deps.loop.launchIntent()?.let { runCatching { context.startActivity(it) } } },

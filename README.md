@@ -186,11 +186,12 @@ on the phone and on the laptop, xrnloops and the habits web page all read and wr
 habits and ticks there, so a habit ticked anywhere opens the blocks that ask for it everywhere.
 Amounts logged on two devices at once add up; nothing needs to be installed next to xrnrule.
 
-xrnloops is being folded into xrnrule (from November 2026): xrnrule takes over Loop's habit
-screens, reminders and widgets, with Loop's rules for scores, streaks and automatic ticks ported
-into `:domain`. Until that's done, both apps run side by side: xrnloops still tells xrnrule the
-moment something is ticked in it (a signature-protected broadcast, so both apps must be signed
-with the same key).
+xrnloops stays the habit tracker (its list, habit screens, reminders and widgets) and xrnrule
+the blocker; they work together through the habit server. xrnrule keeps its own copy of the
+habits, with Loop's rules for scores, streaks and automatic ticks in `:domain`, so blocks can ask
+for a habit on the laptop too. xrnloops tells xrnrule the moment something is ticked in it (a
+signature-protected broadcast, so both apps must be signed with the same key), and xrnrule asks
+it to sync every half hour, raising an alert when it doesn't answer.
 
 ## Project layout
 

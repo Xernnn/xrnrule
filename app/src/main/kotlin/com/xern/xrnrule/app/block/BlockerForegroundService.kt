@@ -269,8 +269,10 @@ class BlockerForegroundService : LifecycleService() {
         val now = System.currentTimeMillis()
         val blocksStuck = container.shared.failingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
         val habitsStuck = container.habits.failingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
+        container.loop.check()
         val loopStuck = container.loop.serverFailingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
-        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck"
+        val loopUnreachable = loopStuck && container.loop.unreachable.value
+        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck|$loopUnreachable"
         if (health == lastHealth) return
         lastHealth = health
 
@@ -278,7 +280,11 @@ class BlockerForegroundService : LifecycleService() {
             val what = buildList {
                 if (blocksStuck) add("Blocks and unlocks (${container.shared.status.value?.message ?: "failing"}): xrnrule → Settings → Sync with laptop.")
                 if (habitsStuck) add("Habits (${container.habits.status.value?.message ?: "failing"}): xrnrule → Settings → Sync with laptop.")
-                if (loopStuck) add("xrnloops: its Settings → Sync with home server.")
+                if (loopUnreachable) {
+                    add("xrnloops doesn't answer: turn on its Autostart (phone Settings → Apps → xrnloops).")
+                } else if (loopStuck) {
+                    add("xrnloops: its Settings → Sync with home server.")
+                }
             }
             notifications.alert(
                 Notifications.ALERT_SYNC_OFF,

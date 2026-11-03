@@ -55,7 +55,7 @@ class AppContainer(context: Context) {
     /** Habits and their entries, shared with xrnloops, the web app and the laptop (contract §2.5). */
     val habits = HabitSync(context, store, shared.settings, appScope)
 
-    /** xrnloops, our Loop fork (`../xrnloops`), while both apps are in use: its ticks reach us through the habit server. */
+    /** xrnloops, the habit tracker (our Loop fork, `../xrnloops`): its ticks reach us through the habit server. */
     val loop = LoopHabits(context, habits, appScope)
 
     /** New versions of the app from the same home server — real in `sideload`, a no-op in `play`. */

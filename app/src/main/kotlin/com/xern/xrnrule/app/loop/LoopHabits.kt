@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.SystemClock
 import com.xern.xrnrule.app.data.HabitSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,10 +36,13 @@ object LoopContract {
 enum class LoopStatus { NOT_INSTALLED, NO_ACCESS, READY }
 
 /**
- * xrnloops while both apps are in use (the habit list moved into xrnrule, contract §2.5). Both
- * read and write the same habit server, so xrnrule never reads xrnloops itself: when xrnloops
- * says a habit changed ([LoopChangedReceiver]), it is asked to send that to the server, and then
- * [HabitSync] reads it back from there.
+ * xrnloops, the habit tracker (our Loop fork, `../xrnloops`), next to xrnrule the blocker. Both
+ * read and write the same habit server (contract §2.5), so xrnrule never reads xrnloops itself:
+ * when xrnloops says a habit changed ([LoopChangedReceiver]), it is asked to send that to the
+ * server, and then [HabitSync] reads it back from there. Every [CHECK_MS] it is also asked to
+ * sync ([check]), so an xrnloops that has gone quiet is noticed (an alert) even when nothing is
+ * ticked: MIUI turns a reinstalled app's autostart off, and then xrnloops neither syncs in the
+ * background nor answers.
  */
 class LoopHabits(
     private val context: Context,
@@ -48,6 +52,13 @@ class LoopHabits(
     /** When xrnloops' own sync with the home server started failing, for an alert; null while it works. */
     private val _serverFailingSince = MutableStateFlow<Long?>(null)
     val serverFailingSince: StateFlow<Long?> = _serverFailingSince.asStateFlow()
+
+    /** xrnloops is installed but didn't answer the last time it was asked to sync (MIUI's autostart, most likely). */
+    private val _unreachable = MutableStateFlow(false)
+    val unreachable: StateFlow<Boolean> = _unreachable.asStateFlow()
+
+    @Volatile
+    private var lastCheck = 0L
 
     fun status(): LoopStatus = when {
         !isInstalled() -> LoopStatus.NOT_INSTALLED
@@ -76,14 +87,33 @@ class LoopHabits(
      * it would have. Older builds, or one with sync off, answer null or `synced = false`.
      */
     private fun pushFromLoop() {
-        if (status() != LoopStatus.READY) return
+        if (status() != LoopStatus.READY) {
+            _unreachable.value = false
+            _serverFailingSince.value = null
+            return
+        }
         val uri = Uri.Builder().scheme("content").authority(LoopContract.AUTHORITY).build()
         val result = runCatching { context.contentResolver.call(uri, LoopContract.METHOD_SYNC, null, null) }.getOrNull()
         val configured = result?.getBoolean(LoopContract.KEY_CONFIGURED) == true
         val synced = result?.getBoolean(LoopContract.KEY_SYNCED) == true
-        _serverFailingSince.value = if (!configured || synced) null else _serverFailingSince.value ?: System.currentTimeMillis()
+        // No answer at all counts as failing: our builds always answer, unless they can't be started.
+        _unreachable.value = result == null
+        val fine = result != null && (!configured || synced)
+        _serverFailingSince.value = if (fine) null else _serverFailingSince.value ?: System.currentTimeMillis()
+    }
+
+    /** From the service's health check: asks xrnloops to sync at most every [CHECK_MS]. */
+    fun check() {
+        val now = SystemClock.elapsedRealtime()
+        if (lastCheck != 0L && now - lastCheck < CHECK_MS) return
+        lastCheck = now
+        scope.launch(Dispatchers.IO) { pushFromLoop() }
     }
 
     private fun isInstalled(): Boolean =
         runCatching { context.packageManager.getPackageInfo(LoopContract.LOOP_PACKAGE, 0) }.isSuccess
+
+    private companion object {
+        const val CHECK_MS = 30 * 60 * 1000L
+    }
 }

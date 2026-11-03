@@ -21,7 +21,7 @@ dưới đây phải có unit test tương ứng trong `:domain/src/test`.
 | **CombineMode** | Chỉ dùng khi `trigger.type == COMBINED`: `AND` (cần cả hai) hoặc `OR` (cần một trong hai). |
 | **Habit app** | `trigger.habitPackages` — app(s) nơi đồng hồ TIMER đếm giờ. Rỗng (mặc định) nghĩa là "đếm giờ trong chính app Target"; nếu khác rỗng, đếm giờ trong (các) app này thay vì Target — cho phép habit "mở app khác N phút để unlock app bị chặn". |
 | **ChecklistItem** | Một mục to-do thuộc một Block (chỉ dùng khi `trigger.type` là `CHECKLIST` hoặc `COMBINED`). |
-| **Habit** | Một habit có tên trong **danh sách habit duy nhất** (`World.habits`), dùng chung giữa các thiết bị qua **habit server** (§2.5), không qua `SharedState`; nhiều block cùng trỏ tới một habit được. Mô hình là của Loop Habit Tracker (xrnloops, bản fork Loop đang được gộp vào xrnrule) cộng thêm đồng hồ và icon: `kind` `CHECK` (Loop: yes/no), `COUNT` (Loop: số, có `unit`), `TIMER` (Loop: số, đơn vị phút, đếm bằng đồng hồ tập trung, I37); `goal` (số, xem *Lượng*), `targetType` `AT_LEAST`/`AT_MOST` (habit số), `freqNum`/`freqDen` (`CHECK`: `freqNum` lần trong `freqDen` ngày; habit số: `goal` cho mỗi `freqDen` ngày), `color` (chỉ số bảng màu Loop 0–19), `icon`, `question`, `description`, `archived`, `position`, `reminder`. |
+| **Habit** | Một habit có tên trong **danh sách habit duy nhất** (`World.habits`), dùng chung giữa các thiết bị qua **habit server** (§2.5), không qua `SharedState`; nhiều block cùng trỏ tới một habit được. Mô hình là của Loop Habit Tracker (xrnloops, bản fork Loop, vẫn là app theo dõi habit riêng) cộng thêm đồng hồ và icon: `kind` `CHECK` (Loop: yes/no), `COUNT` (Loop: số, có `unit`), `TIMER` (Loop: số, đơn vị phút, đếm bằng đồng hồ tập trung, I37); `goal` (số, xem *Lượng*), `targetType` `AT_LEAST`/`AT_MOST` (habit số), `freqNum`/`freqDen` (`CHECK`: `freqNum` lần trong `freqDen` ngày; habit số: `goal` cho mỗi `freqDen` ngày), `color` (chỉ số bảng màu Loop 0–19), `icon`, `question`, `description`, `archived`, `position`, `reminder`. |
 | **Lượng** | Theo cách mã hóa của Loop: số nguyên **phần nghìn** đơn vị của habit (20 cái = 20 000). Đơn vị của `TIMER` là phút: 1 phút = 1000, nên `ms` của đồng hồ = `ms / 60`. |
 | **Ngày habit** | Ngày mà habit được ghi: ngày local của `now_wall − habitDayStartHour giờ` (`World.habitDayStartHour`, 0–23, lấy từ habit server: Loop "kéo dài ngày qua nửa đêm" = 3). Tick lúc 1 giờ sáng khi giờ bắt đầu là 3 thuộc về hôm trước. Chỉ habit dùng ngày này; block, hạn mức, lịch vẫn theo nửa đêm. |
 | **Habit entry** | `World.habitEntries["habitId@epochDay"]` (ngày habit) = `HabitEntry(value, notes, mtime, seq, dirty, baseValue)`, giữ **toàn bộ** lịch sử. `value` theo Loop: habit `CHECK` có `UNKNOWN=-1`, `NO=0`, `YES_AUTO=1` (Loop tự điền, không bao giờ lưu), `YES_MANUAL=2`, `SKIP=3`; habit số là lượng. `seq`, `dirty`, `baseValue`: sổ sách đồng bộ (I38). |
@@ -119,7 +119,7 @@ tăng `dailyCapMs`, và bắt đầu Pause (I25). Với habit (`BlockEdits.habit
 dùng nó): phần mở khóa (I36) nhỏ đi, đổi `kind`, hay tần suất `freqNum/freqDen` của habit `CHECK`
 thấp đi (Loop tự điền nhiều ngày hơn). Xóa habit **không** nới lỏng: habit item của nó ở lại và
 không bao giờ xong nữa (I36), muốn bỏ thì sửa block. Sửa habit ở xrnloops hay web app (§2.5) không
-qua guard: đó là app theo dõi của chính user, như trước khi gộp. Với các luật mới: thêm một `exceptSites`, tắt hay
+qua guard: đó là app theo dõi của chính user. Với các luật mới: thêm một `exceptSites`, tắt hay
 tăng `sessionMs`, giảm `sessionBreakMs`, chuyển `perDevice` sang `true` (mỗi máy có nguyên hạn
 mức), bỏ hay đổi một khung lịch (I30). Ở Settings: cụm từ override ngắn hơn, giảm
 `overrideWaitMs`, tăng `overrideGrantMs` hay `overridesPerDay` (`BlockEdits.settingsLoosen`). Ngoại lệ duy nhất: lockdown **không đang chạy** thì
@@ -169,7 +169,7 @@ nó chưa có entry mới) thì tiêu ở đây như redeem (I24), để một l
 
 Habit và entry đi qua **habit server** (`xrnloops-sync`, trước là server của xrnloops), không qua
 `xrnrule-sync`: mỗi habit và mỗi (habit, ngày) là một bản ghi riêng có `mtime` và `seq` của server,
-và người viết sau thắng theo từng bản ghi. xrnloops (đến khi gộp xong) và web app habit cũng ghi
+và người viết sau thắng theo từng bản ghi. xrnloops và web app habit cũng ghi
 vào đây theo cách đó. xrnrule thì ghi kèm `baseSeq` (bản nó dựa vào): server chỉ nhận nếu đó vẫn
 là bản đang lưu, không thì trả bản mới hơn để trộn lại (I38). Server giữ các trường mà người viết
 không gửi (`icon`, `timer` mà xrnloops không biết).
