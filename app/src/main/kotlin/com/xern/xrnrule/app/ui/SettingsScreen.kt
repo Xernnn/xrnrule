@@ -35,6 +35,8 @@ import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.QueryStats
@@ -89,6 +91,7 @@ import com.xern.xrnrule.app.web.WebsiteTracking
 import com.xern.xrnrule.app.web.tracking
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.HabitKind
@@ -457,7 +460,7 @@ private fun HabitsPage(world: World, deps: SettingsDeps) {
     fun guarded(habit: Habit, title: String, detail: String, apply: () -> Unit) {
         val blocks = world.blocksUsing(habit.id)
         if (blocks.any { BlockEdits.guardNeeded(store.engine, world, it, store.clock) }) {
-            loosen = LoosenRequest(title, detail, hardcore = blocks.any { it.enforcementTier == EnforcementTier.HARDCORE }, apply = apply)
+            loosen = LoosenRequest(title, detail, hardcore = blocks.any { it.enforcementTier == EnforcementTier.HARDCORE }, blockIds = blocks.map { it.id }, apply = apply)
         } else {
             apply()
         }
@@ -491,7 +494,7 @@ private fun HabitsPage(world: World, deps: SettingsDeps) {
             },
         )
     }
-    loosen?.let { LoosenGuardDialog(it, deps.guard, onDismiss = { loosen = null }) }
+    loosen?.let { LoosenGuardDialog(it, deps.guard, deps.store, onDismiss = { loosen = null }) }
     confirmDelete?.let { habit ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
@@ -666,7 +669,7 @@ private fun UnlocksPage(world: World, deps: SettingsDeps) {
         }
     })
 
-    loosen?.let { request -> LoosenGuardDialog(request, deps.guard, onDismiss = { loosen = null }) }
+    loosen?.let { request -> LoosenGuardDialog(request, deps.guard, deps.store, onDismiss = { loosen = null }) }
 }
 
 /** Buying minutes past a daily limit or schedule (contract I34), and the browser's corner clock. */
@@ -777,6 +780,8 @@ private fun SecurityPage(deps: SettingsDeps) {
         },
     )
 
+    LockedBlocks(deps.store)
+
     if (!guard.isSupported()) return
     SectionLabel("Hardcore mode")
     PageIntro(
@@ -817,6 +822,28 @@ private fun SecurityPage(deps: SettingsDeps) {
             }
         }
     }
+}
+
+/** I39/I40: which blocks are locked, and how many emergency unlocks are left. */
+@Composable
+private fun LockedBlocks(store: WorldStore) {
+    val world by store.world.collectAsStateWithLifecycle()
+    val now = store.clock.nowWallMs()
+    val locked = world.blocks.filter { BlockEdits.locked(it, now) }.sortedBy { it.lock!!.untilWall }
+    SectionLabel("Locked blocks")
+    GroupCard {
+        GroupRow(
+            title = "Emergency unlocks",
+            icon = Icons.Outlined.LockClock,
+            subtitle = "${BlockEdits.emergencyLeft(world)} of ${Defaults.EMERGENCY_UNLOCKS} left, on every device together",
+            first = true,
+        )
+        locked.forEach { b -> GroupRow(title = b.name, subtitle = "Locked until ${formatLockEnd(b.lock!!.untilWall, now)}", icon = Icons.Outlined.Lock) }
+    }
+    FootNote(
+        "Lock a block from its edit page. Until the lock ends nothing that makes it easier to get past can change, " +
+            "not even with the wait or the password; an emergency unlock ends a lock early. Used ones never come back.",
+    )
 }
 
 /**

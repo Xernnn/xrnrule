@@ -125,6 +125,16 @@ mức), bỏ hay đổi một khung lịch (I30). Ở Settings: cụm từ overr
 `overrideWaitMs`, tăng `overrideGrantMs` hay `overridesPerDay` (`BlockEdits.settingsLoosen`). Ngoại lệ duy nhất: lockdown **không đang chạy** thì
 sửa/xóa tự do (`BlockEdits.guardNeeded`). Test: `BlockEditsTest`.
 
+**Khóa có hạn** (I39): `block.lock = BlockLock(untilWall, setAtWall)`. Khi `now_wall < untilWall`
+block **đang khóa** (`BlockEdits.locked`): mọi sửa nới lỏng **cấu hình của nó** (sửa block hay
+checklist của nó, tắt, xóa, sửa nới lỏng một habit mà habit item của nó dùng) bị **từ chối**,
+không chờ hay mật khẩu nào mở được. Sửa chặt hơn vẫn được. Khóa không đụng tới đường qua block mà
+user đã đặt sẵn: làm habit, Pause (I25), override (I34) vẫn như cũ, và Settings chung
+(`dailyCapMs`, override) vẫn qua guard thường. Đặt hay kéo dài khóa là chặt hơn; `untilWall` nhỏ
+đi là nới lỏng, và lúc đang khóa chỉ làm được bằng **mở khẩn cấp** (I40). `lock` không bao giờ về
+null: hết hạn thì ở lại (đã qua), không chặn gì. Đồng hồ là wall của mỗi máy (điện thoại:
+ClockGuard đã bỏ chỉnh tay); laptop từ chối sửa nới lỏng block đang khóa theo đồng hồ của nó.
+
 ### 2.4 Nhiều thiết bị: trạng thái chung
 
 Điện thoại và laptop dùng chung một trạng thái qua server đồng bộ (`xrnrule-sync`, chỉ là kho
@@ -134,7 +144,8 @@ cùng một thời điểm; hạn mức mở khóa mỗi ngày, Pause và lockdo
 **Phần chung** (`SharedState.of(world)`): cấu hình block (bỏ `state`), mọi `ChecklistItem`,
 credit, session, lockdown, `pause`, `lastPauseEpochDay`, `settings`, nhật ký mở khóa hôm nay
 (`unlockLog`, I28), lượng ALLOWANCE đã dùng hôm nay và lượt dùng liên tục của từng thiết bị
-(I19, I32), override đang chạy và nhật ký override hôm nay (I34). Chỉ thời gian
+(I19, I32), override đang chạy và nhật ký override hôm nay (I34), nhật ký mở khẩn cấp
+(`emergencyLog`, I40). Chỉ thời gian
 **wall** đi qua máy khác: mọi mốc monotonic bị đặt 0 khi chiếu và được neo lại khi nhận (như I8).
 **Không** chung qua đây: habit và habit entry (đi qua habit server, §2.5), `done` của habit item
 (mỗi máy tự suy từ entry của nó, I36; `spentEpochDay`/`spentAmount` thì chung), tiến độ timer
@@ -158,6 +169,8 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | allowance | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32) |
 | override | kết thúc muộn hơn; một bên xóa → bên còn (như lockdown) |
 | `overrideLog` | như `unlockLog`: ngày lớn hơn thắng; cùng ngày → hợp |
+| `block.lock` | trộn riêng, bất kể bản block nào thắng: `setAtWall` muộn hơn (đặt khóa và mở khẩn cấp đều đóng dấu lúc làm) (I39) |
+| `emergencyLog` | hợp, không bao giờ bớt (I40) |
 
 Nhận kết quả (I27): credit/session/lockdown/pause mới được neo monotonic theo wall; `state` của
 block suy ra lại (có session → `UNLOCKED`, có credit → `EARNED`, không → `ARMED`; mode khác HABIT
@@ -237,6 +250,8 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I36** | Phần mở khóa `u` của habit: `CHECK` → 1; habit số `AT_LEAST` → `⌈goal / freqDen⌉` (ít nhất 1); `AT_MOST` → không mở. Sau mọi sự kiện (sau sweep), với mọi block `HABIT` đang `ARMED`, mỗi habit item có `available = lượng(d) − spentOn(d)` (I23) và `done = habit còn && available ≥ u`; rồi kiểm `triggerMet` (I11/I15) → `EARNED`. Habit bị xóa → item ở lại và không bao giờ xong. Vậy habit `CHECK` mở mỗi block một lần mỗi ngày; habit số thì làm thêm một `u` nữa để mở lại. Ghi ở máy kia (qua habit server, I38) cũng làm block ở đây `EARNED`. Ở `EARNED` cũng tính lại `done` của habit item; habit item **đã xong ở máy này** mà không còn đủ lượng (bỏ tick, bớt lượng, ở đâu cũng vậy) và trigger không còn đạt → về `ARMED` như user hủy (I10), rồi tính lại habit item. Không vậy thì bỏ tick xong vẫn mở được, mà không tiêu gì (I24), rồi tick lại kiếm thêm lần nữa. Chỉ khi chính máy này thấy item từ xong thành chưa xong: block nhận `EARNED` từ máy khác lúc entry ở đây chưa tới thì không bị lấy lại. | `i36_habitItemEarnsWhenGoalMet`, `i36_weeklyGoalOpensPerDaysShare`, `i36_atMostHabitNeverOpens`, `i36_deletedHabitKeepsTheBlockClosed`, `i36_adoptedUnlockDoesNotSpendAgain`, `i36_otherDevicesWritesCount`, `i36_untickAfterEarnTakesTheEarnBack`, `i36_untickDoesNotTakeBackWhatOtherItemsStillEarn`, `i36_adoptedEarnIsNotTakenBackBeforeTheEntriesArrive`. |
 | **I37** | Focus run (chỉ habit `TIMER`, chỉ ở máy này): `StartFocus(habitId)` — run của habit khác đang có thì fold rồi bỏ; run của cùng habit đang dừng thì chạy tiếp; đang chạy thì no-op. Đang chạy: `FocusRun{habitId, epochDay = ngày habit, startedAtMonotonic=now_mono, startedAtWall=now_wall, running=true}`; phần đang chạy = `(now_mono − startedAtMonotonic) / 60` phần nghìn phút (monotonic: chỉnh giờ không ăn gian được). **Fold** = ghi phần đang chạy vào entry ngày `epochDay` của run như `LogHabit` (I35) rồi dời `startedAtMonotonic` tới đúng phần đã ghi (phần lẻ dưới 60 ms ở lại). `PauseFocus(breakMs)`: fold, `running=false`; `breakMs > 0` → `resumeAtWall = now_wall + breakMs`, sweep tự chạy lại khi tới giờ. `EndFocus`: fold rồi xóa run. Sweep: run đang chạy mà `epochDay` khác ngày habit → fold vào ngày của nó, đoạn mới thuộc ngày mới. Rebuild (I8) re-anchor `startedAtMonotonic` từ delta wall như session. Phần đang chạy tính vào lượng (I23), nên block có thể `EARNED` giữa lúc chạy. | `i37_focusCountsMonotonicAndFoldsOnPause`, `i37_focusEarnsWhileRunning`, `i37_breakResumesByItself`, `i37_focusSurvivesReboot`, `i37_focusAcrossMidnightFoldsIntoItsDay`, `i37_onlyTimerHabitsFocus`. |
 | **I38** | Trộn với habit server (§2.5). `HabitServerPulled(habits, entries, seq, dayStartHour)`: mỗi bản ghi entry — ở máy này không có hay không `dirty` → lấy bản server (`dirty = false`). `dirty` và habit là số → `value = max(0, server + (local − baseValue))` (phần đã thêm ở máy này cộng lên bản mới; `baseValue` null = 0), `baseValue = server`, `notes` theo `mtime` muộn hơn, vẫn `dirty`. `dirty` và `CHECK` → `mtime` muộn hơn thắng (máy này thắng thì vẫn `dirty`, `baseValue = server`). Mọi trường hợp: `seq = seq server`. Habit: như entry `CHECK`, `editedAtWall` so với `mtime`; server báo xóa → bỏ habit (trừ khi máy này đã sửa sau đó); habit xóa ở máy này (`habitTombstones`) mà server đã có bản sửa mới hơn bản nó dựa vào → sửa thắng xóa, habit trở lại. Rồi `habitSyncSeq = seq`, `habitDayStartHour = dayStartHour`. `HabitServerPushed(sent, accepted, rejected)`: bản được nhận mà ở máy này **chưa đổi** từ lúc gửi → `dirty = false`, `baseValue = null`, `seq` mới (tombstone thì bỏ); đã đổi tiếp → giữ `dirty`, `seq` mới, `baseValue = giá trị đã gửi`. Bản bị từ chối → trộn như `HabitServerPulled`. `habitServerEpoch = epoch` khi server có. `full = true` (server lùi lại, §2.5): bản sạch mà máy này đã thấy ở `seq` lớn hơn → giữ bản này, `dirty`; bản server không có → `dirty`, `seq = 0`; tombstone server không có → bỏ; `habitSyncSeq = seq` (không lấy max). | `i38_serverRecordsAreTakenWhenNothingChangedHere`, `i38_amountsAddedOnTwoDevicesAddUp`, `i38_laterCheckWins`, `i38_pushCleansOnlyWhatWasSent`, `i38_rejectedWriteIsRebased`, `i38_editBeatsDelete`, `i38_dayStartHourComesFromTheServer`, `i38_restoredServerGetsBackWhatItLost`. |
+| **I39** | Khóa có hạn (§2.3): `BlockEdits.locked(block, nowWall)` = `lock != null && nowWall < lock.untilWall`. `BlockEdits.loosens` coi `lock.untilWall` nhỏ đi (kể cả bỏ khóa) là nới lỏng. `BlockEdits.lockedBy(world, blocks, nowWall)` = khóa đang chạy dài nhất trong các block đó, hay null. Trộn (§2.4): `lock` lấy theo `setAtWall` muộn hơn (null cũ nhất), độc lập với bản block thắng. | `i39_lockMergesByWhenItWasSet` (+ `BlockEditsTest`: rút ngắn khóa là nới lỏng, `locked` theo đồng hồ). |
+| **I40** | Mở khẩn cấp: `BlockEdits.emergencyUnlock(world, blockId, nowWall)` trả `null` (từ chối) nếu block không đang khóa hay `emergencyLog` đã có `Defaults.EMERGENCY_UNLOCKS` (5) mục; không thì đặt `lock = BlockLock(nowWall, nowWall)` và thêm `emergencyLog["blockId@nowWall"] = nowWall`. 5 lần cho mọi block, mọi thiết bị, không hồi lại; `emergencyLog` chung (§2.4, hợp). | `i40_fiveEmergencyUnlocksInAll`, `i40_emergencyLogIsShared`. |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 
@@ -362,6 +377,6 @@ sealed interface BlockEvent {
 ## 7. Ghi chú test
 
 - `:domain` dùng `FakeClock`, `InMemoryPersist`, `RecordingShield` — không JUnit-Android, không Robolectric.
-- Mỗi bất biến I1–I38 có ít nhất một test đặt tên `i01_...` ... `i38_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
+- Mỗi bất biến I1–I40 có ít nhất một test đặt tên `i01_...` ... `i40_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
 - Acceptance của brainstorm §1 map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
   chạy chuỗi sự kiện end-to-end trên engine.

@@ -26,7 +26,31 @@ object BlockEdits {
             !old.exceptSites.containsAll(new.exceptSites) || // I31: a new exception opens a host
             (!old.perDevice && new.perDevice) || // I33: each device gets the whole limit
             new.lockdownMs < old.lockdownMs ||
+            (new.lock?.untilWall ?: 0) < (old.lock?.untilWall ?: 0) || // I39: a shorter lock
             schedulesLoosen(old.schedule, new.schedule)
+    }
+
+    /** I39: whether [block]'s settings are locked at [nowWall]. */
+    fun locked(block: Block, nowWall: Long): Boolean = block.lock.let { it != null && nowWall < it.untilWall }
+
+    /** I39: the longest lock still running among [blockIds] in [world], or null if none is. */
+    fun lockedBy(world: World, blockIds: Collection<String>, nowWall: Long): Block? =
+        blockIds.mapNotNull { world.block(it) }.filter { locked(it, nowWall) }.maxByOrNull { it.lock!!.untilWall }
+
+    /** I40: emergency unlocks still to use, on every device together. */
+    fun emergencyLeft(world: World): Int = (Defaults.EMERGENCY_UNLOCKS - world.emergencyLog.size).coerceAtLeast(0)
+
+    /**
+     * I40: ends [blockId]'s lock now and logs it, or null when the block isn't locked or all
+     * [Defaults.EMERGENCY_UNLOCKS] are used. The edit it was for still goes through the guard.
+     */
+    fun emergencyUnlock(world: World, blockId: String, nowWall: Long): World? {
+        val block = world.block(blockId)?.takeIf { locked(it, nowWall) } ?: return null
+        if (emergencyLeft(world) == 0) return null
+        return world.copy(
+            blocks = world.blocks.map { if (it.id == block.id) it.copy(lock = BlockLock(nowWall, nowWall)) else it },
+            emergencyLog = world.emergencyLog + ("${block.id}@$nowWall" to nowWall),
+        )
     }
 
     /** I19/I32: a bigger daily limit (0 is none at all), a longer row, or a shorter break. */
@@ -66,9 +90,13 @@ object BlockEdits {
             new.dailyCapMs > old.dailyCapMs
 
     /**
-     * Whether a block's own settings may change freely right now. Only a lockdown that isn't
-     * running is inert; everything else is either blocking or about to.
+     * Whether loosening a block's own settings needs the guard right now. Only a lockdown that
+     * isn't running is inert; everything else is either blocking or about to. A locked block
+     * (I39) always does: the guard then refuses until the lock ends.
      */
-    fun guardNeeded(engine: BlockEngine, world: World, block: Block, clock: Clock): Boolean =
-        !(block.mode == BlockMode.LOCKDOWN && engine.lockdownRemainingMs(world, block.id, clock) == 0L)
+    fun guardNeeded(engine: BlockEngine, world: World, block: Block, clock: Clock): Boolean {
+        val current = world.block(block.id) ?: block // a caller may hold a copy from before a lock
+        return locked(current, clock.nowWallMs()) ||
+            !(current.mode == BlockMode.LOCKDOWN && engine.lockdownRemainingMs(world, current.id, clock) == 0L)
+    }
 }

@@ -22,7 +22,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.domain.BlockEdits
 
 /**
  * A change that makes a block easier to get past, held until [LoosenGuardDialog] lets it through
@@ -33,6 +36,8 @@ data class LoosenRequest(
     val detail: String,
     /** A HARDCORE block is affected: the hardcore password is asked for instead of a wait. */
     val hardcore: Boolean,
+    /** The blocks whose own settings this changes: while one is locked (I39), nothing goes through. */
+    val blockIds: List<String> = emptyList(),
     val apply: () -> Unit,
 )
 
@@ -41,14 +46,18 @@ const val LOOSEN_WAIT_MS = 60_000L
 
 /**
  * Friction for loosening a block, the moment you're most likely to regret it: a 60-second wait
- * (leaving the screen starts it over), or the hardcore password for a HARDCORE block.
+ * (leaving the screen starts it over), or the hardcore password for a HARDCORE block. A locked
+ * block (I39) refuses instead, offering an emergency unlock ([LockedGuard]).
  */
 @Composable
-fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, onDismiss: () -> Unit) {
+fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: WorldStore, onDismiss: () -> Unit) {
+    val world by store.world.collectAsStateWithLifecycle()
+    val locked = BlockEdits.lockedBy(world, request.blockIds, store.clock.nowWallMs())
     val usePassword = request.hardcore && guard.hasPassword()
     var password by remember { mutableStateOf("") }
     var wrong by remember { mutableStateOf(false) }
-    val startedAt = remember { SystemClock.elapsedRealtime() }
+    // The wait starts when there is one to sit through: after an emergency unlock, from then.
+    val startedAt = remember(locked == null) { SystemClock.elapsedRealtime() }
     rememberTicker(250)
     val leftMs = (LOOSEN_WAIT_MS - (SystemClock.elapsedRealtime() - startedAt)).coerceAtLeast(0)
 
@@ -59,6 +68,10 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, onDismiss: (
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) dismiss() }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    if (locked != null) {
+        LockedGuard(locked, store, onDismiss)
+        return
     }
 
     AlertDialog(

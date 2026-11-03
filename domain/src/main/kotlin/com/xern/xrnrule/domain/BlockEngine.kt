@@ -915,6 +915,7 @@ class BlockEngine {
             overrides = overrides,
             overrideEpochDay = maxOf(shared.overrideEpochDay, world.overrideEpochDay),
             overrideLog = if (shared.overrideEpochDay >= world.overrideEpochDay) shared.overrideLog else world.overrideLog,
+            emergencyLog = world.emergencyLog + shared.emergencyLog,
             lastPauseEpochDay = shared.lastPauseEpochDay,
             settings = shared.settings,
             dailyUnlockUsedMs = if (newerDay) 0 else world.dailyUnlockUsedMs,

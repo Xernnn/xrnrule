@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.FreeBreakfast
 import androidx.compose.material.icons.outlined.GppBad
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
@@ -158,12 +159,12 @@ fun BlocksScreen(
                         if (on) {
                             apply()
                         } else {
-                            guarded(block, LoosenRequest("Turn ${block.name} off?", "It stops blocking until you turn it back on.", hardcore) { apply() })
+                            guarded(block, LoosenRequest("Turn ${block.name} off?", "It stops blocking until you turn it back on.", hardcore, listOf(block.id)) { apply() })
                         }
                     },
                     onDelete = {
                         if (BlockEdits.guardNeeded(store.engine, world, block, store.clock)) {
-                            loosen = LoosenRequest("Delete ${block.name}?", "It stops blocking for good.", hardcore) {
+                            loosen = LoosenRequest("Delete ${block.name}?", "It stops blocking for good.", hardcore, listOf(block.id)) {
                                 store.edit { it.deleteBlock(block.id) }
                             }
                         } else {
@@ -175,7 +176,7 @@ fun BlocksScreen(
         }
     }
 
-    loosen?.let { request -> LoosenGuardDialog(request, guard, onDismiss = { loosen = null }) }
+    loosen?.let { request -> LoosenGuardDialog(request, guard, store, onDismiss = { loosen = null }) }
     confirmDelete?.let { block ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
@@ -301,6 +302,19 @@ private fun BlockCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val now = store.clock.nowWallMs()
+                    if (BlockEdits.locked(block, now)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.LockClock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                            WGap(4)
+                            Text(
+                                "Locked until ${formatLockEnd(block.lock!!.untilWall, now)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
                 WGap(8)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {

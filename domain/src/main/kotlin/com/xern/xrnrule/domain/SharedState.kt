@@ -34,6 +34,8 @@ data class SharedState(
     /** The local day [overrideLog] belongs to (I34). */
     val overrideEpochDay: Long = 0,
     val overrideLog: Map<String, Long> = emptyMap(),
+    /** I40: emergency unlocks, every one ever. */
+    val emergencyLog: Map<String, Long> = emptyMap(),
 ) {
     companion object {
 
@@ -70,6 +72,7 @@ data class SharedState(
                 overrides = world.overrides.mapValues { it.value.copy(startedAtMonotonic = 0) },
                 overrideEpochDay = world.overrideEpochDay,
                 overrideLog = world.overrideLog,
+                emergencyLog = world.emergencyLog,
             )
         }
 
@@ -90,8 +93,9 @@ data class SharedState(
                     when {
                         l == null -> r // edited beats deleted: the stricter side
                         r == null -> l
-                        r.editedAtWall >= l.editedAtWall -> r
-                        else -> l
+                        // I39: the lock goes by when it was set, whichever edit wins.
+                        r.editedAtWall >= l.editedAtWall -> r.copy(lock = laterLock(l.lock, r.lock))
+                        else -> l.copy(lock = laterLock(l.lock, r.lock))
                     }
                 },
                 items = mergeMaps(b.items, local.items, remote.items) { l, r ->
@@ -186,7 +190,15 @@ data class SharedState(
                     local.overrideEpochDay > remote.overrideEpochDay -> local.overrideLog
                     else -> remote.overrideLog
                 },
+                emergencyLog = local.emergencyLog + remote.emergencyLog, // I40: only ever added to
             )
+        }
+
+        private fun laterLock(a: BlockLock?, b: BlockLock?): BlockLock? = when {
+            a == null -> b
+            b == null -> a
+            b.setAtWall >= a.setAtWall -> b
+            else -> a
         }
 
         /** Equal apart from the tick and the spent day, which merge on their own. */

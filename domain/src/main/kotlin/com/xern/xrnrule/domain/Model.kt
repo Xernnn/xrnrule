@@ -57,6 +57,7 @@ object Defaults {
     const val UNLOCK_WARNING_MS = 30_000L                // G3
     const val DEFAULT_UNLOCK_MS = 5L * 60 * 1000
     const val PAUSE_MS = 15L * 60 * 1000                 // I25
+    const val EMERGENCY_UNLOCKS = 5                      // I40: in all, never given back
     const val ALL_ITEMS = -1L                            // trigger.requiredAmount sentinel (I11)
     const val OVERRIDE_PHRASE = "I choose to keep scrolling" // I34
     const val OVERRIDE_WAIT_MS = 45_000L                 // I34
@@ -263,6 +264,8 @@ data class Block(
     val lockdownMs: Long = 0,
     /** Wall-clock ms of the last edit; the later edit wins when two devices change a block at once (§2.4). */
     val editedAtWall: Long = 0,
+    /** I39: nothing that loosens this block goes through before [BlockLock.untilWall]; never set back to null. */
+    val lock: BlockLock? = null,
 ) {
     /** Everything this block blocks that can be "the foreground app": phone packages and laptop apps. */
     val targetApps: Set<String> get() = targetPackages + targetDesktopApps
@@ -274,6 +277,13 @@ data class Block(
     /** Whether the "in a row" rule applies (I32). */
     val hasRowRule: Boolean get() = mode == BlockMode.ALLOWANCE && sessionMs > 0 && sessionBreakMs > 0
 }
+
+/**
+ * I39: a block's settings can't be loosened before [untilWall], by any wait or password; only an
+ * emergency unlock (I40) ends it early. [setAtWall] settles two devices' locks (§2.4).
+ */
+@Serializable
+data class BlockLock(val untilWall: Long, val setAtWall: Long)
 
 /**
  * A short break from every SOFT block that isn't a lockdown (I25). Counted down on the monotonic
@@ -452,6 +462,8 @@ data class World(
     /** Overrides bought on [overrideEpochDay], keyed by [OverrideGrant.key] (I34). */
     val overrideLog: Map<String, Long> = emptyMap(),
     val overrideEpochDay: Long = 0,
+    /** I40: every emergency unlock ever, "blockId@wall" -> wall; shared, only ever added to. */
+    val emergencyLog: Map<String, Long> = emptyMap(),
     /** An override waiting out its delay here (I34). */
     val pendingOverride: PendingOverride? = null,
     /**

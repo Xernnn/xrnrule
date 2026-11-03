@@ -329,7 +329,8 @@ fun World.withBlock(block: Block, items: List<ChecklistItem>): World {
     val exists = blocks.any { it.id == block.id }
     return copy(
         // An edit keeps the block's state: it moves on through events only.
-        blocks = if (exists) blocks.map { if (it.id == block.id) block.copy(state = it.state) else it } else blocks + block,
+        // Nor does it touch the lock (I39), which only its own dialog sets.
+        blocks = if (exists) blocks.map { if (it.id == block.id) block.copy(state = it.state, lock = it.lock) else it } else blocks + block,
         checklist = if (items.isEmpty()) checklist - block.id else checklist + (block.id to items),
     )
 }

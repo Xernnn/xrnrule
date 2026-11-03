@@ -5,6 +5,7 @@ import java.time.ZoneId
 
 /** A fixed instant well away from any DST edge, used as the base wall clock in tests. */
 val BASE_WALL: Long = Instant.parse("2026-01-15T12:00:00Z").toEpochMilli()
+const val DAY_MS: Long = 24L * 60 * 60 * 1000
 
 class FakeClock(
     private var mono: Long = 0L,

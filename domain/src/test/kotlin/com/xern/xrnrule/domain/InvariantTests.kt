@@ -1017,6 +1017,72 @@ class InvariantTests {
     }
 
     @Test
+    fun i39_lockMergesByWhenItWasSet() {
+        val block = modeBlock("s1", BlockMode.SCHEDULE)
+        val (phone, laptop, server) = twoDevices(listOf(block))
+        phone.sync(server)
+        laptop.sync(server)
+
+        // The phone locks it; the laptop, not knowing, makes a later edit of its own.
+        val now = phone.clock.nowWallMs()
+        val lock = BlockLock(untilWall = now + 7 * DAY_MS, setAtWall = now)
+        phone.world = phone.world.copy(blocks = listOf(phone.block("s1").copy(lock = lock, editedAtWall = now)))
+        laptop.world = laptop.world.copy(blocks = listOf(laptop.block("s1").copy(targetSites = setOf("x.com"), editedAtWall = now + 1)))
+        phone.sync(server)
+        laptop.sync(server)
+        phone.sync(server)
+
+        for (device in listOf(phone, laptop)) {
+            assertEquals(device.id, setOf("x.com"), device.block("s1").targetSites) // the later edit
+            assertEquals(device.id, lock, device.block("s1").lock) // with the lock it never saw
+        }
+
+        // An emergency unlock is newer than the lock it ends, whichever edit wins.
+        val ended = BlockEdits.emergencyUnlock(laptop.world, "s1", laptop.clock.nowWallMs() + 10)!!
+        laptop.world = ended
+        phone.world = phone.world.copy(blocks = listOf(phone.block("s1").copy(name = "Later", editedAtWall = now + 100)))
+        laptop.sync(server)
+        phone.sync(server)
+        assertEquals("Later", phone.block("s1").name)
+        assertFalse(BlockEdits.locked(phone.block("s1"), phone.clock.nowWallMs() + 20))
+    }
+
+    @Test
+    fun i40_fiveEmergencyUnlocksInAll() {
+        val clock = FakeClock()
+        val now = clock.nowWallMs()
+        val blocks = (1..6).map { modeBlock("b$it", BlockMode.SCHEDULE).copy(lock = BlockLock(now + DAY_MS, now)) }
+        var world = buildWorld(blocks, clock = clock)
+        assertNull("not locked: nothing to end", BlockEdits.emergencyUnlock(buildWorld(listOf(modeBlock("x", BlockMode.SCHEDULE)), clock = clock), "x", now))
+
+        for (i in 1..5) {
+            world = BlockEdits.emergencyUnlock(world, "b$i", now + i)!!
+            assertFalse(BlockEdits.locked(world.block("b$i")!!, now + i))
+            assertEquals(5 - i, BlockEdits.emergencyLeft(world))
+        }
+        assertNull("the sixth is refused", BlockEdits.emergencyUnlock(world, "b6", now + 6))
+    }
+
+    @Test
+    fun i40_emergencyLogIsShared() {
+        val clock = FakeClock()
+        val now = clock.nowWallMs()
+        val blocks = listOf("a", "b").map { modeBlock(it, BlockMode.SCHEDULE).copy(lock = BlockLock(now + DAY_MS, now)) }
+        val (phone, laptop, server) = twoDevices(blocks)
+        phone.sync(server)
+        laptop.sync(server)
+
+        // One each, before either hears of the other's: both count, everywhere.
+        phone.world = BlockEdits.emergencyUnlock(phone.world, "a", phone.clock.nowWallMs())!!
+        laptop.world = BlockEdits.emergencyUnlock(laptop.world, "b", laptop.clock.nowWallMs())!!
+        phone.sync(server)
+        laptop.sync(server)
+        phone.sync(server)
+        assertEquals(3, BlockEdits.emergencyLeft(phone.world))
+        assertEquals(3, BlockEdits.emergencyLeft(laptop.world))
+    }
+
+    @Test
     fun i34_habitOrLockdownIsNotOverridable() {
         val clock = FakeClock()
         val schedule = modeBlock("s1", BlockMode.SCHEDULE)

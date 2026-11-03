@@ -270,7 +270,7 @@ fun EditBlockScreen(
         }
         val loosens = BlockEdits.loosens(existing, updated) || itemsLoosen(oldItems, newItems)
         if (loosens && BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
-            loosen = LoosenRequest("Save these changes?", "They make ${existing.name} easier to get past.", hardcore) { apply() }
+            loosen = LoosenRequest("Save these changes?", "They make ${existing.name} easier to get past.", hardcore, listOf(existing.id)) { apply() }
         } else {
             apply()
         }
@@ -333,6 +333,8 @@ fun EditBlockScreen(
             }
 
             Gap(20)
+            GroupCard { LockRow(existing, store) }
+            Gap(12)
             GroupCard {
                 GroupRow(
                     title = "Delete block",
@@ -342,7 +344,7 @@ fun EditBlockScreen(
                     chevron = false,
                     onClick = {
                         if (BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
-                            loosen = LoosenRequest("Delete ${existing.name}?", "It stops blocking for good.", hardcore) {
+                            loosen = LoosenRequest("Delete ${existing.name}?", "It stops blocking for good.", hardcore, listOf(existing.id)) {
                                 store.edit { it.deleteBlock(existing.id) }
                                 onDone()
                             }
@@ -356,7 +358,7 @@ fun EditBlockScreen(
         }
     }
 
-    loosen?.let { request -> LoosenGuardDialog(request, guard, onDismiss = { loosen = null }) }
+    loosen?.let { request -> LoosenGuardDialog(request, guard, store, onDismiss = { loosen = null }) }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },

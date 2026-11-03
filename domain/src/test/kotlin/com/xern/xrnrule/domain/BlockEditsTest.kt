@@ -1,6 +1,8 @@
 package com.xern.xrnrule.domain
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -50,6 +52,33 @@ class BlockEditsTest {
 
         world = engine.reduce(world, BlockEvent.StartLockdown("l"), clock).world
         assertTrue(BlockEdits.guardNeeded(engine, world, lockdown, clock))
+    }
+
+    @Test
+    fun aLockStopsLooseningUntilItEnds() {
+        val engine = BlockEngine()
+        val clock = FakeClock()
+        val now = clock.nowWallMs()
+        val lockdown = modeBlock("l", BlockMode.LOCKDOWN, lockdownMs = 60L * 60_000)
+        val lock = BlockLock(untilWall = now + DAY_MS, setAtWall = now)
+        val world = buildWorld(listOf(lockdown.copy(lock = lock)), clock = clock)
+        assertTrue(BlockEdits.locked(world.block("l")!!, now))
+        assertTrue("even an idle lockdown, once locked", BlockEdits.guardNeeded(engine, world, lockdown, clock))
+        assertEquals("l", BlockEdits.lockedBy(world, listOf("l", "gone"), now)?.id)
+
+        clock.advance(DAY_MS)
+        assertFalse(BlockEdits.locked(world.block("l")!!, clock.nowWallMs()))
+        assertFalse(BlockEdits.guardNeeded(engine, world, lockdown, clock))
+        assertNull(BlockEdits.lockedBy(world, listOf("l"), clock.nowWallMs()))
+    }
+
+    @Test
+    fun aShorterLockLoosensALongerOneDoesnt() {
+        val locked = habit.copy(lock = BlockLock(untilWall = 2 * DAY_MS, setAtWall = 0))
+        assertFalse(BlockEdits.loosens(habit, locked))
+        assertFalse(BlockEdits.loosens(locked, locked.copy(lock = BlockLock(3 * DAY_MS, DAY_MS))))
+        assertTrue(BlockEdits.loosens(locked, locked.copy(lock = BlockLock(DAY_MS, DAY_MS))))
+        assertTrue(BlockEdits.loosens(locked, locked.copy(lock = null)))
     }
 
     @Test

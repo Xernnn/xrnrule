@@ -51,6 +51,11 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Hard to talk yourself out of.** Deleting a block or making one easier (including the
   buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the phone's
   clock by hand doesn't reset limits or move schedules.
+- **Locks.** A block can be locked for 24 hours up to a year (its edit page): until then nothing
+  that makes it easier to get past can change, on the phone or the laptop, whatever you wait or
+  type. Making it stricter still works, and so do the ways through it you set up (habits, bought
+  minutes, the break). Five emergency unlocks, shared by both devices and never given back, can
+  end a lock early.
 - **Status at a glance.** The notification shows what's open and for how long, warns 30 s
   before an unlock ends, and says so if blocking stops working. On limited sites the extension
   can show a corner clock of what runs out first, and warns at 10, 5, 3 and 1 minutes left.
@@ -204,7 +209,7 @@ it to sync every half hour, raising an alert when it doesn't answer.
 | `extension/` | The browser extension, for both devices |
 | `server/` | `xrnrule-sync.py`, the tiny sync server (Python), and its status page |
 
-The engine's rules (states, transitions, invariants I1–I38, multi-device sync in §2.4) are
+The engine's rules (states, transitions, invariants I1–I40, multi-device sync in §2.4) are
 specified in `docs/domain-contract.md`, which is in Vietnamese.
 
 ## License

@@ -35,9 +35,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import java.net.InetSocketAddress
 import java.net.URLDecoder
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+
+private val LOCK_END = DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm")
 
 /**
  * The daemon's door on `127.0.0.1`: the local page (what's blocked, unlock, laptop setup), the
@@ -47,6 +52,7 @@ import java.util.concurrent.Executors
  * preflight, which this server never approves, so only our own page and the extension can
  * change anything; and a request must name this server as its Host (DNS rebinding). (It's a self-control tool, not a lock: anyone at the keyboard can stop it.)
  */
+
 class LocalServer(
     private val config: Config,
     private val store: Store,
@@ -241,8 +247,18 @@ class LocalServer(
             runBlocking { apply() }
             return "{}"
         }
+        lockedError(old)?.let { return it }
         if (old.enforcementTier == EnforcementTier.HARDCORE) return error("This is a hardcore block: loosen it on the phone, with its password.")
-        return guarded(apply)
+        // A lock set on the phone during the wait still holds (I39).
+        return guarded { if (lockedError(old) == null) apply() }
+    }
+
+    /** I39: a locked block refuses every loosening; only the phone has emergency unlocks (I40). */
+    private fun lockedError(old: Block): String? {
+        val current = store.world.value.block(old.id) ?: old
+        if (!BlockEdits.locked(current, store.clock.nowWallMs())) return null
+        val until = LOCK_END.format(Instant.ofEpochMilli(current.lock!!.untilWall).atZone(ZoneId.systemDefault()))
+        return error("This block is locked until $until: nothing can make it easier before then, except an emergency unlock on the phone.")
     }
 
     private fun error(text: String) = """{"error":${json.encodeToString(String.serializer(), text)}}"""
