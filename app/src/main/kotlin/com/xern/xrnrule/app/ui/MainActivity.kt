@@ -19,9 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -36,7 +33,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -234,8 +230,8 @@ private fun XrnruleScreens(container: AppContainer) {
             // Hide the tab bar on full-screen sub-pages (new block, edit, settings pages).
             if (route == null || route in Tabs.map { it.route }) {
                 Column {
-                    Hairline()
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
+                    // Habits First's bar: on the card grey, a pill behind the selected tab's icon.
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                         Tabs.forEach { tab ->
                             val selected = current?.destination?.hierarchy?.any { it.route == tab.route } == true
                             NavigationBarItem(
@@ -252,9 +248,9 @@ private fun XrnruleScreens(container: AppContainer) {
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = MaterialTheme.colorScheme.onSurface,
                                     selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    indicatorColor = Color.Transparent,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                    indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
                                 ),
                             )
                         }
@@ -295,7 +291,7 @@ private fun XrnruleScreens(container: AppContainer) {
                 if (page == null) {
                     LaunchedEffect(Unit) { nav.leave(entry) }
                 } else {
-                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.leave(entry) })
+                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.leave(entry) }, onOpen = { nav.navigate("settings/${it.name}") })
                 }
             }
             composable("createBlock") { entry ->
@@ -345,9 +341,9 @@ object AppLinks {
 }
 
 sealed class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
-    data object Blocks : Tab("blocks", "Blocks", Icons.Outlined.Shield, Icons.Filled.Shield)
-    data object Insights : Tab("insights", "Insights", Icons.Outlined.BarChart, Icons.Filled.BarChart)
-    data object Settings : Tab("settings", "Settings", Icons.Outlined.Settings, Icons.Filled.Settings)
+    data object Blocks : Tab("blocks", "Blocks", Icons.Filled.Shield, Icons.Filled.Shield)
+    data object Insights : Tab("insights", "Insights", Icons.Filled.BarChart, Icons.Filled.BarChart)
+    data object Settings : Tab("settings", "Settings", Icons.Filled.Settings, Icons.Filled.Settings)
 }
 
 private val Tabs = listOf(Tab.Blocks, Tab.Insights, Tab.Settings)

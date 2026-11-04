@@ -12,15 +12,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shield
@@ -29,7 +29,6 @@ import androidx.compose.material.icons.outlined.FreeBreakfast
 import androidx.compose.material.icons.outlined.GppBad
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
@@ -50,16 +49,20 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.InstalledApps
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.ui.theme.Brand
 import com.xern.xrnrule.app.ui.theme.GeistMono
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.domain.Block
@@ -69,9 +72,7 @@ import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.EnforcementTier
-import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.RejectReason
-import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
 
 /**
@@ -107,11 +108,16 @@ fun BlocksScreen(
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PageTitle(
             title = "",
-            leading = { Wordmark() },
+            leading = {
+                // Habits First's header: a small mark in colour before the name.
+                Icon(painterResource(R.drawable.ic_stat_xrnrule), contentDescription = null, tint = Brand, modifier = Modifier.size(20.dp))
+                WGap(8)
+                Wordmark()
+            },
             actions = {
                 // A break only lifts soft blocks (I25); with none, there's nothing to offer.
                 if (pauseLeft == 0L && world.blocks.any(store.engine::pausable)) {
-                    RoundIconButton(Icons.Outlined.FreeBreakfast, "Take a break", onClick = {
+                    RoundIconButton(Icons.Outlined.FreeBreakfast, "Take a break", outlined = true, onClick = {
                         if (store.engine.canPause(world, store.clock)) {
                             loosen = LoosenRequest(
                                 title = "Take a ${formatDuration(Defaults.PAUSE_MS)} break?",
@@ -124,7 +130,7 @@ fun BlocksScreen(
                         }
                     })
                 }
-                if (world.blocks.isNotEmpty()) RoundIconButton(Icons.Filled.Add, "New block", onClick = onCreateBlock)
+                if (world.blocks.isNotEmpty()) RoundIconButton(Icons.Filled.Add, "New block", outlined = true, onClick = onCreateBlock)
             },
         )
 
@@ -172,6 +178,7 @@ fun BlocksScreen(
                             confirmDelete = block
                         }
                     },
+                    guard = guard,
                 )
             }
         }
@@ -220,7 +227,7 @@ private fun PermissionBanner(missing: List<AppPermission>, onClick: () -> Unit) 
         Icon(Icons.Outlined.GppBad, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
         WGap(12)
         Column {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text(title, style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold), color = Color.White)
             Text(
                 "Your blocks can't block anything until it's back on. Tap to fix.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -275,10 +282,13 @@ private fun BlockCard(
     onFocus: (String, Boolean) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    guard: HardcoreGuard,
 ) {
     if (block.mode != BlockMode.HABIT || block.state == BlockState.UNLOCKED) rememberTicker() // countdowns move with time
     var menu by remember { mutableStateOf(false) }
+    var locking by remember { mutableStateOf(false) }
     val hardcore = block.enforcementTier == EnforcementTier.HARDCORE
+    if (locking) LockDialog(block, store, guard, onDismiss = { locking = false })
 
     Box {
         HFCard(
@@ -286,7 +296,10 @@ private fun BlockCard(
                 .clip(CardShape)
                 .combinedClickable(onClick = onOpen, onLongClick = { menu = true }),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Habits First's header: the icon, the name, and the switch with the lock under it.
+            val now = store.clock.nowWallMs()
+            val locked = BlockEdits.locked(block, now)
+            Row(verticalAlignment = Alignment.Top) {
                 AppTile(
                     packages = block.targetPackages.sortedBy { appLabels[it]?.lowercase() ?: it },
                     fallback = Icons.Filled.Shield,
@@ -294,45 +307,22 @@ private fun BlockCard(
                     modifier = Modifier.alpha(if (block.enabled) 1f else 0.5f),
                 )
                 WGap(14)
-                Column(Modifier.weight(1f)) {
-                    Text(block.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        targetLine(block, appLabels),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    val now = store.clock.nowWallMs()
-                    if (BlockEdits.locked(block, now)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.LockClock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-                            WGap(4)
-                            Text(
-                                "Locked until ${formatLockEnd(block.lock!!.untilWall, now)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
-                        }
+                Column(Modifier.weight(1f).heightIn(min = 52.dp), verticalArrangement = Arrangement.Center) {
+                    Text(block.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (locked) {
+                        Text(
+                            "Locked until ${formatLockEnd(block.lock!!.untilWall, now)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
                     }
                 }
                 WGap(8)
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(horizontalAlignment = Alignment.End) {
                     XSwitch(checked = block.enabled, onCheckedChange = onEnabledChange)
-                    if (hardcore) {
-                        Gap(4)
-                        Icon(
-                            Icons.Outlined.Lock,
-                            contentDescription = "Hardcore",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(6.dp),
-                        )
-                    }
+                    Gap(10)
+                    LockPill(block.name, active = locked || hardcore, onClick = { locking = true })
                 }
             }
             if (!block.enabled) {
@@ -344,7 +334,7 @@ private fun BlockCard(
                 )
                 return@HFCard
             }
-            Gap(14)
+            Gap(10)
             when (block.mode) {
                 BlockMode.HABIT -> HabitBody(block, world, store, appLabels, onFocus)
                 else -> StrictBody(block, world, store)
@@ -364,19 +354,6 @@ private fun BlockCard(
             )
         }
     }
-}
-
-/** "Instagram + youtube.com", "+ 2 laptop apps" when the laptop has some too. */
-private fun targetLine(block: Block, appLabels: Map<String, String>): String {
-    val names = block.targetPackages.map { appLabels[it] ?: it }.sortedBy { it.lowercase() } + Sites.shown(block.targetSites.sorted())
-    val laptop = block.targetDesktopApps.size
-    val phone = summarizeNames(names, empty = if (laptop > 0) "" else "Nothing yet")
-    val laptopText = when (laptop) {
-        0 -> ""
-        1 -> "1 laptop app"
-        else -> "$laptop laptop apps"
-    }
-    return listOf(phone, laptopText).filter { it.isNotEmpty() }.joinToString(" · ")
 }
 
 @Composable
@@ -409,26 +386,31 @@ private fun HabitBody(
     }
     if (block.state == BlockState.UNLOCKED) {
         val left = sessionLeftMs(world, block.id, store.clock)
-        val duration = world.sessions[block.id]?.durationMs ?: block.reward.unlockDurationMs
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.LockOpen, contentDescription = null, tint = kinds.habit.color, modifier = Modifier.size(16.dp))
-            WGap(6)
-            Text(
-                "unlocked · blocks again at ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Text(compactDuration(left), style = MaterialTheme.typography.titleMedium, color = kinds.habit.color, fontFamily = GeistMono)
-        }
-        Gap(8)
-        MeterBar(if (duration <= 0) 0f else left.toFloat() / duration, color = kinds.habit.color, track = kinds.habit.fill, height = 5.dp)
+        StatusPill(
+            "open until ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}",
+            container = kinds.habit.fill,
+            content = kinds.habit.color,
+            trailing = compactDuration(left),
+        )
         return
     }
 
     val habitApps = block.trigger.habitPackages.takeIf { it.isNotEmpty() }?.joinToString(" or ") { appLabels[it] ?: it }
     val parts = world.habitParts(block, habitApps, store.engine, store.clock)
     val armed = block.state == BlockState.ARMED
+    when {
+        block.state != BlockState.EARNED -> StatusPill("no unlocks available")
+        store.engine.redeemRejection(world, block.id, store.clock) == RejectReason.CAP_REACHED -> StatusPill(
+            capReachedText(store.engine.unlockUsedTodayMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs),
+        )
+        else -> StatusPill(
+            "Open for ${formatDuration(block.reward.unlockDurationMs)}",
+            container = MaterialTheme.colorScheme.primary,
+            content = MaterialTheme.colorScheme.onPrimary,
+            onClick = { store.dispatch(BlockEvent.Redeem(block.id)) },
+        )
+    }
+    Gap(6)
     joinTag(block, parts)?.let { Tag(it); Gap(6) }
     if (parts.isEmpty()) {
         Text("Nothing unlocks it yet. Tap to add a habit.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -479,21 +461,39 @@ private fun HabitBody(
             }
         }
     }
-    if (block.state == BlockState.EARNED) {
-        Gap(12)
-        if (store.engine.redeemRejection(world, block.id, store.clock) == RejectReason.CAP_REACHED) {
-            Text(
-                capReachedText(store.engine.unlockUsedTodayMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            PillButton(
-                "Open for ${formatDuration(block.reward.unlockDurationMs)}",
-                onClick = { store.dispatch(BlockEvent.Redeem(block.id)) },
-                icon = Icons.Filled.LockOpen,
-            )
-        }
+}
+
+/**
+ * The wide pill under a block card's header, as in Habits First: "no unlocks available" on the
+ * raised grey, the green "Open for 15 min" once it can be opened, the time left while open.
+ */
+@Composable
+private fun StatusPill(
+    text: String,
+    container: Color = MaterialTheme.colorScheme.surfaceVariant,
+    content: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailing: String? = null,
+    onClick: (() -> Unit)? = null,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(container)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = content,
+            textAlign = TextAlign.Center,
+            modifier = if (trailing != null) Modifier.weight(1f) else Modifier,
+        )
+        if (trailing != null) Text(trailing, style = MaterialTheme.typography.titleMedium, color = content, fontFamily = GeistMono)
     }
 }
 

@@ -6,10 +6,10 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -46,8 +46,10 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,11 +65,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.data.AppLock
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.BlocksBackups
@@ -83,6 +88,7 @@ import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
 import com.xern.xrnrule.app.ui.theme.Appearance
+import com.xern.xrnrule.app.ui.theme.Brand
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.ThemeMode
 import com.xern.xrnrule.app.update.AppUpdates
@@ -114,6 +120,7 @@ enum class SettingsPage(val title: String) {
     WEBSITES("Browser extension"),
     UPDATES("Updates"),
     BACKUP("Backup"),
+    ADVANCED("Advanced"),
 }
 
 /** Everything Settings reads, so the list and its pages take one argument. */
@@ -141,7 +148,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState()),
     ) {
-        PageTitle("Settings")
+        PageTitle("settings")
         Column(Modifier.padding(ScreenPadding)) { SettingsList(world, deps, onOpen) }
     }
 }
@@ -156,8 +163,6 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
     val loopStatus = remember(resume) { deps.loop.status() }
     val loopUnreachable by deps.loop.unreachable.collectAsState()
-    val theme by Appearance.themeMode.collectAsState()
-    val lockOn by deps.appLock.enabled.collectAsStateWithLifecycle()
     run {
         SyncSummary(deps.shared) { onOpen(SettingsPage.SYNC) }
 
@@ -218,61 +223,18 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
             }
         }
 
-        SectionLabel("Advanced")
+        Gap(20)
         GroupCard {
-            GroupRow(
-                title = "Habits",
-                icon = Icons.Outlined.TaskAlt,
-                subtitle = when (world.habits.size) {
-                    0 -> "None yet: make one when a block asks for it"
-                    1 -> "1 habit, shared with your laptop"
-                    else -> "${world.habits.size} habits, shared with your laptop"
-                },
-                first = true,
-                onClick = { onOpen(SettingsPage.HABITS) },
-            )
-            GroupRow(
-                title = "Unlocks",
-                icon = Icons.Outlined.LockOpen,
-                subtitle = "Up to ${formatDuration(world.settings.dailyCapMs)} a day" +
-                    if (world.settings.overridesPerDay > 0) " · buying minutes on" else "",
-                onClick = { onOpen(SettingsPage.UNLOCKS) },
-            )
-            GroupRow(
-                title = "Security & privacy",
-                icon = Icons.Outlined.Security,
-                subtitle = listOfNotNull(
-                    if (lockOn) "App lock on" else "App lock off",
-                    if (deps.guard.isSupported() && deps.guard.hasPassword()) "hardcore password set" else null,
-                ).joinToString(" · "),
-                onClick = { onOpen(SettingsPage.SECURITY) },
-            )
-            GroupRow(
-                title = "Appearance",
-                icon = Icons.Outlined.DarkMode,
-                subtitle = theme.label,
-                onClick = { onOpen(SettingsPage.APPEARANCE) },
-            )
-            if (deps.updates.isSupported) {
-                GroupRow(
-                    title = "Updates",
-                    icon = Icons.Outlined.SystemUpdate,
-                    subtitle = "Version ${deps.updates.installedVersion}",
-                    onClick = { onOpen(SettingsPage.UPDATES) },
-                )
-            }
-            GroupRow(
-                title = "Backup",
-                icon = Icons.Outlined.SaveAlt,
-                subtitle = "Export or import your blocks",
-                onClick = { onOpen(SettingsPage.BACKUP) },
-            )
+            GroupRow(title = "Advanced", icon = Icons.Outlined.Tune, first = true, onClick = { onOpen(SettingsPage.ADVANCED) })
         }
-
         Gap(36)
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Wordmark(size = 20)
-            Gap(4)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.Icon(painterResource(R.drawable.ic_stat_xrnrule), contentDescription = null, tint = Brand, modifier = Modifier.size(18.dp))
+                WGap(8)
+                Wordmark(size = 20)
+            }
+            Gap(8)
             Text(
                 appVersion(context),
                 style = MaterialTheme.typography.bodySmall,
@@ -306,23 +268,20 @@ private fun SyncSummary(shared: SharedSync, onClick: () -> Unit) {
             .fillMaxWidth()
             .clip(CardShape)
             .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CardShape)
             .clickable(onClick = onClick)
-            .padding(18.dp),
+            .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(48.dp).clip(CircleShape).background(if (configured) green.fill else MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
-        ) {
-            androidx.compose.material3.Icon(
-                if (configured) Icons.Outlined.CloudSync else Icons.Outlined.CloudOff,
-                contentDescription = null,
-                tint = if (configured) green.color else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        WGap(14)
+        androidx.compose.material3.Icon(
+            if (configured) Icons.Outlined.CloudSync else Icons.Outlined.CloudOff,
+            contentDescription = null,
+            tint = if (configured) green.color else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(28.dp),
+        )
+        WGap(18)
         Column(Modifier.weight(1f)) {
-            Text(if (configured) "Home server" else "Sync is off", style = MaterialTheme.typography.titleMedium)
+            Text(if (configured) "Home server" else "Sync is off", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp))
             Text(
                 when {
                     !configured -> "Share blocks and unlocks with your laptop"
@@ -356,18 +315,76 @@ private fun PermissionRow(title: String, icon: ImageVector, granted: Boolean?, f
             if (granted == true) {
                 androidx.compose.material3.Icon(Icons.Filled.CheckCircle, contentDescription = "Allowed", tint = MaterialTheme.colorScheme.primary)
             } else {
+                val red = MaterialTheme.colorScheme.error
                 Text(
                     if (granted == null) "Open" else "Allow",
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = if (granted == null) MaterialTheme.colorScheme.onSurface else red,
                     modifier = Modifier
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (granted == null) MaterialTheme.colorScheme.surfaceVariant else red.copy(alpha = 0.16f))
+                        .padding(horizontal = 16.dp, vertical = 7.dp),
                 )
             }
         },
     )
+}
+
+/** What Habits First keeps under Advanced: habits, unlocks, security, look, updates, backup. */
+@Composable
+private fun AdvancedPage(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
+    val theme by Appearance.themeMode.collectAsState()
+    val lockOn by deps.appLock.enabled.collectAsStateWithLifecycle()
+    Gap(8)
+    GroupCard {
+        GroupRow(
+            title = "Habits",
+            icon = Icons.Outlined.TaskAlt,
+            subtitle = when (world.habits.size) {
+                0 -> "None yet: make one when a block asks for it"
+                1 -> "1 habit, shared with your laptop"
+                else -> "${world.habits.size} habits, shared with your laptop"
+            },
+            first = true,
+            onClick = { onOpen(SettingsPage.HABITS) },
+        )
+        GroupRow(
+            title = "Unlocks",
+            icon = Icons.Outlined.LockOpen,
+            subtitle = "Up to ${formatDuration(world.settings.dailyCapMs)} a day" +
+                if (world.settings.overridesPerDay > 0) " · buying minutes on" else "",
+            onClick = { onOpen(SettingsPage.UNLOCKS) },
+        )
+        GroupRow(
+            title = "Security & privacy",
+            icon = Icons.Outlined.Security,
+            subtitle = listOfNotNull(
+                if (lockOn) "App lock on" else "App lock off",
+                if (deps.guard.isSupported() && deps.guard.hasPassword()) "hardcore password set" else null,
+            ).joinToString(" · "),
+            onClick = { onOpen(SettingsPage.SECURITY) },
+        )
+        GroupRow(
+            title = "Appearance",
+            icon = Icons.Outlined.DarkMode,
+            subtitle = theme.label,
+            onClick = { onOpen(SettingsPage.APPEARANCE) },
+        )
+        if (deps.updates.isSupported) {
+            GroupRow(
+                title = "Updates",
+                icon = Icons.Outlined.SystemUpdate,
+                subtitle = "Version ${deps.updates.installedVersion}",
+                onClick = { onOpen(SettingsPage.UPDATES) },
+            )
+        }
+        GroupRow(
+            title = "Backup",
+            icon = Icons.Outlined.SaveAlt,
+            subtitle = "Export or import your blocks",
+            onClick = { onOpen(SettingsPage.BACKUP) },
+        )
+    }
 }
 
 /** "just now", "5 min ago", "2 h ago". */
@@ -381,12 +398,19 @@ fun formatAgo(wallMs: Long): String {
 // =====================================================================================
 
 @Composable
-fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onBack: () -> Unit) {
+fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onBack: () -> Unit, onOpen: (SettingsPage) -> Unit) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
-        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            RoundIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
-            Text(page.title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
-            Box(Modifier.size(44.dp))
+        // Habits First's sub-page bar: a bare back arrow and the title beside it.
+        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            WGap(4)
+            Text(
+                page.title,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal, fontSize = 18.sp),
+                modifier = Modifier.weight(1f),
+            )
         }
         Column(
             Modifier
@@ -403,6 +427,7 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
                 SettingsPage.WEBSITES -> WebsitesPage(deps)
                 SettingsPage.UPDATES -> UpdatesPage(deps.updates)
                 SettingsPage.BACKUP -> BackupPage(world, deps.store)
+                SettingsPage.ADVANCED -> AdvancedPage(world, deps, onOpen)
             }
             Gap(32)
         }

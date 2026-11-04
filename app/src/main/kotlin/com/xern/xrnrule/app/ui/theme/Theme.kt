@@ -27,9 +27,12 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Dark graphite cards on a near-black ground, one green for "go", and a colour per kind of
- * habit (timer red, app time cyan, ...) so a block's rows read at a glance. Type is Nunito, with
- * Geist Mono for the wordmark. Both fonts are OFL; their licences are in assets/licenses.
+ * habit (timer red, app time cyan, ...) so a block's rows read at a glance. Type is MiSans, with
+ * Geist Mono (OFL, licence in assets/licenses) for the wordmark.
  */
+
+/** The launcher icon's orange, for the mark before the wordmark. */
+val Brand = Color(0xFFE8590C)
 
 private val Green = Color(0xFF22C55E)
 private val GreenLight = Color(0xFF16A34A)
@@ -99,17 +102,18 @@ private val LightScheme = lightColorScheme(
 )
 
 /**
- * Nunito, one static file per weight. Upstream ships a variable font, but its default instance is
- * ExtraLight and Android drew every weight that way, so the weights were cut out with fontTools'
- * instancer (`instantiateVariableFont(font, {"wght": 700})` and so on).
+ * MiSans Latin (Xiaomi's MiSans, the system font on the phone), one static file per weight.
+ * MiSans runs heavier than its names at the size the type scale below uses, so each Compose
+ * weight takes the file that looks like Habits First's (Nunito's) weight of that name: Bold
+ * draws MiSans Semibold, ExtraBold MiSans Bold. It covers Vietnamese.
  */
-val Nunito = FontFamily(
-    Font(R.font.nunito_regular, FontWeight.Normal),
-    Font(R.font.nunito_medium, FontWeight.Medium),
-    Font(R.font.nunito_semibold, FontWeight.SemiBold),
-    Font(R.font.nunito_bold, FontWeight.Bold),
-    Font(R.font.nunito_extrabold, FontWeight.ExtraBold),
-    Font(R.font.nunito_black, FontWeight.Black),
+val MiSans = FontFamily(
+    Font(R.font.misans_regular, FontWeight.Normal),
+    Font(R.font.misans_medium, FontWeight.Medium),
+    Font(R.font.misans_demibold, FontWeight.SemiBold),
+    Font(R.font.misans_semibold, FontWeight.Bold),
+    Font(R.font.misans_bold, FontWeight.ExtraBold),
+    Font(R.font.misans_heavy, FontWeight.Black),
 )
 
 /** For the wordmark and big countdowns; static weights cut the same way. */
@@ -118,28 +122,33 @@ val GeistMono = FontFamily(
     Font(R.font.geist_mono_bold, FontWeight.Bold),
 )
 
-private fun style(size: Int, weight: FontWeight, line: Int = size + 6, spacing: Double = 0.0) = TextStyle(
-    fontFamily = Nunito,
+private fun style(size: Double, weight: FontWeight, spacing: Double = 0.0) = TextStyle(
+    fontFamily = MiSans,
     fontSize = size.sp,
-    lineHeight = line.sp,
+    lineHeight = (size * 1.36).sp,
     fontWeight = weight,
     letterSpacing = spacing.sp,
 )
 
+/**
+ * Habits First's sizes, measured off its screens, at 0.94 of them: MiSans is taller than
+ * Nunito at the same size. Names and running text are Regular; only titles and buttons are
+ * heavier.
+ */
 private val AppTypography = Typography(
-    displaySmall = style(30, FontWeight.ExtraBold, line = 36),
-    headlineLarge = style(30, FontWeight.ExtraBold, line = 36),
-    headlineMedium = style(26, FontWeight.ExtraBold, line = 32),
-    headlineSmall = style(22, FontWeight.Bold, line = 28),
-    titleLarge = style(20, FontWeight.Bold),
-    titleMedium = style(17, FontWeight.Bold),
-    titleSmall = style(15, FontWeight.Bold),
-    bodyLarge = style(17, FontWeight.SemiBold, line = 23),
-    bodyMedium = style(15, FontWeight.Medium, line = 21),
-    bodySmall = style(13, FontWeight.Medium, line = 18),
-    labelLarge = style(15, FontWeight.Bold),
-    labelMedium = style(13, FontWeight.Bold),
-    labelSmall = style(12, FontWeight.ExtraBold, spacing = 0.6),
+    displaySmall = style(27.0, FontWeight.Black), // the new-block steps' question
+    headlineLarge = style(27.0, FontWeight.Black),
+    headlineMedium = style(22.5, FontWeight.ExtraBold), // page titles: "settings"
+    headlineSmall = style(20.0, FontWeight.Bold), // dialog titles
+    titleLarge = style(19.0, FontWeight.SemiBold),
+    titleMedium = style(17.0, FontWeight.SemiBold), // top bars and sheets: "Edit block"
+    titleSmall = style(14.0, FontWeight.Bold),
+    bodyLarge = style(16.0, FontWeight.Normal), // list rows
+    bodyMedium = style(13.5, FontWeight.Normal), // a block's habit rows
+    bodySmall = style(12.0, FontWeight.Normal), // second lines
+    labelLarge = style(15.0, FontWeight.Bold), // buttons
+    labelMedium = style(11.5, FontWeight.Medium), // the tab bar
+    labelSmall = style(12.0, FontWeight.Medium, spacing = 1.0), // section labels, in capitals
 )
 
 /** Container / content / accent colours for a block state. Read in both themes. */

@@ -1,9 +1,20 @@
 package com.xern.xrnrule.app.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.LockClock
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -12,12 +23,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.WorldStore
+import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockLock
 import com.xern.xrnrule.domain.Defaults
+import com.xern.xrnrule.domain.EnforcementTier
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -43,78 +64,179 @@ fun formatLockEnd(wallMs: Long, nowWall: Long, zone: ZoneId = ZoneId.systemDefau
     return (if (at.year == now.year) ThisYear else OtherYear).format(at)
 }
 
-/** The edit page's row: whether [block] is locked, and a way to lock it (or for longer). */
+/**
+ * The small lock under a block card's switch, as in Habits First: grey while nothing holds the
+ * block, in the strict colour while it is locked for a time or behind the hardcore password.
+ */
 @Composable
-fun LockRow(block: Block, store: WorldStore) {
+fun LockPill(name: String, active: Boolean, onClick: () -> Unit) {
+    val strict = LocalKinds.current.strict
+    Box(
+        Modifier
+            .size(width = 30.dp, height = 24.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (active) strict.fill else MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Filled.Lock,
+            contentDescription = if (active) "$name is locked" else "Lock $name",
+            tint = if (active) strict.color else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/**
+ * "Lock Zen?": until the hardcore password says otherwise (sideload builds), or for a time
+ * (I39), only lengths that end later than the lock it has. A length is confirmed before it
+ * locks, since only an emergency unlock (I40) ends it early.
+ */
+@Composable
+fun LockDialog(block: Block, store: WorldStore, guard: HardcoreGuard, onDismiss: () -> Unit) {
     val world by store.world.collectAsStateWithLifecycle()
     val current = world.block(block.id) ?: block
     val now = store.clock.nowWallMs()
-    val locked = BlockEdits.locked(current, now)
-    var choosing by remember { mutableStateOf(false) }
-    GroupRow(
-        title = if (locked) "Locked" else "Lock this block",
-        icon = Icons.Outlined.LockClock,
-        subtitle = if (locked) {
-            "Until ${formatLockEnd(current.lock!!.untilWall, now)}. Tap to lock it for longer."
-        } else {
-            "For a while, nothing can make it easier to get past: no wait or password opens it early."
-        },
-        first = true,
-        onClick = { choosing = true },
-    )
-    if (choosing) LockDialog(current, store, onDismiss = { choosing = false })
-}
-
-/** Picks a length, then locks: only choices that end later than the lock it has, if any. */
-@Composable
-private fun LockDialog(block: Block, store: WorldStore, onDismiss: () -> Unit) {
-    val world by store.world.collectAsStateWithLifecycle()
-    val now = store.clock.nowWallMs()
-    val until = block.lock?.untilWall ?: 0
+    val until = current.lock?.untilWall ?: 0
     val choices = LOCK_CHOICES.filter { (_, ms) -> now + ms > until }
-    var picked by remember { mutableStateOf<Pair<String, Long>?>(null) }
     val left = BlockEdits.emergencyLeft(world)
+    val hardcore = current.enforcementTier == EnforcementTier.HARDCORE
+    var picked by remember { mutableStateOf<Pair<String, Long>?>(null) }
+    var settingPassword by remember { mutableStateOf(false) }
 
+    fun makeHardcore() {
+        store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == block.id) it.copy(enforcementTier = EnforcementTier.HARDCORE) else it }) }
+        onDismiss()
+    }
+
+    if (settingPassword) {
+        SetPasswordDialog(guard, onDone = { makeHardcore() }, onDismiss = onDismiss)
+        return
+    }
     val choice = picked
-    if (choice == null) {
+    if (choice != null) {
+        val end = now + choice.second
         AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("Lock ${block.name} for") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("Lock until ${formatLockEnd(end, now)}?") },
             text = {
-                Column {
-                    if (choices.isEmpty()) Text("It's already locked for longer than a year.")
-                    choices.forEachIndexed { i, c ->
-                        GroupRow(title = c.first, subtitle = "Until ${formatLockEnd(now + c.second, now)}", first = i == 0, onClick = { picked = c })
-                    }
-                }
+                Text(
+                    "Until then nothing that makes ${current.name} easier to get past can change: not its apps, habits or " +
+                        "times, not turning it off or deleting it, whatever you wait or type. Making it stricter still works. " +
+                        "Only an emergency unlock ends it early: you have $left of ${Defaults.EMERGENCY_UNLOCKS} left, " +
+                        "and used ones never come back.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             },
-            confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    val at = store.clock.nowWallMs()
+                    store.edit { w ->
+                        w.copy(blocks = w.blocks.map { b ->
+                            // Never shorter than a lock set meanwhile, on this phone or another device.
+                            if (b.id == block.id && (b.lock?.untilWall ?: 0) < end) b.copy(lock = BlockLock(end, at)) else b
+                        })
+                    }
+                    onDismiss()
+                }) { Text("Lock it") }
+            },
+            dismissButton = { TextButton(onClick = { picked = null }) { Text("Back") } },
         )
         return
     }
-    val end = now + choice.second
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Lock it until ${formatLockEnd(end, now)}?") },
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Lock ${current.name}?") },
         text = {
-            Text(
-                "Until then nothing that makes ${block.name} easier to get past can change: not its apps, habits or " +
-                    "times, not turning it off or deleting it, whatever you wait or type. Making it stricter still works. " +
-                    "Only an emergency unlock ends it early: you have $left of ${Defaults.EMERGENCY_UNLOCKS} left, " +
-                    "and used ones never come back.",
-            )
+            Column {
+                Text(
+                    if (until > now) {
+                        "Locked until ${formatLockEnd(until, now)}. A longer lock replaces it; only emergency unlocks " +
+                            "($left left) end one early."
+                    } else {
+                        "A timed lock can't be opened early, not even with your password. Only emergency unlocks " +
+                            "($left left) break it."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Gap(12)
+                if (guard.isSupported() && !hardcore) {
+                    LockChoice(if (guard.hasPassword()) "Until I unlock it (password)" else "Until I unlock it (set password)") {
+                        if (guard.hasPassword()) makeHardcore() else settingPassword = true
+                    }
+                }
+                choices.forEach { c -> LockChoice(c.first) { picked = c } }
+                if (choices.isEmpty()) {
+                    Text("It's already locked for longer than a year.", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
         },
         confirmButton = {
-            TextButton(onClick = {
-                val at = store.clock.nowWallMs()
-                store.edit { w ->
-                    w.copy(blocks = w.blocks.map { b ->
-                        // Never shorter than a lock set meanwhile, on this phone or another device.
-                        if (b.id == block.id && (b.lock?.untilWall ?: 0) < end) b.copy(lock = BlockLock(end, at)) else b
-                    })
+            FilledTonalButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            ) { Text("Cancel") }
+        },
+    )
+}
+
+/** One of the lock dialog's lengths: a centred line, the whole width tappable. */
+@Composable
+private fun LockChoice(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
+    }
+}
+
+/** The hardcore password, typed twice, set before a block is first locked behind it. */
+@Composable
+private fun SetPasswordDialog(guard: HardcoreGuard, onDone: () -> Unit, onDismiss: () -> Unit) {
+    var first by remember { mutableStateOf("") }
+    var again by remember { mutableStateOf("") }
+    val hidden = PasswordVisualTransformation()
+    val keyboard = KeyboardOptions(keyboardType = KeyboardType.Password)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Set a password") },
+        text = {
+            Column {
+                Text(
+                    "Changes that make a hardcore block easier to get past will ask for it. It can be changed in " +
+                        "Settings, never removed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Gap(12)
+                FieldBox(first, { first = it }, "Password", container = MaterialTheme.colorScheme.surfaceVariant, keyboard = keyboard, visual = hidden)
+                Gap(8)
+                FieldBox(again, { again = it }, "Again", container = MaterialTheme.colorScheme.surfaceVariant, keyboard = keyboard, visual = hidden)
+                if (again.isNotEmpty() && again != first) {
+                    Gap(6)
+                    Text("The two don't match.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
-                onDismiss()
-            }) { Text("Lock it") }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = first.isNotBlank() && first == again,
+                onClick = {
+                    guard.setPassword(first)
+                    onDone()
+                },
+            ) { Text("Set and lock") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -135,12 +257,14 @@ fun LockedGuard(locked: Block, store: WorldStore, onDismiss: () -> Unit) {
     if (!asking) {
         AlertDialog(
             onDismissRequest = onDismiss,
+            containerColor = MaterialTheme.colorScheme.surface,
             title = { Text("${locked.name} is locked") },
             text = {
                 Text(
                     "Until $end, nothing can make it easier to get past. " +
                         if (left > 0) "An emergency unlock ends the lock now ($left of ${Defaults.EMERGENCY_UNLOCKS} left)."
                         else "All ${Defaults.EMERGENCY_UNLOCKS} emergency unlocks are used.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             confirmButton = { TextButton(onClick = onDismiss) { Text("Keep it") } },
@@ -150,11 +274,13 @@ fun LockedGuard(locked: Block, store: WorldStore, onDismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("Use an emergency unlock?") },
         text = {
             Text(
                 "It ends the lock on ${locked.name}, which would have lasted until $end. You'd have ${left - 1} left, " +
                     "on every device, and they never come back. The change still waits like any other.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Keep the lock") } },

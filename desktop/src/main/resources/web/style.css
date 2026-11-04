@@ -1,5 +1,14 @@
 /* xrnrule on the laptop: the local page and the block page. */
 
+/* MiSans Latin, served by the daemon (the page may load nothing from elsewhere). Each weight
+   takes the file that looks like that weight of Nunito, as on the phone (theme/Theme.kt). */
+@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Demibold.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Semibold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Bold.woff2") format("woff2"); font-weight: 800; font-display: swap; }
+@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Heavy.woff2") format("woff2"); font-weight: 900; font-display: swap; }
+
 :root {
   --bg: #f6f5f2;
   --surface: #ffffff;
@@ -55,7 +64,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+body { background: var(--bg); color: var(--text); font: 15px/1.45 "MiSans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 button, input, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }

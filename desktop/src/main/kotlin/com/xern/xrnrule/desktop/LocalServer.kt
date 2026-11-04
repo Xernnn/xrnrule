@@ -608,10 +608,12 @@ class LocalServer(
             "js" -> "text/javascript; charset=utf-8"
             "css" -> "text/css; charset=utf-8"
             "svg" -> "image/svg+xml"
+            "woff2" -> "font/woff2"
             else -> "application/octet-stream"
         }
         ex.responseHeaders.add("Content-Type", type)
-        ex.responseHeaders.add("Cache-Control", "no-store")
+        // Fonts never change within a version; everything else is read fresh.
+        ex.responseHeaders.add("Cache-Control", if (type == "font/woff2") "private, max-age=86400" else "no-store")
         secure(ex)
         ex.sendResponseHeaders(200, bytes.size.toLong())
         ex.responseBody.use { it.write(bytes) }

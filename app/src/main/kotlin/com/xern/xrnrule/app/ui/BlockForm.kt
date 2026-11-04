@@ -333,8 +333,6 @@ fun EditBlockScreen(
             }
 
             Gap(20)
-            GroupCard { LockRow(existing, store) }
-            Gap(12)
             GroupCard {
                 GroupRow(
                     title = "Delete block",

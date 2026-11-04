@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,7 +85,7 @@ import com.xern.xrnrule.domain.Sites
 val ScreenPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
 
 /** Corner radius of cards, and of the rows inside the block form. */
-val CardShape = RoundedCornerShape(22.dp)
+val CardShape = RoundedCornerShape(24.dp)
 val RowShape = RoundedCornerShape(16.dp)
 
 /**
@@ -176,7 +177,7 @@ fun PageTitle(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
-        modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 20.dp, end = 16.dp, top = 8.dp),
+        modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 20.dp, end = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading?.let { it(); WGap(10) }
@@ -187,7 +188,7 @@ fun PageTitle(
 
 /** "xrnrule" in the mono face, for the Blocks page header and the block screen. */
 @Composable
-fun Wordmark(modifier: Modifier = Modifier, size: Int = 24) {
+fun Wordmark(modifier: Modifier = Modifier, size: Int = 22) {
     Text(
         "xrnrule",
         modifier = modifier,
@@ -222,26 +223,31 @@ fun HFTopAppBar(
     )
 }
 
-/** A circular button on the raised grey, for page headers: "+", close, back. */
+/**
+ * A circular button for page headers: on the raised grey (close, back), or [outlined] on the
+ * card grey with a small icon, as Habits First's "+".
+ */
 @Composable
 fun RoundIconButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    size: Dp = 44.dp,
+    size: Dp = 36.dp,
     tint: Color = MaterialTheme.colorScheme.onSurface,
-    container: Color = MaterialTheme.colorScheme.surfaceVariant,
+    outlined: Boolean = false,
+    container: Color = if (outlined) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant,
 ) {
     Box(
         modifier
             .size(size)
             .clip(CircleShape)
             .background(container)
+            .then(if (outlined) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape) else Modifier)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(size * 0.48f))
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(size * if (outlined) 0.42f else 0.52f))
     }
 }
 
@@ -254,7 +260,7 @@ fun Hairline(modifier: Modifier = Modifier) {
 @Composable
 fun HFCard(
     modifier: Modifier = Modifier,
-    padding: PaddingValues = PaddingValues(18.dp),
+    padding: PaddingValues = PaddingValues(20.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
@@ -276,6 +282,7 @@ fun MeterBar(
     color: Color = MaterialTheme.colorScheme.primary,
     track: Color = MaterialTheme.colorScheme.surfaceVariant,
     height: Dp = 8.dp,
+    dot: Boolean = false,
 ) {
     val animated by animateFloatAsState(fraction.coerceIn(0f, 1f), label = "meter")
     Box(
@@ -285,9 +292,11 @@ fun MeterBar(
             .clip(RoundedCornerShape(height / 2))
             .background(track),
     ) {
-        if (animated > 0f) {
+        if (animated > 0f || dot) {
+            // With [dot], an empty meter still shows a round start in the colour, as Habits First's do.
             Box(
                 Modifier
+                    .widthIn(min = if (dot) height else 0.dp) // before the fill, which would pin the width
                     .fillMaxWidth(animated)
                     .height(height)
                     .clip(RoundedCornerShape(height / 2))
@@ -419,13 +428,13 @@ fun GroupRow(
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    if (!first) Hairline(Modifier.padding(start = if (icon != null || leading != null) 58.dp else 18.dp))
+    if (!first) Hairline(Modifier.padding(start = if (icon != null || leading != null) 52.dp else 16.dp))
     Row(
         modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .heightIn(min = 60.dp)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .heightIn(min = 54.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leading != null) {
@@ -433,7 +442,7 @@ fun GroupRow(
             WGap(12)
         } else if (icon != null) {
             Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp))
-            WGap(18)
+            WGap(14)
         }
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
@@ -519,12 +528,12 @@ fun HabitRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, contentDescription = null, tint = kind.color, modifier = Modifier.size(20.dp))
-        WGap(14)
+        WGap(12)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     label,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = if (dim) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -532,12 +541,12 @@ fun HabitRow(
                 )
                 if (value != null) {
                     WGap(8)
-                    Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (fraction != null) {
-                Gap(5)
-                MeterBar(fraction, color = kind.color, track = kind.fill, height = 5.dp)
+                Gap(4)
+                MeterBar(fraction, color = kind.color, height = 6.dp, dot = true)
             }
             if (note != null) {
                 Gap(2)
@@ -545,13 +554,16 @@ fun HabitRow(
             }
         }
         if (action != null) {
-            WGap(10)
+            WGap(2)
             action()
         }
     }
 }
 
-/** The round button at the end of a [HabitRow]: filled (start a timer) or ringed (tick, add). */
+/**
+ * The round button at the end of a [HabitRow], Habits First's small ring: filled (start a timer,
+ * done) or ringed (tick, add), 22 dp in a 44 dp touch target.
+ */
 @Composable
 fun RowAction(
     icon: ImageVector,
@@ -562,18 +574,25 @@ fun RowAction(
 ) {
     Box(
         Modifier
-            .size(34.dp)
+            .size(44.dp)
             .clip(CircleShape)
-            .then(if (filled) Modifier.background(color) else Modifier.border(2.dp, color, CircleShape))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            icon,
-            contentDescription = contentDescription,
-            tint = if (filled) onKind(color) else color,
-            modifier = Modifier.size(20.dp),
-        )
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .then(if (filled) Modifier.background(color) else Modifier.border(2.dp, color, CircleShape)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                icon,
+                contentDescription = contentDescription,
+                tint = if (filled) onKind(color) else color,
+                modifier = Modifier.size(15.dp),
+            )
+        }
     }
 }
 
@@ -620,15 +639,16 @@ fun SiteIcon(host: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fall
 }
 
 /**
- * The square at the left of a block card: the blocked apps' and then sites' icons, up to four
- * in a grid, or [fallback] (a shield for nothing) on the raised grey.
+ * The square at the left of a block card: the one blocked app's or site's icon on its own, as
+ * Habits First shows it; several in a grid of up to four on the raised grey; or [fallback] (a
+ * shield for nothing).
  */
 @Composable
 fun AppTile(
     packages: List<String>,
     fallback: ImageVector,
     modifier: Modifier = Modifier,
-    size: Dp = 60.dp,
+    size: Dp = 52.dp,
     extra: Int = 0,
     sites: List<String> = emptyList(),
 ) {
@@ -637,6 +657,10 @@ fun AppTile(
 
     @Composable
     fun TileIcon(icon: Pair<String, Boolean>, side: Dp) = if (icon.second) SiteIcon(icon.first, size = side) else AppIcon(icon.first, size = side)
+    if (icons.size == 1 && extra == 0) {
+        Box(modifier.size(size), contentAlignment = Alignment.Center) { TileIcon(icons[0], if (icons[0].second) size * 0.92f else size) }
+        return
+    }
     Box(
         modifier
             .size(size)
