@@ -25,6 +25,7 @@ object BlockEdits {
             allowanceLoosens(old, new) ||
             !old.exceptSites.containsAll(new.exceptSites) || // I31: a new exception opens a host
             (!old.perDevice && new.perDevice) || // I33: each device gets the whole limit
+            (!old.selfPaced && new.selfPaced) || // I41: an unlock spread over the day
             new.lockdownMs < old.lockdownMs ||
             (new.lock?.untilWall ?: 0) < (old.lock?.untilWall ?: 0) || // I39: a shorter lock
             schedulesLoosen(old.schedule, new.schedule)

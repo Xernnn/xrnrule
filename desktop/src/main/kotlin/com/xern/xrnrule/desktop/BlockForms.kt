@@ -52,6 +52,8 @@ object BlockForms {
         val combineOr: Boolean = false,
         val timerMin: Long = 30,
         val unlockMin: Long = Defaults.DEFAULT_UNLOCK_MS / 60_000,
+        /** An unlock is [unlockMin] minutes of use over the day rather than a timer (I41). */
+        val selfPaced: Boolean = false,
         val items: List<String> = emptyList(),
         val linked: List<LinkedHabit> = emptyList(),
         /** A daily limit: [allowanceMin] a day when on; off leaves only the row rule (I19, I32). */
@@ -92,6 +94,7 @@ object BlockForms {
             targetDesktopApps = apps,
             trigger = if (habit) trigger(form.checklist, form.timer, form.timerMin, form.combineOr) else Trigger(TriggerType.CHECKLIST, Defaults.ALL_ITEMS, TriggerUnit.ITEMS),
             reward = Reward(unlockDurationMs = form.unlockMin * 60_000),
+            selfPaced = habit && form.selfPaced,
             schedule = if (form.mode == BlockMode.SCHEDULE) schedule(form) else Schedule.ALWAYS,
             state = BlockState.ARMED,
             mode = form.mode,
@@ -132,6 +135,7 @@ object BlockForms {
                 old.trigger
             },
             reward = old.reward.copy(unlockDurationMs = form.unlockMin * 60_000),
+            selfPaced = if (old.mode == BlockMode.HABIT) form.selfPaced else old.selfPaced,
             lockdownMs = if (old.mode == BlockMode.LOCKDOWN) form.lockdownMin * 60_000 else old.lockdownMs,
             schedule = if (old.mode == BlockMode.SCHEDULE) schedule(form) else old.schedule,
         ).let { if (old.mode == BlockMode.ALLOWANCE) it.withLimits(form) else it }

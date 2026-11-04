@@ -78,8 +78,8 @@ data class SharedSyncStatus(val atWallMs: Long, val ok: Boolean, val message: St
  * again. Right after adopting, the base becomes the server's copy: it is all in here now, so a
  * retry can't mistake the other device's changes for ours and undo them.
  *
- * Rounds run when the shared part of the world changes (allowance use only with the periodic
- * check, or every tick in a target would be a round), on service start and unlock, when the
+ * Rounds run when the shared part of the world changes (allowance use and a self-paced unlock's
+ * use only with the periodic check, or every tick in a target would be a round), on service start and unlock, when the
  * shield appears, when the app opens, and every minute while the screen is on (a 304 when
  * nothing changed).
  */
@@ -113,10 +113,10 @@ class SharedSync(
     fun start() {
         scope.launch {
             store.world
-                .map { SharedState.of(it).copy(allowance = emptyMap()) }
+                .map { SharedState.of(it).withoutUse() }
                 .distinctUntilChanged()
                 .collect { shared ->
-                    if (loadBase()?.state?.copy(allowance = emptyMap()) != shared) request(CHANGE_DEBOUNCE_MS)
+                    if (loadBase()?.state?.withoutUse() != shared) request(CHANGE_DEBOUNCE_MS)
                 }
         }
         scope.launch {

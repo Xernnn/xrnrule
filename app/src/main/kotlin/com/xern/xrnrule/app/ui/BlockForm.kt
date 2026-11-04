@@ -60,6 +60,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimeInput
@@ -851,7 +854,8 @@ private fun WhenSection(form: BlockFormState) {
 
 /**
  * HABIT blocks: how long one unlock lasts, up to the daily unlock limit (I9), as Habits First's
- * "Block again after" card with its value as a menu.
+ * "Block again after" card with its value as a menu, and whether that is a timer or minutes of
+ * use over the day (self paced, I41).
  */
 @Composable
 private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
@@ -861,15 +865,15 @@ private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
     HFCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(red.fill),
+                Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(red.fill),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Filled.Autorenew, contentDescription = null, tint = red.color, modifier = Modifier.size(22.dp)) }
-            WGap(14)
-            Text("Block again after", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp), modifier = Modifier.weight(1f))
+            ) { Icon(Icons.Filled.Autorenew, contentDescription = null, tint = red.color, modifier = Modifier.size(17.dp)) }
+            WGap(10)
+            Text("Block again after", style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp), modifier = Modifier.weight(1f))
             Box {
                 Text(
                     shortMinutes(form.unlockMinutes),
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold),
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { menu = true }
@@ -878,7 +882,7 @@ private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     listOf(2L, 5L, 10L, 15L, 30L, 60L).filter { it <= capMinutes }.forEach { m ->
                         DropdownMenuItem(
-                            text = { Text("$m min", fontWeight = if (m == form.unlockMinutes) FontWeight.Bold else null) },
+                            text = { Text(if (form.selfPaced) "$m min of use" else "$m min", fontWeight = if (m == form.unlockMinutes) FontWeight.Bold else null) },
                             onClick = { form.unlockMinutes = m; menu = false },
                         )
                     }
@@ -886,10 +890,28 @@ private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
                 }
             }
         }
-        Gap(12)
+        Gap(16)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            listOf(false to "Timer", true to "Self paced").forEachIndexed { i, (paced, label) ->
+                SegmentedButton(
+                    selected = form.selfPaced == paced,
+                    onClick = { form.selfPaced = paced },
+                    shape = SegmentedButtonDefaults.itemShape(i, 2),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        activeContentColor = MaterialTheme.colorScheme.onSurface,
+                        inactiveContainerColor = Color.Transparent,
+                        inactiveContentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                ) { Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp)) }
+            }
+        }
+        Gap(16)
         Text(
-            "A ${form.unlockMinutes} minute timer starts, and blocks again at the end of it. All unlocks together give " +
-                "at most ${formatDuration(capMinutes * 60_000)} a day (Settings).",
+            (
+                if (form.selfPaced) "It blocks again after ${form.unlockMinutes} minutes of total use throughout the day, on any device. "
+                else "A ${form.unlockMinutes} minute timer starts, and blocks again at the end of it. "
+                ) + "All unlocks together give at most ${formatDuration(capMinutes * 60_000)} a day (Settings).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

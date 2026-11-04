@@ -262,6 +262,11 @@ data class Block(
     val perDevice: Boolean = false,
     /** [BlockMode.LOCKDOWN]: length of one lockdown, reused when it is started again (I21). */
     val lockdownMs: Long = 0,
+    /**
+     * [BlockMode.HABIT]: an unlock is so much *use* rather than so much time: it runs only while a
+     * target is in front and lasts until it is used up or the day ends (I41).
+     */
+    val selfPaced: Boolean = false,
     /** Wall-clock ms of the last edit; the later edit wins when two devices change a block at once (§2.4). */
     val editedAtWall: Long = 0,
     /** I39: nothing that loosens this block goes through before [BlockLock.untilWall]; never set back to null. */
@@ -372,9 +377,23 @@ data class UnlockSession(
     val startedAtMonotonic: Long,
     val startedAtWall: Long,
     val durationMs: Long,
+    /** I41: [durationMs] is use, counted in [usedMs], not time since [startedAtMonotonic]. */
+    val selfPaced: Boolean = false,
+    /** I41: each device's use of this session (device id → ms); the devices' use adds up. */
+    val usedMs: Map<String, Long> = emptyMap(),
+    /** I41: this device's monotonic mark for counting use; null = not marking yet. Never shared. */
+    val markMonotonic: Long? = null,
 ) {
     /** Names this session on every device, for the [World.unlockLog] (I28). */
     val key: String get() = "$blockId@$startedAtWall"
+
+    /** I41: use so far on every device. */
+    val totalUsedMs: Long get() = usedMs.values.sum()
+
+    /** What is left: its time (I2), or for a self-paced one its use (I41). */
+    fun leftMs(clock: Clock): Long =
+        if (selfPaced) (durationMs - totalUsedMs).coerceAtLeast(0)
+        else (durationMs - (clock.nowMonotonicMs() - startedAtMonotonic)).coerceAtLeast(0)
 }
 
 /**

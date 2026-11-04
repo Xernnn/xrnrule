@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.MainActivity
+import com.xern.xrnrule.app.ui.formatRemaining
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Clock
@@ -49,12 +50,14 @@ class Notifications(private val context: Context) {
         if (pauseMs > 0) return Status("On a break", "Blocks come back at ${clockTime(pauseMs)}", pauseMs)
 
         val open = world.sessions.values
-            .map { s -> s to s.durationMs - (clock.nowMonotonicMs() - s.startedAtMonotonic) }
+            .map { s -> s to s.leftMs(clock) }
             .filter { (_, left) -> left > 0 }
-            .minByOrNull { (_, left) -> left }
+            .minByOrNull { (s, left) -> if (s.selfPaced) Long.MAX_VALUE else left } // a clock that runs comes first
         if (open != null) {
             val (session, left) = open
             val name = world.block(session.blockId)?.name ?: "Unlock"
+            // I41: use left doesn't run down by itself, so no countdown and no time it locks at.
+            if (session.selfPaced) return Status("$name is open", "${formatRemaining(left)} of use left today")
             return Status("$name is open", "Locks again at ${clockTime(left)}", left)
         }
 

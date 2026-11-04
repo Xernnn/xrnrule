@@ -75,6 +75,16 @@ class BlockFormsTest {
     }
 
     @Test
+    fun selfPacedIsForHabitBlocksOnly() {
+        val habit = ok(BlockForms.create(World(), Form(name = "x", sites = listOf("a.com"), items = listOf("a"), selfPaced = true), clock))
+        assertTrue(habit.block.selfPaced)
+        val limit = ok(BlockForms.create(World(), Form(name = "y", sites = listOf("b.com"), mode = BlockMode.ALLOWANCE, selfPaced = true), clock))
+        assertFalse(limit.block.selfPaced)
+        val back = ok(BlockForms.edit(habit.world, Form(id = habit.block.id, name = "x", sites = listOf("a.com"), items = listOf("a"), selfPaced = false)))
+        assertFalse(back.block.selfPaced)
+    }
+
+    @Test
     fun aLockdownStartsWhenMade_andATimerAndTasksCombine() {
         val lockdown = ok(BlockForms.create(World(), Form(name = "Focus", sites = listOf("a.com"), mode = BlockMode.LOCKDOWN, lockdownMin = 45), clock))
         assertEquals(45 * 60_000L, lockdown.world.lockdowns[lockdown.block.id]?.durationMs)

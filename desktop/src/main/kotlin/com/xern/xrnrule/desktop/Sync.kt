@@ -96,9 +96,9 @@ class SharedSyncClient(
         // Local changes: everything but allowance use goes out at once; that goes with the minute.
         scope.launch {
             store.world
-                .map { SharedState.of(it).copy(allowance = emptyMap()) }
+                .map { SharedState.of(it).withoutUse() }
                 .distinctUntilChanged()
-                .collect { shared -> if (loadBase()?.state?.copy(allowance = emptyMap()) != shared) request() }
+                .collect { shared -> if (loadBase()?.state?.withoutUse() != shared) request() }
         }
         scope.launch {
             while (true) {

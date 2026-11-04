@@ -228,7 +228,7 @@ class BlockEngine {
                     if (bought > 0 && scheduleActive(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE, b.id)
                 }
                 BlockMode.HABIT -> world.sessions[b.id]?.takeIf { b.state == BlockState.UNLOCKED }?.let { s ->
-                    left += TimeLeft((s.durationMs - (clock.nowMonotonicMs() - s.startedAtMonotonic)).coerceAtLeast(0), ClockKind.UNLOCK, b.id)
+                    left += TimeLeft(s.leftMs(clock), ClockKind.UNLOCK, b.id)
                 }
                 BlockMode.LOCKDOWN -> Unit
             }
@@ -408,7 +408,8 @@ class BlockEngine {
      * ALLOWANCE (I19): while a target is foreground *and not shielded* — time spent looking at
      * the block screen isn't use — capped at the allowance; the same time runs the row rule (I32).
      */
-    private fun accrueTimers(world: World, clock: Clock): World {
+    private fun accrueTimers(before: World, clock: Clock): World {
+        val world = accrueUnlockUse(before, clock)
         val nowMono = clock.nowMonotonicMs()
         val nowWall = clock.nowWallMs()
         val fgPkg = world.foregroundPkg
@@ -449,6 +450,28 @@ class BlockEngine {
             )
         }
         return world.copy(progress = progress, runs = runs)
+    }
+
+    /**
+     * I41: a self-paced unlock's use on this device: the time since its mark, while one of the
+     * block's targets is in front and no other block shields it. A session without a mark only
+     * gets one (after a reboot, or one adopted from another device).
+     */
+    private fun accrueUnlockUse(world: World, clock: Clock): World {
+        if (world.sessions.values.none { it.selfPaced }) return world
+        val nowMono = clock.nowMonotonicMs()
+        val fgPkg = world.foregroundPkg
+        val fgSite = world.foregroundSite
+        val fgShielded by lazy { shieldPlan(world, clock).covers(fgPkg, fgSite) }
+        val sessions = world.sessions.mapValues { (blockId, s) ->
+            val block = world.block(blockId)
+            if (!s.selfPaced || block?.state != BlockState.UNLOCKED) return@mapValues s
+            val delta = s.markMonotonic?.let { (nowMono - it).coerceAtLeast(0) } ?: 0
+            val inUse = delta > 0 && covers(block, fgPkg, fgSite) && !fgShielded
+            val used = if (inUse) s.usedMs + (world.deviceId to (s.usedMs[world.deviceId] ?: 0) + delta) else s.usedMs
+            s.copy(usedMs = used, markMonotonic = nowMono)
+        }
+        return world.copy(sessions = sessions)
     }
 
     /**
@@ -511,7 +534,7 @@ class BlockEngine {
         clock: Clock,
         effects: MutableList<Effect>,
     ): World {
-        world.block(blockId) ?: return world
+        val block = world.block(blockId) ?: return world
         redeemRejection(world, blockId, clock)?.let { reason -> // I9
             effects += Effect.RedeemRejected(blockId, reason)
             return world
@@ -524,6 +547,8 @@ class BlockEngine {
             startedAtMonotonic = clock.nowMonotonicMs(),
             startedAtWall = clock.nowWallMs(),
             durationMs = credit.amountMs,
+            selfPaced = block.selfPaced, // I41
+            markMonotonic = if (block.selfPaced) clock.nowMonotonicMs() else null,
         )
         // I24: one unlock's worth of each habit item's habit pays for this unlock. Stamped here
         // rather than on earn, so a credit that expires unused (I1) spends nothing.
@@ -803,6 +828,21 @@ class BlockEngine {
                     val s = w.sessions[block.id]
                     if (s == null) {
                         returnToArmed(w, block, clock)
+                    } else if (s.selfPaced) {
+                        // I41: used up, or the day it was for is over (no tamper check: wall time doesn't count here).
+                        val used = s.totalUsedMs
+                        val dayOver = s.startedAtWall < clock.startOfLocalDayMs()
+                        if (used >= s.durationMs || dayOver) {
+                            val consumed = used.coerceIn(0, s.durationMs)
+                            effects += Effect.UnlockConsumed(block.id, consumed, s.startedAtWall)
+                            val reset = returnToArmed(w, block, clock)
+                            // I28; yesterday's unlock doesn't count against today's cap.
+                            if (dayOver) reset else reset.copy(unlockLog = reset.unlockLog + (s.key to consumed), dailyUsageEpochDay = today)
+                        } else {
+                            val remaining = s.durationMs - used
+                            if (remaining in 1..w.settings.unlockWarningMs) effects += Effect.UnlockEndingSoon(block.id, remaining)
+                            w
+                        }
                     } else {
                         val monoElapsed = clock.nowMonotonicMs() - s.startedAtMonotonic
                         val wallElapsed = clock.nowWallMs() - s.startedAtWall
@@ -845,7 +885,13 @@ class BlockEngine {
         val blockIds = shared.blocks.keys
 
         val sessions = shared.sessions.filterKeys { it in blockIds }.mapValues { (id, s) ->
-            world.sessions[id]?.takeIf { it.copy(startedAtMonotonic = 0) == s } ?: s.copy(startedAtMonotonic = anchor(s.startedAtWall))
+            val mine = world.sessions[id]?.takeIf { it.key == s.key }
+            when {
+                mine == null -> s.copy(startedAtMonotonic = anchor(s.startedAtWall), markMonotonic = if (s.selfPaced) clock.nowMonotonicMs() else null)
+                mine.copy(startedAtMonotonic = 0, markMonotonic = null) == s -> mine
+                // I41: the same unlock with others' use merged in; this device keeps its marks.
+                else -> s.copy(startedAtMonotonic = mine.startedAtMonotonic, markMonotonic = mine.markMonotonic)
+            }
         }
         // An open block holds no credit: redeeming spent it (§2.1).
         val credits = shared.credits.filterKeys { it in blockIds && it !in sessions }.mapValues { (id, c) ->
@@ -940,7 +986,7 @@ class BlockEngine {
         }
         val sessions = world.sessions.mapValues { (_, s) ->
             val wallElapsed = (nowWall - s.startedAtWall).coerceAtLeast(0)
-            s.copy(startedAtMonotonic = nowMono - wallElapsed)
+            s.copy(startedAtMonotonic = nowMono - wallElapsed, markMonotonic = null) // I41: a fresh mark
         }
         val lockdowns = world.lockdowns.mapValues { (_, l) ->
             val wallElapsed = (nowWall - l.startedAtWall).coerceAtLeast(0)

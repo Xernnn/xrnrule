@@ -1840,4 +1840,136 @@ class InvariantTests {
         assertEquals(3, phone.world.habitDayStartHour)
         assertEquals(clock.epochDay() - 1, phone.world.habitDay(clock))
     }
+
+    // ---- I41: self-paced unlocks ---------------------------------------------------------
+
+    private fun selfPacedWorld(clock: FakeClock): World =
+        buildWorld(
+            listOf(checklistBlock("c1", unlockMs = 5L * 60_000).copy(selfPaced = true)),
+            mapOf("c1" to items("c1", 1)),
+            clock = clock,
+        )
+
+    private fun World.redeemed(clock: FakeClock): World {
+        var w = engine.reduce(this, BlockEvent.ToggleChecklistItem("c1-i0", true), clock).world
+        w = engine.reduce(w, BlockEvent.Redeem("c1"), clock).world
+        assertEquals(BlockState.UNLOCKED, w.block("c1")!!.state)
+        return w
+    }
+
+    @Test
+    fun i41_selfPacedCountsOnlyUse() {
+        val clock = FakeClock()
+        var world = selfPacedWorld(clock).redeemed(clock)
+        assertTrue(world.sessions["c1"]!!.selfPaced)
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.other"), clock).world
+        clock.advance(2L * 60 * 60_000) // two hours elsewhere
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+        assertEquals(0L, world.sessions["c1"]!!.totalUsedMs)
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        clock.advance(3L * 60_000)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged(null), clock).world // screen off
+        clock.advance(60L * 60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+        assertEquals(3L * 60_000, world.sessions["c1"]!!.totalUsedMs)
+        assertEquals(2L * 60_000, engine.timeLeft(world, "com.target", null, clock)!!.ms)
+    }
+
+    @Test
+    fun i41_selfPacedEndsWhenUsedUp() {
+        val clock = FakeClock()
+        var world = selfPacedWorld(clock).redeemed(clock)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+
+        clock.advance(4L * 60_000 + 40_000)
+        val warned = engine.reduce(world, BlockEvent.Tick, clock)
+        assertTrue(warned.effects.any { it is Effect.UnlockEndingSoon })
+        world = warned.world
+
+        clock.advance(20_000)
+        val out = engine.reduce(world, BlockEvent.Tick, clock)
+        assertEquals(BlockState.ARMED, out.world.block("c1")!!.state)
+        assertTrue(out.shieldPlan!!.blockedPackages.contains("com.target"))
+        assertEquals(5L * 60_000, out.effects.filterIsInstance<Effect.UnlockConsumed>().single().ms)
+        assertEquals(5L * 60_000, engine.unlockUsedTodayMs(out.world, clock)) // I28
+    }
+
+    @Test
+    fun i41_selfPacedEndsWithTheDay() {
+        val clock = FakeClock() // 12:00 UTC
+        var world = selfPacedWorld(clock).redeemed(clock)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.other"), clock).world
+
+        clock.advance(11L * 60 * 60_000) // 23:01
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+
+        clock.advance(60L * 60_000) // past midnight
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
+        assertEquals("yesterday's unlock isn't on today's cap", 0L, engine.unlockUsedTodayMs(world, clock))
+    }
+
+    @Test
+    fun i41_selfPacedSurvivesARebootWithoutCountingIt() {
+        val clock = FakeClock()
+        var world = selfPacedWorld(clock).redeemed(clock)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+
+        clock.advance(10L * 60_000) // powered off for ten minutes; the monotonic clock starts again
+        clock.setMono(5_000)
+        world = engine.reduce(world, BlockEvent.BootOrColdStart, clock).world
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+        assertEquals(2L * 60_000, world.sessions["c1"]!!.totalUsedMs)
+    }
+
+    @Test
+    fun i41_selfPacedUseAddsUpAcrossDevices() {
+        val block = checklistBlock("c1", unlockMs = 5L * 60_000).copy(selfPaced = true, targetSites = setOf("youtube.com"))
+        val (phone, laptop, server) = twoDevices(listOf(block), mapOf("c1" to items("c1", 1)))
+        phone.on(BlockEvent.ToggleChecklistItem("c1-i0", true))
+        phone.on(BlockEvent.Redeem("c1"))
+        phone.sync(server)
+        laptop.sync(server)
+        assertEquals(BlockState.UNLOCKED, laptop.block("c1").state)
+
+        phone.on(BlockEvent.ForegroundChanged("com.target"))
+        laptop.on(BlockEvent.ForegroundChanged("browser", "youtube.com"))
+        advanceAll(2L * 60_000, phone, laptop)
+        phone.on(BlockEvent.Tick)
+        laptop.on(BlockEvent.Tick)
+        phone.sync(server)
+        laptop.sync(server)
+        phone.sync(server)
+        assertEquals(4L * 60_000, phone.world.sessions["c1"]!!.totalUsedMs)
+        assertEquals(4L * 60_000, laptop.world.sessions["c1"]!!.totalUsedMs)
+
+        advanceAll(60_000, phone) // the last minute, on the phone
+        phone.on(BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, phone.block("c1").state)
+        phone.sync(server)
+        laptop.on(BlockEvent.Tick) // its own use moved on meanwhile: it mustn't bring the unlock back
+        laptop.sync(server)
+        assertEquals(BlockState.ARMED, laptop.block("c1").state)
+        phone.sync(server)
+        assertEquals(BlockState.ARMED, phone.block("c1").state)
+    }
+
+    @Test
+    fun i41_turningSelfPacedOnLoosens() {
+        val block = checklistBlock("c1")
+        assertTrue(BlockEdits.loosens(block, block.copy(selfPaced = true)))
+        assertFalse(BlockEdits.loosens(block.copy(selfPaced = true), block))
+    }
 }

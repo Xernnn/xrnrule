@@ -139,6 +139,8 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
 
     // ---- the unlock ----
     var unlockMinutes by mutableLongStateOf((existing?.reward?.unlockDurationMs ?: (15L * 60_000)) / 60_000)
+    /** I41: an unlock is so many minutes of use over the day rather than a timer. */
+    var selfPaced by mutableStateOf(existing?.selfPaced == true)
     var hardcore by mutableStateOf(existing?.enforcementTier == EnforcementTier.HARDCORE)
 
     val habitChosen get() = appTimeOn || timerOn || manualOn || focusOn || loopOn
@@ -263,6 +265,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
             sessionBreakMs = if (mode == BlockMode.ALLOWANCE) (if (rowOn) rowBreakMinutes * 60_000 else 0) else base.sessionBreakMs,
             perDevice = if (mode == BlockMode.ALLOWANCE) perDevice else base.perDevice,
             lockdownMs = if (mode == BlockMode.LOCKDOWN) lockdownMinutes * 60_000 else base.lockdownMs,
+            selfPaced = mode == BlockMode.HABIT && selfPaced,
             enforcementTier = if (hardcore) EnforcementTier.HARDCORE else EnforcementTier.SOFT,
         )
     }

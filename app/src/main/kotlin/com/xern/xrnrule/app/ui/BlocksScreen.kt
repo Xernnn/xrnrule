@@ -397,7 +397,8 @@ private fun HabitBody(
     if (block.state == BlockState.UNLOCKED) {
         val left = sessionLeftMs(world, block.id, store.clock)
         StatusPill(
-            "open until ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}",
+            if (world.sessions[block.id]?.selfPaced == true) "open · use left today" // I41: runs only while in use
+            else "open until ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}",
             container = kinds.habit.fill,
             content = kinds.habit.color,
             trailing = compactDuration(left),

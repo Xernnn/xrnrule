@@ -127,6 +127,7 @@ function status(b) {
   switch (b.mode) {
     case "HABIT":
       if (b.openUntilWall) return ["open", `Open until ${time.format(b.openUntilWall)} (${clock(b.openUntilWall - state.nowWall)} left)`];
+      if (b.useLeftMs != null) return ["open", `Open: ${clock(b.useLeftMs)} of use left today`];
       if (!b.blocking) return ["idle", "Not blocking now" + (b.scheduleText ? ` (${b.scheduleText})` : "")];
       if (b.state === "EARNED") return ["earned", `Earned: ${min(b.unlockMs)} min ready until ${time.format(b.creditExpiresAtWall)}`];
       return ["blocked", "Blocked until you do the habit"];
@@ -186,7 +187,7 @@ function how(b) {
     return `${parts.join(", ")}${parts.length ? "; " : ""}${b.perDevice ? "each device has its own" : "phone and laptop share it"}.`;
   }
   if (b.mode !== "HABIT") return null;
-  const unlock = `opens for ${min(b.unlockMs)} min`;
+  const unlock = b.selfPaced ? `opens for ${min(b.unlockMs)} min of use over the day` : `opens for ${min(b.unlockMs)} min`;
   const items = b.items.length;
   if (b.trigger === "TIMER") return `Wait ${min(b.requiredMs)} min on the block page, then it ${unlock}.`;
   const need = b.requiredItems === -1 ? (items === 1 ? "the item" : `all ${items} items`) : `${b.requiredItems} of ${items} items`;
@@ -267,7 +268,7 @@ const minutesOf = (text) => {
 async function openForm(b) {
   cancelGuard();
   message = "";
-  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
+  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: false, dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
   form = b
     ? {
       blockId: b.id,
@@ -278,6 +279,7 @@ async function openForm(b) {
         timerMin: min(b.requiredMs) || 30,
         combineOr: b.combineOr,
         unlockMin: min(b.unlockMs),
+        selfPaced: b.selfPaced,
         dailyOn: b.allowanceMs > 0,
         allowanceMin: min(b.allowanceMs) || 30,
         rowOn: b.rowMs > 0,
@@ -411,7 +413,10 @@ function buildForm(b) {
               if (x) itemOp({ op: "link", habit: { uuid: x.uuid, name: x.name } });
             },
           }, "Link habit"))),
-      field("Each unlock lasts (minutes)", number("unlockMin", { max: min(state.dailyCapMs) }), `Up to ${min(state.dailyCapMs)} min a day across phone and laptop.`));
+      field("Block again after (minutes)", number("unlockMin", { max: min(state.dailyCapMs) }), `Up to ${min(state.dailyCapMs)} min a day across phone and laptop.`),
+      field("Counted as", seg("selfPaced", [[false, "Timer"], [true, "Self paced"]]),
+        d.selfPaced ? "Only time spent in its apps and sites counts, on any device, until it's used up or the day ends."
+          : "A timer starts, and it blocks again at the end of it."));
   } else if (mode === "ALLOWANCE") {
     rules = h("fieldset", {}, h("legend", {}, "Daily limit"),
       check("dailyOn", "A limit a day"),
@@ -482,6 +487,7 @@ async function submitForm() {
     combineOr: d.combineOr,
     timerMin: d.timerMin,
     unlockMin: d.unlockMin,
+    selfPaced: d.selfPaced,
     items: (d.itemsText ?? "").split("\n"),
     linked: [...(d.linked?.values() ?? [])],
     dailyOn: d.dailyOn,

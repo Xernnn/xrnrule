@@ -201,11 +201,9 @@ fun andList(names: List<String>): String = when (names.size) {
     else -> names.dropLast(1).joinToString(", ") + " and " + names.last()
 }
 
-/** Time left in a block's unlock, 0 if it has none. */
-fun sessionLeftMs(world: World, blockId: String, clock: Clock): Long {
-    val s = world.sessions[blockId] ?: return 0
-    return (s.durationMs - (clock.nowMonotonicMs() - s.startedAtMonotonic)).coerceAtLeast(0)
-}
+/** Time left in a block's unlock (or use left, for a self-paced one, I41), 0 if it has none. */
+fun sessionLeftMs(world: World, blockId: String, clock: Clock): Long =
+    world.sessions[blockId]?.leftMs(clock) ?: 0
 
 /** "1h 14m", "25m", "40s": a compact countdown for the card's corner. */
 fun compactDuration(ms: Long): String {

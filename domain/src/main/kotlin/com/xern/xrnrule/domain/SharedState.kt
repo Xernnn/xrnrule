@@ -37,6 +37,13 @@ data class SharedState(
     /** I40: emergency unlocks, every one ever. */
     val emergencyLog: Map<String, Long> = emptyMap(),
 ) {
+    /**
+     * This state without what moves while something is in use (ALLOWANCE use, I19; a self-paced
+     * unlock's use, I41): a change to that alone isn't worth a sync round of its own.
+     */
+    fun withoutUse(): SharedState =
+        copy(allowance = emptyMap(), sessions = sessions.mapValues { it.value.copy(usedMs = emptyMap()) })
+
     companion object {
 
         /** This device's view of the shared state. */
@@ -61,7 +68,7 @@ data class SharedState(
                     }
                 },
                 credits = world.credits.mapValues { it.value.copy(earnedAtMonotonic = 0) },
-                sessions = world.sessions.mapValues { it.value.copy(startedAtMonotonic = 0) },
+                sessions = world.sessions.mapValues { it.value.copy(startedAtMonotonic = 0, markMonotonic = null) },
                 lockdowns = world.lockdowns.mapValues { it.value.copy(startedAtMonotonic = 0) },
                 pause = world.pause?.copy(startedAtMonotonic = 0),
                 lastPauseEpochDay = world.lastPauseEpochDay,
@@ -127,14 +134,7 @@ data class SharedState(
                         else -> l
                     }
                 },
-                sessions = mergeMaps(b.sessions, local.sessions, remote.sessions) { l, r ->
-                    when {
-                        l == null -> r
-                        r == null -> l
-                        r.startedAtWall + r.durationMs > l.startedAtWall + l.durationMs -> r
-                        else -> l
-                    }
-                },
+                sessions = mergeSessions(b.sessions, local.sessions, remote.sessions),
                 lockdowns = mergeMaps(b.lockdowns, local.lockdowns, remote.lockdowns) { l, r ->
                     when {
                         l == null -> r
@@ -224,6 +224,37 @@ data class SharedState(
             local == base -> remote
             remote == base -> local
             else -> resolve(local, remote)
+        }
+
+        /**
+         * Sessions (§2.4): the one that ends later; a new one over a removed one. The same session
+         * on both sides takes each device's larger use (I41), and a change that is only use doesn't
+         * hold up an end on the other side: a self-paced unlock used up on one device must not
+         * come back from the other's copy (I26).
+         */
+        private fun mergeSessions(
+            base: Map<String, UnlockSession>,
+            local: Map<String, UnlockSession>,
+            remote: Map<String, UnlockSession>,
+        ): Map<String, UnlockSession> {
+            fun onlyUse(side: UnlockSession?, was: UnlockSession?) = side != null && was != null && side.copy(usedMs = was.usedMs) == was
+            val out = LinkedHashMap<String, UnlockSession>()
+            for (key in local.keys + remote.keys + base.keys) {
+                val was = base[key]
+                val l = local[key]
+                val r = remote[key]
+                if ((l == null && onlyUse(r, was)) || (r == null && onlyUse(l, was))) continue
+                mergeValue(was, l, r) { a, b ->
+                    when {
+                        a == null -> b
+                        b == null -> a
+                        a.key == b.key -> a.copy(usedMs = unionMax(a.usedMs, b.usedMs))
+                        b.startedAtWall + b.durationMs > a.startedAtWall + a.durationMs -> b
+                        else -> a
+                    }
+                }?.let { out[key] = it }
+            }
+            return out
         }
 
         private fun unionMax(a: Map<String, Long>, b: Map<String, Long>): Map<String, Long> =

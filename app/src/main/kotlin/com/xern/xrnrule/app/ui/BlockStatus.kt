@@ -51,7 +51,10 @@ fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): 
                 icon = stateIcon(block.state),
                 tone = block.state,
                 line = when (block.state) {
-                    BlockState.UNLOCKED -> "Open for ${formatRemaining(sessionLeftMs(world, block.id, clock))} more"
+                    BlockState.UNLOCKED -> sessionLeftMs(world, block.id, clock).let { left ->
+                        if (world.sessions[block.id]?.selfPaced == true) "${formatRemaining(left)} of use left today" // I41
+                        else "Open for ${formatRemaining(left)} more"
+                    }
                     BlockState.EARNED -> "${formatDuration(block.reward.unlockDurationMs)} unlock ready"
                     BlockState.ARMED -> whatsLeft(block, parts) ?: stateVerbose(block.state)
                 },
