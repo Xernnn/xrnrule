@@ -2,11 +2,6 @@
 
 package com.xern.xrnrule.app.ui
 
-import com.xern.xrnrule.app.XrnruleApp
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.runtime.collectAsState
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.foundation.layout.offset
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
@@ -25,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Button
@@ -48,6 +45,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -56,9 +54,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -70,6 +70,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.ui.theme.ChartPalette
 import com.xern.xrnrule.app.ui.theme.GeistMono
 import com.xern.xrnrule.app.ui.theme.KindColors
@@ -77,6 +78,7 @@ import com.xern.xrnrule.app.ui.theme.StatusPalette
 import com.xern.xrnrule.app.ui.theme.StatusStyle
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.Sites
 
 /** Outer padding for every screen body. */
 val ScreenPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
@@ -606,7 +608,7 @@ fun SiteIcon(host: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fall
             modifier.size(size).clip(RoundedCornerShape(size * 0.22f)).background(Color.White),
             contentAlignment = Alignment.Center,
         ) {
-            Image(bitmap = icon, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.size(size * 0.84f))
+            Image(bitmap = icon, contentDescription = null, contentScale = ContentScale.Fit, filterQuality = FilterQuality.High, modifier = Modifier.size(size * 0.84f))
         }
     } else if (fallback != null) {
         fallback()
@@ -630,8 +632,8 @@ fun AppTile(
     extra: Int = 0,
     sites: List<String> = emptyList(),
 ) {
-    // An app's package, or (true) a site's host.
-    val icons: List<Pair<String, Boolean>> = packages.map { it to false } + sites.map { it to true }
+    // An app's package, or (true) a site's host; a site's other names (redd.it) don't get a tile of their own.
+    val icons: List<Pair<String, Boolean>> = packages.map { it to false } + Sites.shown(sites).map { it to true }
 
     @Composable
     fun TileIcon(icon: Pair<String, Boolean>, side: Dp) = if (icon.second) SiteIcon(icon.first, size = side) else AppIcon(icon.first, size = side)

@@ -67,7 +67,13 @@ class SiteIconsTest {
         )
         val icon = SiteIcons.find("youtube.com", { url, _ -> asked += url; pages[url] })
         assertEquals("image/x-icon", icon?.type)
-        assertEquals(listOf("https://youtube.com/", "https://www.youtube.com/not-an-image", "https://www.youtube.com/favicon.ico"), asked)
+        assertEquals(
+            listOf(
+                "https://youtube.com/", "https://www.youtube.com/apple-touch-icon.png", "https://www.youtube.com/not-an-image",
+                "https://www.youtube.com/favicon.ico", "https://youtube.com/favicon.ico",
+            ),
+            asked,
+        )
     }
 
     @Test
@@ -91,6 +97,48 @@ class SiteIconsTest {
     fun aSiteThatAnswersNothingHasNoIcon() {
         val asked = mutableListOf<String>()
         assertNull(SiteIcons.find("down.example", { url, _ -> asked += url; null }))
-        assertEquals(listOf("https://down.example/", "https://down.example/favicon.ico"), asked)
+        assertEquals(listOf("https://down.example/", "https://down.example/apple-touch-icon.png", "https://down.example/favicon.ico"), asked)
     }
+
+    @Test
+    fun theBiggestIconWinsNotTheFirst() {
+        // Reddit names a 64 px icon; its touch icon is 57 px; facebook.com answers no page at all
+        // but has a 180 px touch icon.
+        val reddit = mapOf(
+            "https://reddit.com/" to SiteIcons.Fetched("https://www.reddit.com/", """<link rel="icon" sizes="64x64" href="/64.png">""".toByteArray()),
+            "https://www.reddit.com/64.png" to SiteIcons.Fetched("https://www.reddit.com/64.png", pngOf(64)),
+            "https://www.reddit.com/apple-touch-icon.png" to SiteIcons.Fetched("https://www.reddit.com/apple-touch-icon.png", pngOf(57)),
+            "https://www.reddit.com/favicon.ico" to SiteIcons.Fetched("https://www.reddit.com/favicon.ico", icoOf(32, 16)),
+        )
+        assertEquals(64, SiteIcons.pixelSize(SiteIcons.find("reddit.com", { url, _ -> reddit[url] })!!.bytes))
+
+        val asked = mutableListOf<String>()
+        val facebook = mapOf("https://facebook.com/apple-touch-icon.png" to SiteIcons.Fetched("https://www.facebook.com/apple-touch-icon.png", pngOf(180)))
+        assertEquals(180, SiteIcons.pixelSize(SiteIcons.find("facebook.com", { url, _ -> asked += url; facebook[url] })!!.bytes))
+        assertEquals("a big one ends the search", listOf("https://facebook.com/", "https://facebook.com/apple-touch-icon.png"), asked)
+    }
+
+    @Test
+    fun pixelSizeReadsEachKindOfHeader() {
+        assertEquals(144, SiteIcons.pixelSize(pngOf(144)))
+        assertEquals(256, SiteIcons.pixelSize(icoOf(16, 0))) // 0 means 256 in an ICO
+        assertEquals(48, SiteIcons.pixelSize(byteArrayOf(*"GIF89a".toByteArray(), 48, 0, 32, 0)))
+        val vp8x = ByteArray(30).also { b ->
+            "RIFF".toByteArray().copyInto(b, 0); "WEBP".toByteArray().copyInto(b, 8); "VP8X".toByteArray().copyInto(b, 12)
+            b[24] = (180 - 1).toByte() // 24-bit width - 1
+            b[27] = (180 - 1).toByte()
+        }
+        assertEquals(180, SiteIcons.pixelSize(vp8x))
+        val jpeg = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xc0.toByte(), 0, 17, 8, 0, 120, 0, (200 - 256).toByte(), 3, 0, 0, 0, 0)
+        assertEquals(200, SiteIcons.pixelSize(jpeg))
+        assertNull(SiteIcons.pixelSize(png)) // a header cut short
+    }
+
+    private fun pngOf(side: Int): ByteArray = png + byteArrayOf(0, 0, 0, 13, 'I'.code.toByte(), 'H'.code.toByte(), 'D'.code.toByte(), 'R'.code.toByte()) +
+        int32(side) + int32(side) + byteArrayOf(8, 6, 0, 0, 0)
+
+    private fun icoOf(vararg sides: Int): ByteArray =
+        byteArrayOf(0, 0, 1, 0, sides.size.toByte(), 0) + sides.flatMap { side -> listOf(side.toByte(), side.toByte()) + List(14) { 0.toByte() } }.toByteArray()
+
+    private fun int32(v: Int) = byteArrayOf((v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte())
 }

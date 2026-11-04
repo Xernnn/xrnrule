@@ -71,6 +71,7 @@ import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.RejectReason
+import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
 
 /**
@@ -367,7 +368,7 @@ private fun BlockCard(
 
 /** "Instagram + youtube.com", "+ 2 laptop apps" when the laptop has some too. */
 private fun targetLine(block: Block, appLabels: Map<String, String>): String {
-    val names = block.targetPackages.map { appLabels[it] ?: it }.sortedBy { it.lowercase() } + block.targetSites.sorted()
+    val names = block.targetPackages.map { appLabels[it] ?: it }.sortedBy { it.lowercase() } + Sites.shown(block.targetSites.sorted())
     val laptop = block.targetDesktopApps.size
     val phone = summarizeNames(names, empty = if (laptop > 0) "" else "Nothing yet")
     val laptopText = when (laptop) {

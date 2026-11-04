@@ -34,6 +34,17 @@ class SiteIconCache(context: Context, private val scope: CoroutineScope) {
     @OptIn(ExperimentalCoroutinesApi::class)
     private val io = Dispatchers.IO.limitedParallelism(3)
 
+    /**
+     * Whether what is kept was found by this [SiteIcons.VERSION]; if not, every kept icon is
+     * fetched again once (and shown meanwhile), and the marker moves on.
+     */
+    private val upToDate: Boolean by lazy {
+        val marker = File(dir, ".version")
+        val same = runCatching { marker.readText().trim() == SiteIcons.VERSION.toString() }.getOrDefault(false)
+        if (!same) runCatching { dir.mkdirs(); marker.writeText(SiteIcons.VERSION.toString()) }
+        same
+    }
+
     private val _loaded = MutableStateFlow(0)
 
     /** Moves on each time an icon arrives. */
@@ -53,12 +64,13 @@ class SiteIconCache(context: Context, private val scope: CoroutineScope) {
             val now = System.currentTimeMillis()
             val kept = file.takeIf { it.isFile }?.let { runCatching { decode(it.readBytes()) }.getOrNull() }
             if (kept != null) arrived(host, kept)
-            val fresh = kept != null && now - file.lastModified() < SiteIcons.FRESH_MS
-            val gaveUp = kept == null && miss.isFile && now - miss.lastModified() < SiteIcons.RETRY_MS
+            val current = upToDate
+            val fresh = current && kept != null && now - file.lastModified() < SiteIcons.FRESH_MS
+            val gaveUp = current && kept == null && miss.isFile && now - miss.lastModified() < SiteIcons.RETRY_MS
             if (fresh || gaveUp) return
 
-            var drawn: ImageBitmap? = null
-            val icon = SiteIcons.find(host, ::get, accept = { icon -> decode(icon.bytes)?.also { drawn = it } != null })
+            val icon = SiteIcons.find(host, ::get, accept = { icon -> decode(icon.bytes) != null })
+            val drawn = icon?.let { decode(it.bytes) }
             dir.mkdirs()
             if (icon == null) {
                 if (kept == null) miss.writeBytes(ByteArray(0))
@@ -85,7 +97,7 @@ class SiteIconCache(context: Context, private val scope: CoroutineScope) {
             conn.connectTimeout = 6_000
             conn.readTimeout = 6_000
             conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) xrnrule")
+            conn.setRequestProperty("User-Agent", SiteIcons.USER_AGENT)
             conn.setRequestProperty("Accept", "text/html,image/*;q=0.9,*/*;q=0.5")
             if (conn.responseCode != 200 || !conn.url.toString().startsWith("https://")) return null
             val bytes = conn.inputStream.use { input ->

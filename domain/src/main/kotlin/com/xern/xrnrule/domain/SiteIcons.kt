@@ -16,7 +16,22 @@ object SiteIcons {
     const val ICON_BYTES = 512 * 1024
 
     /** How many candidate URLs are tried before giving up. */
-    const val MAX_TRIES = 5
+    const val MAX_TRIES = 6
+
+    /** An icon at least this many pixels across is taken at once; below it, a bigger one is looked for. */
+    const val GOOD_PX = 128
+
+    /**
+     * Bumped when [find] gets better, so the phone and the laptop fetch their kept icons again
+     * (2: a real browser's [USER_AGENT], the touch icon, the biggest instead of the first).
+     */
+    const val VERSION = 2
+
+    /**
+     * Sent with every request: a plain browser's. Sites answer an unknown agent with less: YouTube
+     * sends one to a "browser not supported" page that names no icon at all.
+     */
+    const val USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 
     /** How long a found icon is kept before it is fetched again (it is shown meanwhile). */
     const val FRESH_MS = 30L * 24 * 60 * 60 * 1000
@@ -40,10 +55,12 @@ object SiteIcons {
     fun fetchable(host: String): Boolean = HOST.matches(host)
 
     /**
-     * Where [host]'s icon is: the icons its home page names (the best first), then
-     * `/favicon.ico` where the home page ended up and on [host] itself. [get] fetches a URL,
-     * at most `maxBytes` of it, or answers null; [accept] can turn down an icon (one the platform
-     * can't draw), and the next is tried.
+     * [host]'s icon: the biggest of the icons its home page names (the biggest declared first),
+     * the conventional `/apple-touch-icon.png` (often 180 px, named or not), and `/favicon.ico`
+     * where the home page ended up and on [host] itself. One of [GOOD_PX] or more is taken at
+     * once; otherwise every candidate (up to [MAX_TRIES]) is looked at and the biggest wins.
+     * [get] fetches a URL, at most `maxBytes` of it, or answers null; [accept] can turn down an
+     * icon (one the platform can't draw).
      */
     fun find(
         host: String,
@@ -54,15 +71,70 @@ object SiteIcons {
         val home = "https://$host/"
         val page = get(home, PAGE_BYTES)
         val landed = page?.url?.let(::origin) ?: "https://$host"
-        val urls = (page?.let { candidates(it.bytes.decodeToString(), it.url) } ?: emptyList()) +
+        val (big, small) = (page?.let { sized(it.bytes.decodeToString(), it.url) } ?: emptyList()).partition { it.second >= GOOD_PX }
+        val urls = big.map { it.first } + "$landed/apple-touch-icon.png" + small.map { it.first } +
             "$landed/favicon.ico" + "https://$host/favicon.ico"
+        var best: Icon? = null
+        var bestPx = -1
         for (url in urls.distinct().take(MAX_TRIES)) {
             val bytes = if (url.startsWith("data:")) dataBytes(url) else get(url, ICON_BYTES)?.bytes
             val type = bytes?.takeIf { it.size <= ICON_BYTES }?.let(::imageType) ?: continue
             val icon = Icon(bytes, type)
-            if (accept(icon)) return icon
+            if (!accept(icon)) continue
+            val px = pixelSize(bytes) ?: 0
+            if (px >= GOOD_PX) return icon
+            if (px > bestPx) {
+                best = icon
+                bestPx = px
+            }
         }
-        return null
+        return best
+    }
+
+    /**
+     * How many pixels across the image in [bytes] is (the larger side; an ICO's biggest picture),
+     * read from its header; null when it can't tell.
+     */
+    fun pixelSize(bytes: ByteArray): Int? {
+        fun at(i: Int) = if (i < bytes.size) bytes[i].toInt() and 0xff else -1
+        fun be16(i: Int) = (at(i) shl 8) or at(i + 1)
+        fun le16(i: Int) = at(i) or (at(i + 1) shl 8)
+        fun le24(i: Int) = at(i) or (at(i + 1) shl 8) or (at(i + 2) shl 16)
+        fun ascii(i: Int, s: String) = s.indices.all { at(i + it) == s[it].code }
+        if (bytes.size < 10) return null
+        val px = when (imageType(bytes)) {
+            "image/png" -> if (bytes.size < 24) null else maxOf((be16(16) shl 16) or be16(18), (be16(20) shl 16) or be16(22))
+            "image/gif" -> maxOf(le16(6), le16(8))
+            "image/x-icon" -> (0 until minOf(le16(4), 64)).filter { 6 + 16 * it + 1 < bytes.size }.maxOfOrNull { i ->
+                val w = at(6 + 16 * i)
+                val h = at(7 + 16 * i)
+                maxOf(if (w == 0) 256 else w, if (h == 0) 256 else h)
+            }
+            "image/webp" -> when {
+                bytes.size < 30 -> null
+                ascii(12, "VP8 ") -> maxOf(le16(26) and 0x3fff, le16(28) and 0x3fff)
+                ascii(12, "VP8L") -> {
+                    val b = at(21).toLong() or (at(22).toLong() shl 8) or (at(23).toLong() shl 16) or (at(24).toLong() shl 24)
+                    maxOf((b and 0x3fff).toInt() + 1, ((b shr 14) and 0x3fff).toInt() + 1)
+                }
+                ascii(12, "VP8X") -> maxOf(le24(24) + 1, le24(27) + 1)
+                else -> null
+            }
+            "image/jpeg" -> {
+                var i = 2
+                var found: Int? = null
+                while (i + 9 < bytes.size && found == null && at(i) == 0xff) {
+                    val marker = at(i + 1)
+                    if (marker in 0xc0..0xcf && marker != 0xc4 && marker != 0xc8 && marker != 0xcc) {
+                        found = maxOf(be16(i + 5), be16(i + 7))
+                    }
+                    i += 2 + be16(i + 2)
+                }
+                found
+            }
+            else -> null
+        }
+        return px?.takeIf { it > 0 }
     }
 
     private val LINK = Regex("<link\\b[^>]*>", RegexOption.IGNORE_CASE)
@@ -75,7 +147,10 @@ object SiteIcons {
      * mask icon are left out: the phone can't draw SVG, and an SVG served from the laptop's own
      * page origin could carry script. Only https and inline `data:image/…;base64` icons.
      */
-    fun candidates(html: String, pageUrl: String): List<String> {
+    fun candidates(html: String, pageUrl: String): List<String> = sized(html, pageUrl).map { it.first }
+
+    /** [candidates] with the size each declares (180 for a touch icon that declares none, else 0). */
+    private fun sized(html: String, pageUrl: String): List<Pair<String, Int>> {
         val base = runCatching { URI(pageUrl) }.getOrNull() ?: return emptyList()
         data class Candidate(val url: String, val size: Int, val png: Boolean, val order: Int)
         val found = LINK.findAll(html).mapIndexedNotNull { order, tag ->
@@ -100,7 +175,7 @@ object SiteIcons {
         }.toList()
         return found
             .sortedWith(compareByDescending<Candidate> { it.size }.thenByDescending { it.png }.thenBy { it.order })
-            .map { it.url }
+            .map { it.url to it.size }
     }
 
     /** The media type of [bytes] by their first bytes, or null when they aren't an image the pages show. */

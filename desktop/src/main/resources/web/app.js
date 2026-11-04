@@ -231,7 +231,7 @@ function blockCard(b) {
     how(b) && h("div", { class: "how" }, how(b)),
     h("div", { class: "targets" },
       b.phoneApps > 0 && h("span", { class: "target" }, `${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
-      b.sites.map((s) => h("span", { class: "target" }, siteIcon(s), s)),
+      b.shownSites.map((s) => h("span", { class: "target" }, siteIcon(s), s)),
       b.exceptSites.map((s) => h("span", { class: "target except", title: "Left alone" }, `not ${s}`)),
       b.desktopApps.map((a) => h("span", { class: "target" }, `💻 ${appName(a)}`))),
     actions.length > 0 && h("div", { class: "actions" }, actions),

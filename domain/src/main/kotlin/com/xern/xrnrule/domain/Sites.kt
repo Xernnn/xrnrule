@@ -25,6 +25,27 @@ object Sites {
         return if (isIpv4 || tldOk) s else null
     }
 
+    /** Short and old names of a site, by the main one they stand for. Only for showing: each still blocks on its own. */
+    private val ALIASES = mapOf(
+        "redd.it" to "reddit.com",
+        "twitter.com" to "x.com",
+        "t.co" to "x.com",
+        "fb.com" to "facebook.com",
+        "fb.me" to "facebook.com",
+        "fb.watch" to "facebook.com",
+        "youtu.be" to "youtube.com",
+        "instagr.am" to "instagram.com",
+    )
+
+    /**
+     * [sites] as a block shows them, one per site: a short or old name (`redd.it`) is left out
+     * when its main one (`reddit.com`) is there too. Order is kept.
+     */
+    fun shown(sites: Collection<String>): List<String> {
+        val all = sites.toSet()
+        return sites.filter { ALIASES[it]?.let { main -> main !in all } ?: true }
+    }
+
     /** `youtube.com` covers `youtube.com` and `m.youtube.com`, but not `notyoutube.com`. */
     fun matches(host: String, target: String): Boolean =
         host == target || host.endsWith(".$target")

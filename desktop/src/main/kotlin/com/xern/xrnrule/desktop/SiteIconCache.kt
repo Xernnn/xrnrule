@@ -33,6 +33,17 @@ class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
     @OptIn(ExperimentalCoroutinesApi::class)
     private val io = Dispatchers.IO.limitedParallelism(3)
 
+    /**
+     * Whether what is kept was found by this [SiteIcons.VERSION]; if not, every kept icon is
+     * fetched again once (and shown meanwhile), and the marker moves on.
+     */
+    private val upToDate: Boolean by lazy {
+        val marker = File(dir, ".version")
+        val same = runCatching { marker.readText().trim() == SiteIcons.VERSION.toString() }.getOrDefault(false)
+        if (!same) runCatching { dir.mkdirs(); marker.writeText(SiteIcons.VERSION.toString()) }
+        same
+    }
+
     /** [host]'s icon if the laptop has it; otherwise null, and it is looked for (once per run). */
     fun icon(host: String): SiteIcons.Icon? {
         if (!SiteIcons.fetchable(host)) return null
@@ -44,8 +55,9 @@ class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
             ?.let { bytes -> SiteIcons.imageType(bytes)?.let { SiteIcons.Icon(bytes, it) } }
         if (kept != null) memory[host] = kept
         val now = System.currentTimeMillis()
-        val fresh = kept != null && now - file.lastModified() < SiteIcons.FRESH_MS
-        val gaveUp = kept == null && miss.isFile && now - miss.lastModified() < SiteIcons.RETRY_MS
+        val current = upToDate
+        val fresh = current && kept != null && now - file.lastModified() < SiteIcons.FRESH_MS
+        val gaveUp = current && kept == null && miss.isFile && now - miss.lastModified() < SiteIcons.RETRY_MS
         if (!fresh && !gaveUp) scope.launch(io) { fetch(host, file, miss, had = kept != null) }
         return kept
     }
@@ -74,7 +86,7 @@ class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
         return try {
             val request = HttpRequest.newBuilder(URI(url))
                 .timeout(Duration.ofSeconds(8))
-                .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) xrnrule")
+                .header("User-Agent", SiteIcons.USER_AGENT)
                 .header("Accept", "text/html,image/*;q=0.9,*/*;q=0.5")
                 .GET()
                 .build()

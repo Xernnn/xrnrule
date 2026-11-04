@@ -41,4 +41,11 @@ class SitesTest {
         assertFalse(Sites.matches("notyoutube.com", "youtube.com"))
         assertFalse(Sites.matches("youtube.com", "m.youtube.com"))
     }
+
+    @Test
+    fun aSiteIsShownOnceUnderItsMainName() {
+        assertEquals(listOf("reddit.com"), Sites.shown(listOf("redd.it", "reddit.com")))
+        assertEquals(listOf("x.com", "youtube.com"), Sites.shown(listOf("twitter.com", "x.com", "youtube.com")))
+        assertEquals("an alias alone stays", listOf("redd.it"), Sites.shown(listOf("redd.it")))
+    }
 }

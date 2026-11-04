@@ -393,6 +393,8 @@ class LocalServer(
         val blocking: Boolean,
         val phoneApps: Int,
         val sites: List<String>,
+        /** [sites] as the page lists them: `redd.it` folded into `reddit.com` ([Sites.shown]). */
+        val shownSites: List<String>,
         val exceptSites: List<String>,
         val desktopApps: List<String>,
         val trigger: String,
@@ -530,6 +532,7 @@ class LocalServer(
             blocking = engine.isBlocking(world, b, clock),
             phoneApps = b.targetPackages.size,
             sites = b.targetSites.sorted(),
+            shownSites = Sites.shown(b.targetSites.sorted()),
             exceptSites = b.exceptSites.sorted(),
             desktopApps = b.targetDesktopApps.sorted(),
             trigger = b.trigger.type.name,
