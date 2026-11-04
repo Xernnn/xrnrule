@@ -412,7 +412,7 @@ private fun HabitBody(
     when {
         block.state != BlockState.EARNED -> StatusPill("no unlocks available")
         store.engine.redeemRejection(world, block.id, store.clock) == RejectReason.CAP_REACHED -> StatusPill(
-            capReachedText(store.engine.unlockUsedTodayMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs),
+            capReachedText(store.engine.unlockCommittedMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs, world.sessions.isNotEmpty()),
         )
         else -> StatusPill(
             "Open for ${formatDuration(block.reward.unlockDurationMs)}",

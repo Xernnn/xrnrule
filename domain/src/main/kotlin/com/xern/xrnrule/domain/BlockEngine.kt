@@ -262,12 +262,19 @@ class BlockEngine {
     fun unlockUsedTodayMs(world: World, clock: Clock): Long =
         if (clock.epochDay() != world.dailyUsageEpochDay) 0 else world.dailyUnlockUsedMs + world.unlockLog.values.sum()
 
+    /**
+     * I9: what a new unlock is measured against: today's ended unlocks plus every open one at its
+     * full length, so opening several blocks at once can't add up past the daily limit.
+     */
+    fun unlockCommittedMs(world: World, clock: Clock): Long =
+        unlockUsedTodayMs(world, clock) + world.sessions.values.sumOf { it.durationMs }
+
     /** Why [BlockEvent.Redeem] would be refused right now, or null if it would go through (I9). */
     fun redeemRejection(world: World, blockId: String, clock: Clock): RejectReason? {
         val block = world.block(blockId)
         val credit = world.credits[blockId]
         if (block?.state != BlockState.EARNED || credit == null) return RejectReason.NOT_EARNED
-        if (unlockUsedTodayMs(world, clock) + credit.amountMs > world.settings.dailyCapMs) return RejectReason.CAP_REACHED
+        if (unlockCommittedMs(world, clock) + credit.amountMs > world.settings.dailyCapMs) return RejectReason.CAP_REACHED
         return null
     }
 

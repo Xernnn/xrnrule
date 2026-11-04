@@ -159,12 +159,14 @@ private class AtClock(private val wall: Long, private val zone: ZoneId) : Clock 
 }
 
 /** Why an earned unlock can't be opened: it would go past today's unlock limit (I9). */
-fun capReachedText(usedMs: Long, capMs: Long, unlockMs: Long): String {
+/** [usedMs] counts open unlocks at their full length (I9); [othersOpen] says so when there are some. */
+fun capReachedText(usedMs: Long, capMs: Long, unlockMs: Long, othersOpen: Boolean = false): String {
     val left = capMs - usedMs
+    val open = if (othersOpen) ", counting the unlocks open now" else ""
     return if (left < 60_000) {
-        "Today's unlock time is used up (${formatDuration(capMs)} a day). It resets at midnight."
+        "Today's unlock time is used up$open (${formatDuration(capMs)} a day). It resets at midnight."
     } else {
-        "Only ${formatDuration(left)} of today's unlock time is left, and this unlock is ${formatDuration(unlockMs)}. It resets at midnight."
+        "Only ${formatDuration(left)} of today's unlock time is left$open, and this unlock is ${formatDuration(unlockMs)}. It resets at midnight."
     }
 }
 

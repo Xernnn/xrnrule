@@ -368,7 +368,7 @@ private fun OverrideSection(
 private fun EarnedActions(blockId: String, unlockMs: Long, ui: OverlayShieldPort.OverlayUi, onRedeem: (String) -> Unit) {
     if (ui.redeemRejection == RejectReason.CAP_REACHED) {
         Text(
-            capReachedText(ui.unlockUsedTodayMs, ui.dailyCapMs, unlockMs),
+            capReachedText(ui.unlockUsedTodayMs, ui.dailyCapMs, unlockMs, ui.othersOpen),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

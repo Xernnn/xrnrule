@@ -1841,6 +1841,26 @@ class InvariantTests {
         assertEquals(clock.epochDay() - 1, phone.world.habitDay(clock))
     }
 
+    @Test
+    fun i09_openUnlocksCountTowardCap() {
+        val clock = FakeClock()
+        val blocks = listOf("a", "b", "c").map { checklistBlock(it, target = "com.$it", unlockMs = 30L * 60_000) }
+        var world = buildWorld(blocks, blocks.associate { it.id to items(it.id, 1) }, clock = clock)
+        for (id in listOf("a", "b", "c")) world = engine.reduce(world, BlockEvent.ToggleChecklistItem("$id-i0", true), clock).world
+        world = engine.reduce(world, BlockEvent.Redeem("a"), clock).world
+        world = engine.reduce(world, BlockEvent.Redeem("b"), clock).world
+        assertEquals(60L * 60_000, engine.unlockCommittedMs(world, clock))
+
+        val third = engine.reduce(world, BlockEvent.Redeem("c"), clock)
+        assertEquals("two open 30-minute unlocks fill a 60-minute day", BlockState.EARNED, third.world.block("c")!!.state)
+        assertEquals(RejectReason.CAP_REACHED, third.effects.filterIsInstance<Effect.RedeemRejected>().single().reason)
+
+        clock.advance(30L * 60_000) // both run out: 60 minutes used, still nothing left
+        world = engine.reduce(third.world, BlockEvent.Tick, clock).world
+        assertEquals(60L * 60_000, engine.unlockCommittedMs(world, clock))
+        assertEquals(RejectReason.CAP_REACHED, engine.redeemRejection(world, "c", clock))
+    }
+
     // ---- I41: self-paced unlocks ---------------------------------------------------------
 
     private fun selfPacedWorld(clock: FakeClock): World =

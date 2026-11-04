@@ -121,7 +121,8 @@ class OverlayShieldPort(
             timerMs = block?.let { world.progress[it.id]?.accumulatedMs } ?: 0,
             timerRunning = block?.let { world.progress[it.id]?.timerRunning } == true,
             redeemRejection = block?.takeIf { it.state == BlockState.EARNED }?.let { engine.redeemRejection(world, it.id, clock) },
-            unlockUsedTodayMs = engine.unlockUsedTodayMs(world, clock),
+            unlockUsedTodayMs = engine.unlockCommittedMs(world, clock), // I9: open unlocks included
+            othersOpen = world.sessions.isNotEmpty(),
             dailyCapMs = world.settings.dailyCapMs,
             rowBreakRemainingMs = block?.let { engine.rowBreakRemainingMs(world, it, clock) } ?: 0,
             goals = block?.let { world.goalInfo(it.id, engine, clock) }.orEmpty(),
@@ -268,7 +269,9 @@ class OverlayShieldPort(
         val timerRunning: Boolean = false,
         /** EARNED blocks: why "Open" wouldn't go through right now, if it wouldn't (I9). */
         val redeemRejection: RejectReason? = null,
+        /** Today's unlock time so far, open unlocks at their full length (I9). */
         val unlockUsedTodayMs: Long = 0,
+        val othersOpen: Boolean = false,
         val dailyCapMs: Long = 0,
         /** ALLOWANCE with a row rule: what's left of a forced break (I32). */
         val rowBreakRemainingMs: Long = 0,
