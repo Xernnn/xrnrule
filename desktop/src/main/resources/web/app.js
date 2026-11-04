@@ -230,6 +230,8 @@ function blockCard(b) {
         h("h3", {}, b.name),
         h("div", { class: "chips" },
           h("span", { class: "chip" }, KIND[b.mode] ?? b.mode.toLowerCase()),
+          b.devices === "PHONE" && h("span", { class: "chip" }, "phone only"),
+          b.devices === "LAPTOP" && h("span", { class: "chip" }, "laptop only"),
           b.hardcore && h("span", { class: "chip strict" }, "hardcore"))),
       edit),
     h("div", { class: `status ${cls}` }, text),
@@ -268,7 +270,7 @@ const minutesOf = (text) => {
 async function openForm(b) {
   cancelGuard();
   message = "";
-  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: false, dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
+  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: false, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
   form = b
     ? {
       blockId: b.id,
@@ -280,6 +282,7 @@ async function openForm(b) {
         combineOr: b.combineOr,
         unlockMin: min(b.unlockMs),
         selfPaced: b.selfPaced,
+        devices: b.devices,
         dailyOn: b.allowanceMs > 0,
         allowanceMin: min(b.allowanceMs) || 30,
         rowOn: b.rowMs > 0,
@@ -371,7 +374,7 @@ function buildForm(b) {
     h("input", { type: "search", placeholder: "Find a laptop app", value: form.filter, oninput: (e) => { form.filter = e.target.value; drawList(); } }),
     list,
     field("Websites", h("textarea", { value: form.sitesText, placeholder: "youtube.com\nreddit.com", oninput: (e) => (form.sitesText = e.target.value) }),
-      "One per line; each covers its subdomains. The phone blocks these too."),
+      `One per line; each covers its subdomains.${d.devices === "LAPTOP" ? "" : " The phone blocks these too."}`),
     field("Leave these alone", h("textarea", { class: "short", value: form.exceptText, placeholder: "music.youtube.com", oninput: (e) => (form.exceptText = e.target.value) }),
       "Parts of those sites this block doesn't touch, one per line."),
     b?.phoneApps > 0 && h("div", { class: "note" }, `Also ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}: change those on the phone.`));
@@ -451,6 +454,11 @@ function buildForm(b) {
     isNew && field("Kind", seg("kind", [["HABIT", "Habit"], ["ALLOWANCE", "Daily limit"], ["TIME", "Set time"]])),
     isNew && d.kind === "TIME" && seg("setTime", [["SCHEDULE", "On a schedule"], ["LOCKDOWN", "For a while, from now"]]),
     targets,
+    field("Blocks on", seg("devices", [["BOTH", "Both"], ["PHONE", "Phone"], ["LAPTOP", "Laptop"]]), {
+      BOTH: "The phone and this laptop. Its websites are blocked in both browsers.",
+      PHONE: "The phone only: this laptop leaves its apps and websites alone. You can still unlock it from here.",
+      LAPTOP: "This laptop only: the phone leaves its websites alone.",
+    }[d.devices]),
     rules,
     errorBox,
     h("div", { class: "guard" }),
@@ -488,6 +496,7 @@ async function submitForm() {
     timerMin: d.timerMin,
     unlockMin: d.unlockMin,
     selfPaced: d.selfPaced,
+    devices: d.devices,
     items: (d.itemsText ?? "").split("\n"),
     linked: [...(d.linked?.values() ?? [])],
     dailyOn: d.dailyOn,

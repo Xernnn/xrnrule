@@ -11,6 +11,7 @@ import com.xern.xrnrule.app.ui.MainActivity
 import com.xern.xrnrule.app.ui.formatRemaining
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.appliesHere
 
 /**
  * Quick Settings tile: starts every lockdown block that isn't already running, without opening
@@ -29,7 +30,7 @@ class LockdownTileService : TileService() {
     override fun onClick() {
         super.onClick()
         val world = container.store.world.value
-        val lockdowns = world.blocks.filter { it.mode == BlockMode.LOCKDOWN }
+        val lockdowns = world.blocks.filter { it.mode == BlockMode.LOCKDOWN && world.appliesHere(it) } // this phone's (I42)
         if (lockdowns.isEmpty()) {
             openApp()
             return
@@ -44,7 +45,7 @@ class LockdownTileService : TileService() {
     private fun refresh(justStarted: Boolean = false) {
         val tile = qsTile ?: return
         val world = container.store.world.value
-        val lockdowns = world.blocks.filter { it.mode == BlockMode.LOCKDOWN }
+        val lockdowns = world.blocks.filter { it.mode == BlockMode.LOCKDOWN && world.appliesHere(it) } // this phone's (I42)
         val left = lockdowns.maxOfOrNull { container.engine.lockdownRemainingMs(world, it.id, container.clock) } ?: 0L
         val running = left > 0 || (justStarted && lockdowns.isNotEmpty())
         tile.label = "Lock down"

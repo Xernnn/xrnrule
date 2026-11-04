@@ -8,6 +8,7 @@ import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.CombineMode
 import com.xern.xrnrule.domain.DayWindow
 import com.xern.xrnrule.domain.Defaults
+import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.Reward
 import com.xern.xrnrule.domain.Schedule
@@ -17,8 +18,8 @@ import com.xern.xrnrule.domain.Trigger
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.TriggerUnit
 import com.xern.xrnrule.domain.World
-import kotlinx.serialization.Serializable
 import java.util.UUID
+import kotlinx.serialization.Serializable
 
 /**
  * The local page's block form: the same rules as the phone's create screen (`CreateBlockScreen`),
@@ -54,6 +55,8 @@ object BlockForms {
         val unlockMin: Long = Defaults.DEFAULT_UNLOCK_MS / 60_000,
         /** An unlock is [unlockMin] minutes of use over the day rather than a timer (I41). */
         val selfPaced: Boolean = false,
+        /** I42: the phone, the laptop, or both. */
+        val devices: Devices = Devices.BOTH,
         val items: List<String> = emptyList(),
         val linked: List<LinkedHabit> = emptyList(),
         /** A daily limit: [allowanceMin] a day when on; off leaves only the row rule (I19, I32). */
@@ -83,7 +86,14 @@ object BlockForms {
         val sites = form.sites.mapNotNull(Sites::normalize).toSet()
         val except = form.exceptSites.mapNotNull(Sites::normalize).toSet()
         val items = form.items.map { it.trim() }.filter { it.isNotEmpty() }
-        problem(form, hasTargets = apps.isNotEmpty() || sites.isNotEmpty(), capMs = world.settings.dailyCapMs, creating = true, hasItems = items.isNotEmpty() || form.linked.isNotEmpty())
+        problem(
+            form,
+            hasTargets = apps.isNotEmpty() || sites.isNotEmpty(),
+            capMs = world.settings.dailyCapMs,
+            creating = true,
+            hasItems = items.isNotEmpty() || form.linked.isNotEmpty(),
+            onItsDevices = targetsOn(form.devices, emptySet(), apps, sites),
+        )
             ?.let { return Result.Invalid(it) }
         val habit = form.mode == BlockMode.HABIT
         val block = Block(
@@ -95,6 +105,7 @@ object BlockForms {
             trigger = if (habit) trigger(form.checklist, form.timer, form.timerMin, form.combineOr) else Trigger(TriggerType.CHECKLIST, Defaults.ALL_ITEMS, TriggerUnit.ITEMS),
             reward = Reward(unlockDurationMs = form.unlockMin * 60_000),
             selfPaced = habit && form.selfPaced,
+            devices = form.devices,
             schedule = if (form.mode == BlockMode.SCHEDULE) schedule(form) else Schedule.ALWAYS,
             state = BlockState.ARMED,
             mode = form.mode,
@@ -122,7 +133,14 @@ object BlockForms {
         val except = form.exceptSites.mapNotNull(Sites::normalize).toSet()
         val hadTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
         val kept = form.copy(mode = old.mode, checklist = old.trigger.type != TriggerType.TIMER, timer = hadTimer)
-        problem(kept, hasTargets = old.targetPackages.isNotEmpty() || apps.isNotEmpty() || sites.isNotEmpty(), capMs = world.settings.dailyCapMs, creating = false, hasItems = true)
+        problem(
+            kept,
+            hasTargets = old.targetPackages.isNotEmpty() || apps.isNotEmpty() || sites.isNotEmpty(),
+            capMs = world.settings.dailyCapMs,
+            creating = false,
+            hasItems = true,
+            onItsDevices = targetsOn(form.devices, old.targetPackages, apps, sites),
+        )
             ?.let { return Result.Invalid(it) }
         val block = old.copy(
             name = form.name.trim(),
@@ -136,6 +154,7 @@ object BlockForms {
             },
             reward = old.reward.copy(unlockDurationMs = form.unlockMin * 60_000),
             selfPaced = if (old.mode == BlockMode.HABIT) form.selfPaced else old.selfPaced,
+            devices = form.devices,
             lockdownMs = if (old.mode == BlockMode.LOCKDOWN) form.lockdownMin * 60_000 else old.lockdownMs,
             schedule = if (old.mode == BlockMode.SCHEDULE) schedule(form) else old.schedule,
         ).let { if (old.mode == BlockMode.ALLOWANCE) it.withLimits(form) else it }
@@ -206,11 +225,19 @@ object BlockForms {
         countsGoal = habit.goal,
     )
 
+    /** I42: whether a block on [devices] blocks anything there: phone apps hold on the phone, laptop apps on the laptop, sites on both. */
+    private fun targetsOn(devices: Devices, phoneApps: Set<String>, laptopApps: Set<String>, sites: Set<String>): Boolean = when (devices) {
+        Devices.BOTH -> phoneApps.isNotEmpty() || laptopApps.isNotEmpty() || sites.isNotEmpty()
+        Devices.PHONE -> phoneApps.isNotEmpty() || sites.isNotEmpty()
+        Devices.LAPTOP -> laptopApps.isNotEmpty() || sites.isNotEmpty()
+    }
+
     /** The phone's hints (`CreateBlockScreen`), first one that applies. */
-    private fun problem(form: Form, hasTargets: Boolean, capMs: Long, creating: Boolean, hasItems: Boolean): String? {
+    private fun problem(form: Form, hasTargets: Boolean, capMs: Long, creating: Boolean, hasItems: Boolean, onItsDevices: Boolean = true): String? {
         val capMin = capMs / 60_000
         return when {
             !hasTargets -> "Pick a laptop app or add a website to block"
+            !onItsDevices -> "Laptop apps aren't blocked on the phone: add a website, or phone apps on the phone"
             form.name.isBlank() -> "Give the block a name"
             form.mode == BlockMode.ALLOWANCE && !form.dailyOn && form.rowMin <= 0 -> "Set minutes a day, minutes in a row, or both"
             form.mode == BlockMode.ALLOWANCE && form.dailyOn && form.allowanceMin <= 0 -> "Set how many minutes a day"

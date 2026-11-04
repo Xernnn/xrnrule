@@ -28,6 +28,27 @@ enum class CombineMode { AND, OR }
  */
 enum class BlockMode { HABIT, ALLOWANCE, SCHEDULE, LOCKDOWN }
 
+/** What a device running the engine is (I42). */
+enum class DeviceKind { PHONE, LAPTOP }
+
+/** The devices a block holds on (I42). */
+enum class Devices {
+    BOTH, PHONE, LAPTOP;
+
+    /** Whether a block with these devices holds on a [kind] device; any when the kind is unknown. */
+    fun include(kind: DeviceKind?): Boolean = when (this) {
+        BOTH -> true
+        PHONE -> kind == null || kind == DeviceKind.PHONE
+        LAPTOP -> kind == null || kind == DeviceKind.LAPTOP
+    }
+
+    /** Whether these devices hold on every device [other] does: going from [other] to these doesn't loosen. */
+    fun covers(other: Devices): Boolean = this == BOTH || this == other
+}
+
+/** I42: whether [block] holds on this device. */
+fun World.appliesHere(block: Block): Boolean = block.devices.include(deviceKind)
+
 /**
  * Which habit day a habit item counts (I23). [YESTERDAY] is for habits ticked at the end of the
  * day: last night's tick pays for today's unlock.
@@ -267,6 +288,8 @@ data class Block(
      * target is in front and lasts until it is used up or the day ends (I41).
      */
     val selfPaced: Boolean = false,
+    /** I42: the phone, the laptop, or both; elsewhere the block blocks nothing and counts no time. */
+    val devices: Devices = Devices.BOTH,
     /** Wall-clock ms of the last edit; the later edit wins when two devices change a block at once (§2.4). */
     val editedAtWall: Long = 0,
     /** I39: nothing that loosens this block goes through before [BlockLock.untilWall]; never set back to null. */
@@ -472,6 +495,8 @@ data class World(
     val settings: Settings = Settings(),
     /** This install's id in the shared state (§2.4); empty until the app assigns one. */
     val deviceId: String = "",
+    /** I42: whether this install is the phone or the laptop; null (old data) means every block holds here. Never shared. */
+    val deviceKind: DeviceKind? = null,
     /** Other devices' ALLOWANCE use, block id -> device id -> use (I19, §2.4). */
     val otherAllowance: Map<String, Map<String, AllowanceUse>> = emptyMap(),
     /** This device's run of use in a row, by block (I32). */

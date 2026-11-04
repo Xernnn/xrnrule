@@ -95,7 +95,8 @@ class BlockEngine {
      * covers drop out first.
      */
     fun blockers(world: World, all: List<Block>, clock: Clock): List<Block> {
-        val covering = if (pauseRemainingMs(world, clock) > 0) all.filterNot(::pausable) else all
+        val here = all.filter { world.appliesHere(it) } // I42
+        val covering = if (pauseRemainingMs(world, clock) > 0) here.filterNot(::pausable) else here
         val strict = covering.filter { it.mode != BlockMode.HABIT && isBlocking(world, it, clock) }
         val habit = covering.filter { it.mode == BlockMode.HABIT }
         val habitBlocking = if (habit.any { it.state == BlockState.UNLOCKED }) emptyList() else habit.filter { it.enabled && scheduleActive(it, clock) }
@@ -117,7 +118,7 @@ class BlockEngine {
 
     /** Whether this one block, on its own, is blocking its targets right now (contract §2.2). */
     fun isBlocking(world: World, block: Block, clock: Clock): Boolean {
-        if (!block.enabled) return false
+        if (!block.enabled || !world.appliesHere(block)) return false // I42
         if (pausable(block) && pauseRemainingMs(world, clock) > 0) return false // I25
         return when (block.mode) {
             BlockMode.HABIT -> block.state != BlockState.UNLOCKED && scheduleActive(block, clock)
@@ -210,7 +211,7 @@ class BlockEngine {
      * the row rule, a habit unlock, bought minutes or the daily break. Null when nothing meters it.
      */
     fun timeLeft(world: World, pkg: String?, site: String?, clock: Clock): TimeLeft? {
-        val covering = world.blocks.filter { it.enabled && covers(it, pkg, site) }
+        val covering = world.blocks.filter { it.enabled && world.appliesHere(it) && covers(it, pkg, site) }
         if (covering.isEmpty()) return null
         val left = mutableListOf<TimeLeft>()
         for (b in covering) {
@@ -436,13 +437,13 @@ class BlockEngine {
             val block = world.block(blockId) ?: return@mapValues p
             val delta = (nowMono - p.lastUpdated).coerceAtLeast(0)
             val credit = when (block.mode) {
-                BlockMode.ALLOWANCE -> !fgShielded && covers(block, fgPkg, fgSite)
+                BlockMode.ALLOWANCE -> !fgShielded && world.appliesHere(block) && covers(block, fgPkg, fgSite) // I42
                 BlockMode.HABIT -> {
                     val hasTimer = block.trigger.type == TriggerType.TIMER || block.trigger.type == TriggerType.COMBINED
                     val counted = if (block.trigger.habitPackages.isNotEmpty()) {
-                        fgPkg != null && fgPkg in block.trigger.habitPackages // I16
+                        fgPkg != null && fgPkg in block.trigger.habitPackages // I16, on any device (I42)
                     } else {
-                        covers(block, fgPkg, fgSite)
+                        world.appliesHere(block) && covers(block, fgPkg, fgSite)
                     }
                     hasTimer && p.timerRunning && block.state == BlockState.ARMED && counted
                 }
@@ -474,7 +475,7 @@ class BlockEngine {
             val block = world.block(blockId)
             if (!s.selfPaced || block?.state != BlockState.UNLOCKED) return@mapValues s
             val delta = s.markMonotonic?.let { (nowMono - it).coerceAtLeast(0) } ?: 0
-            val inUse = delta > 0 && covers(block, fgPkg, fgSite) && !fgShielded
+            val inUse = delta > 0 && world.appliesHere(block) && covers(block, fgPkg, fgSite) && !fgShielded // I42
             val used = if (inUse) s.usedMs + (world.deviceId to (s.usedMs[world.deviceId] ?: 0) + delta) else s.usedMs
             s.copy(usedMs = used, markMonotonic = nowMono)
         }

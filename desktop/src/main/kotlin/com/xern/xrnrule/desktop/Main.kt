@@ -4,8 +4,13 @@ import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.World
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,10 +18,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.nio.file.Files
-import java.nio.file.attribute.PosixFilePermissions
-import java.util.UUID
 
 /**
  * xrnrule on the laptop: the same engine as the phone, enforcing the same shared blocks on
@@ -35,6 +36,8 @@ fun main() = runBlocking {
     if (store.world.value.deviceId.isEmpty()) {
         store.edit { it.copy(deviceId = "laptop-" + UUID.randomUUID().toString().take(8)) }
     }
+    // Which blocks hold here (I42): those for the laptop, and those for both.
+    if (store.world.value.deviceKind != DeviceKind.LAPTOP) store.edit { it.copy(deviceKind = DeviceKind.LAPTOP) }
 
     val notifier = Notifier(config)
     val enforcer = Enforcer(store, notifier, config)

@@ -32,6 +32,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     var apps by mutableStateOf(start.apps)
     var sites by mutableStateOf(start.sites)
     var exceptSites by mutableStateOf(start.exceptSites)
+    var devices by mutableStateOf(start.devices)
 
     // ---- what unlocks it ----
     var appTimeOn by mutableStateOf(start.appTimeOn)
@@ -75,7 +76,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
 
     /** The form as it stands. */
     fun draft() = BlockDraft(
-        existing = existing, habits = knownHabits, name = name, apps = apps, sites = sites, exceptSites = exceptSites,
+        existing = existing, habits = knownHabits, name = name, apps = apps, sites = sites, exceptSites = exceptSites, devices = devices,
         appTimeOn = appTimeOn, appTimeApps = appTimeApps, appTimeMinutes = appTimeMinutes, timerOn = timerOn,
         timerMinutes = timerMinutes, tasks = tasks, habitIds = habitIds, manualOn = manualOn, focusOn = focusOn,
         links = links, loopOn = loopOn, combineMode = combineMode, limitOn = limitOn, dailyOn = dailyOn,

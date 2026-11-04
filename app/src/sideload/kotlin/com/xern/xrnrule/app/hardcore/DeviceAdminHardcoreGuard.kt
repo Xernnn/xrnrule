@@ -9,6 +9,7 @@ import androidx.core.content.edit
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.appliesHere
 import com.xern.xrnrule.hardcore.HabitDeviceAdminReceiver
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -31,8 +32,9 @@ class DeviceAdminHardcoreGuard(private val context: Context) : HardcoreGuard {
 
     override fun shouldIntercept(pkg: String?, world: World): Boolean {
         if (!isEngaged() || pkg !in GUARDED_PACKAGES) return false
+        // A laptop-only block (I42) isn't held here, so it doesn't gate this phone's Settings.
         return world.blocks.any {
-            it.enforcementTier == EnforcementTier.HARDCORE && it.state != BlockState.UNLOCKED
+            it.enforcementTier == EnforcementTier.HARDCORE && it.state != BlockState.UNLOCKED && world.appliesHere(it)
         }
     }
 

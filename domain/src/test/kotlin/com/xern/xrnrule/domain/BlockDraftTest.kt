@@ -63,7 +63,8 @@ class BlockDraftTest {
                 .copy(dailyMinutes = 45, rowOn = true, rowMinutes = 20, rowBreakMinutes = 10, perDevice = true),
             BlockDraft(name = "Evenings", apps = setOf("com.x"), whenMode = WhenMode.SCHEDULE, scheduleDays = setOf(1, 2, 3), timeOn = true,
                 startMinute = 22 * 60, endMinute = 6 * 60, moreWindows = listOf(DayWindow(setOf(6, 7), TimeWindow(9 * 60, 12 * 60)))),
-            BlockDraft(name = "Focus", sites = setOf("x.com"), whenMode = WhenMode.FOR_A_WHILE, lockdownMinutes = 90),
+            BlockDraft(name = "Focus", sites = setOf("x.com"), whenMode = WhenMode.FOR_A_WHILE, lockdownMinutes = 90, devices = Devices.LAPTOP),
+            BlockDraft(name = "Phone", apps = setOf("com.x"), devices = Devices.PHONE),
         )
         for (draft in drafts) {
             val (block, items) = made(draft)
@@ -95,6 +96,7 @@ class BlockDraftTest {
         assertTrue("a schedule", loosens { it.copy(whenMode = WhenMode.SCHEDULE, scheduleDays = setOf(1)) })
         assertFalse("a new exception that matches nothing", loosens { it.copy(exceptSites = it.exceptSites + "nothing.org") })
         assertTrue("an exception under a blocked site", loosens { it.copy(exceptSites = it.exceptSites + "new.reddit.com") })
+        assertTrue("phone only (I42)", loosens { it.copy(devices = Devices.PHONE) })
     }
 
     @Test
@@ -134,6 +136,11 @@ class BlockDraftTest {
         val (block, items) = made(habitBlock)
         assertEquals("Give the block a name", BlockDraft.of(block, items, habits).copy(name = " ").hint(60))
         assertNull("a new block is named for you", habitBlock.copy(name = "").hint(60))
+        assertEquals(
+            "a laptop-only block of phone apps blocks nothing",
+            "Phone apps aren't blocked on the laptop: add a website, or laptop apps on the laptop's page",
+            BlockDraft(apps = setOf("a"), devices = Devices.LAPTOP).hint(60),
+        )
     }
 
     @Test

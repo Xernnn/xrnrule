@@ -106,6 +106,14 @@ chuyển trạng thái cho chúng. "Đang chặn" của từng chế độ:
 Gộp nhiều block cùng phủ một target: xem I22. Một block có thể chừa ra vài host con của site nó
 chặn (`exceptSites`, I31).
 
+**Thiết bị** (`Block.devices`, I42): `BOTH` (mặc định), `PHONE` hay `LAPTOP`. Mỗi máy biết nó là
+gì (`World.deviceKind`, của riêng máy, không chung; null = dữ liệu cũ, mọi block đều áp dụng). Ở máy
+mà block không áp dụng, block **không chặn gì** ở đó (cả "đang chặn" ở bảng trên lẫn I22) và không
+tính giờ ở đó (ALLOWANCE, I41, và timer HABIT đếm trên chính target). Riêng timer HABIT đếm trong app
+khác (`habitPackages`, I16) vẫn đếm ở bất kỳ máy nào có app đó: credit là chung (§2.4), nên dùng app
+học trên điện thoại vẫn mở được một block chỉ của laptop. Block vẫn được đồng bộ, hiện ra và mở khóa
+được từ máy kia.
+
 ### 2.3 Sửa block: nới lỏng cần "guard"
 
 Ngoài sự kiện, user còn sửa cấu hình block (lớp app gọi `WorldStore.edit`). Sửa nào làm block
@@ -121,7 +129,8 @@ thấp đi (Loop tự điền nhiều ngày hơn). Xóa habit **không** nới l
 không bao giờ xong nữa (I36), muốn bỏ thì sửa block. Sửa habit ở xrnloops hay web app (§2.5) không
 qua guard: đó là app theo dõi của chính user. Với các luật mới: thêm một `exceptSites`, tắt hay
 tăng `sessionMs`, giảm `sessionBreakMs`, chuyển `perDevice` sang `true` (mỗi máy có nguyên hạn
-mức), chuyển `selfPaced` sang `true` (mở khóa trải ra cả ngày, I41), bỏ hay đổi một khung lịch (I30). Ở Settings: cụm từ override ngắn hơn, giảm
+mức), chuyển `selfPaced` sang `true` (mở khóa trải ra cả ngày, I41), bớt một thiết bị khỏi
+`devices` (`BOTH → PHONE/LAPTOP`, `PHONE ↔ LAPTOP`; I42), bỏ hay đổi một khung lịch (I30). Ở Settings: cụm từ override ngắn hơn, giảm
 `overrideWaitMs`, tăng `overrideGrantMs` hay `overridesPerDay` (`BlockEdits.settingsLoosen`). Ngoại lệ duy nhất: lockdown **không đang chạy** thì
 sửa/xóa tự do (`BlockEdits.guardNeeded`). Test: `BlockEditsTest`.
 
@@ -253,6 +262,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I39** | Khóa có hạn (§2.3): `BlockEdits.locked(block, nowWall)` = `lock != null && nowWall < lock.untilWall`. `BlockEdits.loosens` coi `lock.untilWall` nhỏ đi (kể cả bỏ khóa) là nới lỏng. `BlockEdits.lockedBy(world, blocks, nowWall)` = khóa đang chạy dài nhất trong các block đó, hay null. Trộn (§2.4): `lock` lấy theo `setAtWall` muộn hơn (null cũ nhất), độc lập với bản block thắng. | `i39_lockMergesByWhenItWasSet` (+ `BlockEditsTest`: rút ngắn khóa là nới lỏng, `locked` theo đồng hồ). |
 | **I40** | Mở khẩn cấp: `BlockEdits.emergencyUnlock(world, blockId, nowWall)` trả `null` (từ chối) nếu block không đang khóa hay `emergencyLog` đã có `Defaults.EMERGENCY_UNLOCKS` (5) mục; không thì đặt `lock = BlockLock(nowWall, nowWall)` và thêm `emergencyLog["blockId@nowWall"] = nowWall`. 5 lần cho mọi block, mọi thiết bị, không hồi lại; `emergencyLog` chung (§2.4, hợp). | `i40_fiveEmergencyUnlocksInAll`, `i40_emergencyLogIsShared`. |
 | **I41** | Mở khóa tự điều tiết (`Block.selfPaced`, chỉ HABIT; "Self paced" của Habits First): redeem tạo session `selfPaced = true`, và thời gian của nó chỉ trôi khi **đang dùng**: mỗi lần tích lũy (như I19), nếu foreground là target của block (I18) và không bị block khác chặn, `delta` monotonic từ mốc `markMonotonic` được cộng vào `session.usedMs[deviceId]`. `markMonotonic` là của máy này: đặt `now_mono` lúc redeem và lúc nhận một session mới từ máy khác; bỏ (null) khi chiếu (§2.4) và khi neo lại (I8), không có mốc thì lần tích lũy đó chỉ đặt mốc. Hết khi `Σ usedMs ≥ durationMs` **hoặc** khi sang ngày mới (`startedAtWall` trước đầu ngày hôm nay); `consumed = min(Σ usedMs, durationMs)` vào `unlockLog` (I28). Không kiểm tamper I3 (wall không dùng để đếm). Cảnh báo sắp hết khi lượt dùng còn lại ≤ `unlockWarningMs`. Trộn (§2.4): cùng session ở hai bên → `usedMs` lấy max theo từng thiết bị, nên thời gian dùng ở hai máy cộng lại. Đổi `false → true` là nới lỏng (§2.3). | `i41_selfPacedCountsOnlyUse`, `i41_selfPacedEndsWhenUsedUp`, `i41_selfPacedEndsWithTheDay`, `i41_selfPacedSurvivesARebootWithoutCountingIt`, `i41_selfPacedUseAddsUpAcrossDevices` (dùng xong ở một máy thì máy kia không mở lại), `i41_turningSelfPacedOnLoosens`. |
+| **I42** | `Block.appliesOn(kind)` = `kind == null || devices == BOTH || devices` khớp `kind`. Block không áp dụng ở máy này: `isBlocking == false`, không nằm trong `blockers` (I22) nên không vào `ShieldPlan`, `timeLeft` bỏ qua nó, và không tích lũy ALLOWANCE (I19), lượt dùng I41 hay timer HABIT đếm trên target (I4); timer HABIT có `habitPackages` (I16) vẫn đếm. `BlockEdits.loosens`: `devices` mới không phủ hết thiết bị của cái cũ là nới lỏng. | `i42_laptopOnlyBlockDoesNothingOnThePhone`, `i42_phoneOnlyBlockStillBlocksThePhone`, `i42_aHabitAppElsewhereStillEarnsIt`, `i42_aTargetTimerOnlyCountsWhereTheBlockHolds`, `i42_droppingADeviceLoosens`. |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 

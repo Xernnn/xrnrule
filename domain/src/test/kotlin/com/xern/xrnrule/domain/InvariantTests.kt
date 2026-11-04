@@ -1992,4 +1992,77 @@ class InvariantTests {
         assertTrue(BlockEdits.loosens(block, block.copy(selfPaced = true)))
         assertFalse(BlockEdits.loosens(block.copy(selfPaced = true), block))
     }
+
+    // ---- I42: phone, laptop or both ----------------------------------------------------
+
+    @Test
+    fun i42_laptopOnlyBlockDoesNothingOnThePhone() {
+        val clock = FakeClock()
+        val laptopOnly = modeBlock("a1", BlockMode.ALLOWANCE, targetSites = setOf("youtube.com"), dailyAllowanceMs = 10L * 60_000)
+            .copy(devices = Devices.LAPTOP)
+        val schedule = modeBlock("s1", BlockMode.SCHEDULE, targetSites = setOf("reddit.com")).copy(devices = Devices.LAPTOP)
+        var phone = buildWorld(listOf(laptopOnly, schedule), clock = clock).copy(deviceKind = DeviceKind.PHONE)
+
+        phone = engine.reduce(phone, BlockEvent.ForegroundChanged("browser", "youtube.com"), clock).world
+        clock.advance(30L * 60_000)
+        phone = engine.reduce(phone, BlockEvent.Tick, clock).world
+        assertEquals("the phone's use doesn't count", 0L, engine.allowanceUsedMs(phone, laptopOnly, clock))
+        assertFalse(engine.isBlocking(phone, schedule, clock))
+        assertTrue(engine.shieldPlan(phone, clock).blockedSites.isEmpty())
+        assertNull(engine.timeLeft(phone, "browser", "youtube.com", clock))
+
+        val laptop = phone.copy(deviceKind = DeviceKind.LAPTOP)
+        assertEquals(setOf("reddit.com"), engine.shieldPlan(laptop, clock).blockedSites)
+        assertEquals("old data with no kind: every block holds", setOf("reddit.com"), engine.shieldPlan(phone.copy(deviceKind = null), clock).blockedSites)
+    }
+
+    @Test
+    fun i42_phoneOnlyBlockStillBlocksThePhone() {
+        val clock = FakeClock()
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 10L * 60_000).copy(devices = Devices.PHONE)
+        var phone = buildWorld(listOf(block), clock = clock, foregroundPkg = "com.target").copy(deviceKind = DeviceKind.PHONE)
+        clock.advance(11L * 60_000)
+        val out = engine.reduce(phone, BlockEvent.Tick, clock)
+        assertTrue(out.shieldPlan!!.blockedPackages.contains("com.target"))
+        phone = out.world
+        assertFalse("the laptop doesn't block it", engine.isBlocking(phone.copy(deviceKind = DeviceKind.LAPTOP), block, clock))
+    }
+
+    @Test
+    fun i42_aHabitAppElsewhereStillEarnsIt() {
+        val clock = FakeClock()
+        // Reddit on the laptop only, unlocked by 10 minutes of Duolingo on the phone.
+        val block = timerBlock("t1", requiredMs = 10L * 60_000).copy(
+            targetPackages = emptySet(),
+            targetSites = setOf("reddit.com"),
+            devices = Devices.LAPTOP,
+            trigger = Trigger(TriggerType.TIMER, 10L * 60_000, TriggerUnit.MS, habitPackages = setOf("com.duolingo")),
+        )
+        var phone = buildWorld(listOf(block), clock = clock).copy(deviceKind = DeviceKind.PHONE)
+        phone = engine.reduce(phone, BlockEvent.TimerControl("t1", true), clock).world
+        phone = engine.reduce(phone, BlockEvent.ForegroundChanged("com.duolingo"), clock).world
+        clock.advance(10L * 60_000)
+        phone = engine.reduce(phone, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.EARNED, phone.block("t1")!!.state)
+    }
+
+    @Test
+    fun i42_aTargetTimerOnlyCountsWhereTheBlockHolds() {
+        val clock = FakeClock()
+        val block = timerBlock("t1", requiredMs = 5L * 60_000).copy(devices = Devices.LAPTOP)
+        var phone = buildWorld(listOf(block), clock = clock).copy(deviceKind = DeviceKind.PHONE)
+        phone = engine.reduce(phone, BlockEvent.TimerControl("t1", true), clock).world
+        phone = engine.reduce(phone, BlockEvent.ForegroundChanged("com.target"), clock).world // open, not waiting: it isn't blocked here
+        clock.advance(10L * 60_000)
+        phone = engine.reduce(phone, BlockEvent.Tick, clock).world
+        assertEquals(BlockState.ARMED, phone.block("t1")!!.state)
+    }
+
+    @Test
+    fun i42_droppingADeviceLoosens() {
+        val block = checklistBlock("c1")
+        assertTrue(BlockEdits.loosens(block, block.copy(devices = Devices.PHONE)))
+        assertTrue(BlockEdits.loosens(block.copy(devices = Devices.PHONE), block.copy(devices = Devices.LAPTOP)))
+        assertFalse(BlockEdits.loosens(block.copy(devices = Devices.LAPTOP), block))
+    }
 }

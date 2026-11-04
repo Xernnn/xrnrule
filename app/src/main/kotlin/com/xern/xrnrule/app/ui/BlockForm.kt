@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.HourglassTop
 import androidx.compose.material.icons.outlined.Info
@@ -105,6 +106,7 @@ import com.xern.xrnrule.app.web.WebsiteMonitor
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.CombineMode
+import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.FormKind
 import com.xern.xrnrule.domain.HabitKind
@@ -170,6 +172,8 @@ fun NewBlockScreen(
                     Question("Which apps do you want to limit?")
                     Gap(22)
                     TargetsCard(form, apps, websites)
+                    Gap(16)
+                    DevicesCard(form)
                 }
                 2 -> {
                     Gap(8)
@@ -335,6 +339,8 @@ fun EditBlockScreen(
             FormSection(Icons.Filled.GridView, "Which apps do you want to limit?") {
                 TargetsCard(form, apps, websites, framed = false)
             }
+            Gap(14)
+            DevicesCard(form)
             when (existing.mode) {
                 BlockMode.HABIT -> FormSection(Icons.Outlined.VpnKey, "Select what unlocks your apps", hint = "(Tap as many as you like)") {
                     UnlockSections(form, apps, store, headers = false)
@@ -923,6 +929,51 @@ private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
     }
     if (custom) {
         MinutesDialog(initial = form.unlockMinutes, max = capMinutes, onDismiss = { custom = false }, onConfirm = { form.unlockMinutes = it; custom = false })
+    }
+}
+
+/**
+ * I42: where the block holds, as a switch like "Block again after"'s: the phone, the laptop, or
+ * both. The other device still shows it and can unlock it.
+ */
+@Composable
+private fun DevicesCard(form: BlockFormState) {
+    HFCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Outlined.Devices, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(17.dp)) }
+            WGap(10)
+            Text("Blocks on", style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp), modifier = Modifier.weight(1f))
+        }
+        Gap(16)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            val choices = listOf(Devices.BOTH to "Both", Devices.PHONE to "Phone", Devices.LAPTOP to "Laptop")
+            choices.forEachIndexed { i, (devices, label) ->
+                SegmentedButton(
+                    selected = form.devices == devices,
+                    onClick = { form.devices = devices },
+                    shape = SegmentedButtonDefaults.itemShape(i, choices.size),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        activeContentColor = MaterialTheme.colorScheme.onSurface,
+                        inactiveContainerColor = Color.Transparent,
+                        inactiveContentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                ) { Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp)) }
+            }
+        }
+        Gap(16)
+        Text(
+            when (form.devices) {
+                Devices.BOTH -> "This phone and your laptop. Its websites are blocked in both browsers."
+                Devices.PHONE -> "This phone only: the laptop leaves its websites alone."
+                Devices.LAPTOP -> "Your laptop only: this phone leaves its apps and websites alone. You can still unlock it from here."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

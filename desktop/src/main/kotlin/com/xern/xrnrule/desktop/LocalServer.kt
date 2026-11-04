@@ -17,22 +17,7 @@ import com.xern.xrnrule.domain.Settings
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
-import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
+import com.xern.xrnrule.domain.appliesHere
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.time.Instant
@@ -41,6 +26,22 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 
 private val LOCK_END = DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm")
 
@@ -405,6 +406,9 @@ class LocalServer(
         val creditExpiresAtWall: Long?,
         /** A timed unlock's end; null for a self-paced one, which has [useLeftMs] instead (I41). */
         val openUntilWall: Long?,
+        /** I42: BOTH, PHONE or LAPTOP; [here] false for a phone-only block, whose status is the phone's. */
+        val devices: String,
+        val here: Boolean,
         val selfPaced: Boolean,
         val useLeftMs: Long?,
         val lockdownRemainingMs: Long,
@@ -507,7 +511,9 @@ class LocalServer(
         )
     }
 
-    private fun uiBlock(world: World, b: Block): UiBlock {
+    private fun uiBlock(here: World, b: Block): UiBlock {
+        // A phone-only block shows how it stands on the phone, not "not blocking" (I42).
+        val world = if (here.appliesHere(b)) here else here.copy(deviceKind = null)
         val engine = store.engine
         val clock = store.clock
         val credit = world.credits[b.id]
@@ -545,6 +551,8 @@ class LocalServer(
             unlockMs = b.reward.unlockDurationMs,
             creditExpiresAtWall = credit?.expiresAtWall,
             openUntilWall = session?.takeUnless { it.selfPaced }?.let { it.startedAtWall + it.durationMs },
+            devices = b.devices.name,
+            here = here.appliesHere(b),
             selfPaced = b.selfPaced,
             useLeftMs = session?.takeIf { it.selfPaced }?.leftMs(clock),
             lockdownRemainingMs = engine.lockdownRemainingMs(world, b.id, clock),

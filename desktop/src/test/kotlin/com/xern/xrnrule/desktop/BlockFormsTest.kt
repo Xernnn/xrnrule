@@ -8,16 +8,17 @@ import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.CombineMode
+import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
+import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.time.ZoneId
 
 class BlockFormsTest {
 
@@ -72,6 +73,18 @@ class BlockFormsTest {
             "Start and end time can't be the same",
             reason(BlockForms.create(World(), Form(name = "x", sites = listOf("a.com"), mode = BlockMode.SCHEDULE, startMin = 600, endMin = 600), clock)),
         )
+    }
+
+    @Test
+    fun aBlockCanHoldOnOneDevice() {
+        val phoneOnly = ok(BlockForms.create(World(), Form(name = "x", sites = listOf("a.com"), items = listOf("a"), devices = Devices.PHONE), clock))
+        assertEquals(Devices.PHONE, phoneOnly.block.devices)
+        assertEquals(
+            "Laptop apps aren't blocked on the phone: add a website, or phone apps on the phone",
+            reason(BlockForms.create(World(), Form(name = "y", desktopApps = listOf("steam"), items = listOf("a"), devices = Devices.PHONE), clock)),
+        )
+        val both = ok(BlockForms.edit(phoneOnly.world, Form(id = phoneOnly.block.id, name = "x", sites = listOf("a.com"), items = listOf("a"))))
+        assertEquals(Devices.BOTH, both.block.devices)
     }
 
     @Test

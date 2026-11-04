@@ -71,9 +71,11 @@ import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Defaults
+import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.appliesHere
 import com.xern.xrnrule.domain.deleteBlock
 
 /**
@@ -157,7 +159,8 @@ fun BlocksScreen(
                 val hardcore = block.enforcementTier == EnforcementTier.HARDCORE
                 BlockCard(
                     block = block,
-                    world = world,
+                    // A block for the laptop only shows how it stands there, not "not blocking" (I42).
+                    world = if (world.appliesHere(block)) world else world.copy(deviceKind = null),
                     store = store,
                     appLabels = appLabels,
                     onOpen = { onOpenBlock(block.id) },
@@ -319,9 +322,16 @@ private fun BlockCard(
                 WGap(14)
                 Column(Modifier.weight(1f).heightIn(min = 52.dp), verticalArrangement = Arrangement.Center) {
                     Text(block.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (locked) {
+                    // I42: a block that holds on one device says which.
+                    val where = when (block.devices) {
+                        Devices.BOTH -> null
+                        Devices.PHONE -> "Phone only"
+                        Devices.LAPTOP -> "Laptop only"
+                    }
+                    val lockText = if (locked) "Locked until ${formatLockEnd(block.lock!!.untilWall, now)}" else null
+                    listOfNotNull(where, lockText).takeIf { it.isNotEmpty() }?.let { parts ->
                         Text(
-                            "Locked until ${formatLockEnd(block.lock!!.untilWall, now)}",
+                            parts.joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,

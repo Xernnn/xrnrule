@@ -42,6 +42,8 @@ data class BlockDraft(
     val apps: Set<String> = emptySet(),
     val sites: Set<String> = emptySet(),
     val exceptSites: Set<String> = emptySet(),
+    /** I42: where it holds: the phone, the laptop, or both. */
+    val devices: Devices = Devices.BOTH,
 
     // ---- what unlocks it ----
     val appTimeOn: Boolean = false,
@@ -143,10 +145,25 @@ data class BlockDraft(
         return copy(links = kept + added)
     }
 
-    val hasTargets: Boolean get() = apps.isNotEmpty() || sites.isNotEmpty() || existing?.targetDesktopApps?.isNotEmpty() == true
+    /** Laptop apps are added on the laptop's page; the phone's form keeps the block's. */
+    private val laptopApps: Set<String> get() = existing?.targetDesktopApps.orEmpty()
+
+    val hasTargets: Boolean get() = apps.isNotEmpty() || sites.isNotEmpty() || laptopApps.isNotEmpty()
+
+    /** I42: whether anything it blocks is on the devices it holds on. */
+    val hasTargetsOnItsDevices: Boolean
+        get() = when (devices) {
+            Devices.BOTH -> hasTargets
+            Devices.PHONE -> apps.isNotEmpty() || sites.isNotEmpty()
+            Devices.LAPTOP -> sites.isNotEmpty() || laptopApps.isNotEmpty()
+        }
 
     /** Why step 1 (what to block) can't go on yet. */
-    fun targetsHint(): String? = if (!hasTargets) "Pick an app or a website to block" else null
+    fun targetsHint(): String? = when {
+        !hasTargets -> "Pick an app or a website to block"
+        !hasTargetsOnItsDevices -> "Phone apps aren't blocked on the laptop: add a website, or laptop apps on the laptop's page"
+        else -> null
+    }
 
     /** Why step 2 (what unlocks it) can't go on yet. */
     fun unlockHint(): String? = when {
@@ -207,6 +224,7 @@ data class BlockDraft(
             targetPackages = apps,
             targetSites = sites,
             exceptSites = exceptSites.filterTo(mutableSetOf()) { e -> sites.any { Sites.matches(e, it) } },
+            devices = devices,
             trigger = builtTrigger(),
             reward = (existing?.reward ?: Reward()).copy(unlockDurationMs = unlockMinutes * 60_000),
             schedule = builtSchedule(),
@@ -300,6 +318,7 @@ data class BlockDraft(
                 apps = existing.targetPackages,
                 sites = existing.targetSites,
                 exceptSites = existing.exceptSites,
+                devices = existing.devices,
                 appTimeOn = appTimeOn,
                 appTimeApps = trigger.habitPackages,
                 appTimeMinutes = if (appTimeOn) timerMinutes else 15,

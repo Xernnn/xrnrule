@@ -10,12 +10,13 @@ import com.xern.xrnrule.app.web.ExtensionServer
 import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.Clock
+import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.World
+import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import java.io.File
-import java.util.UUID
 
 /** Process-wide singletons. Created once in [com.xern.xrnrule.app.XrnruleApp]. */
 class AppContainer(context: Context) {
@@ -70,6 +71,8 @@ class AppContainer(context: Context) {
             val id = "phone-" + UUID.randomUUID().toString().take(8)
             store.edit { it.copy(deviceId = id) }
         }
+        // Which blocks hold here (I42): those for the phone, and those for both.
+        if (store.world.value.deviceKind != DeviceKind.PHONE) store.edit { it.copy(deviceKind = DeviceKind.PHONE) }
         shared.start()
         habits.start()
         extensionServer.start()
