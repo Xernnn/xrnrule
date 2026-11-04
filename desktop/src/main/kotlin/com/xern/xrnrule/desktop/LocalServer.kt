@@ -463,6 +463,9 @@ class LocalServer(
         val habitsUrl: String?,
         val kwinSeenAgoMs: Long?,
         val extensionMissing: Boolean,
+        /** The extension's version, and the one this daemon was built with when it's older. */
+        val extensionVersion: String?,
+        val extensionLatest: String?,
         val blockedApps: List<String>,
         val blockedSites: List<String>,
         val siteExceptions: Map<String, List<String>>,
@@ -490,6 +493,8 @@ class LocalServer(
             habitsUrl = if (config.syncConfigured) "${config.loopUrl}/" else null,
             kwinSeenAgoMs = enforcer.kwinSeenAtMs.takeIf { it > 0 }?.let { System.currentTimeMillis() - it },
             extensionMissing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() },
+            extensionVersion = foreground.extensionVersion,
+            extensionLatest = BUILT_WITH_EXTENSION?.takeIf { latest -> foreground.extensionVersion?.let { ExtensionApi.isOlder(it, latest) } == true },
             blockedApps = world.appliedShield.blockedPackages.filter { it in appIds },
             blockedSites = world.appliedShield.blockedSites.toList(),
             siteExceptions = world.appliedShield.siteExceptions.mapValues { it.value.sorted() },
@@ -673,5 +678,11 @@ class LocalServer(
         const val GUARD_MS = 60_000L
         private const val CONTENT_POLICY = "default-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; " +
             "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+        /** The extension's version when this daemon was built (`extension-manifest.json`, see the build). */
+        private val BUILT_WITH_EXTENSION: String? = runCatching {
+            val text = LocalServer::class.java.getResourceAsStream("/extension-manifest.json")!!.use { it.readBytes().decodeToString() }
+            Regex("\"version\"\\s*:\\s*\"([0-9.]+)\"").find(text)?.groupValues?.get(1)
+        }.getOrNull()
     }
 }

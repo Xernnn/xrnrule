@@ -48,7 +48,7 @@ class ExtensionServer(
     private val scope: CoroutineScope,
 ) {
     @Serializable
-    private data class Heartbeat(val host: String? = null, val focused: Boolean = false, val standIn: Boolean = false)
+    private data class Heartbeat(val host: String? = null, val focused: Boolean = false, val standIn: Boolean = false, val version: String? = null)
 
     private class Reply(val code: Int, val type: String, val body: ByteArray) {
         constructor(code: Int, text: String) :
@@ -169,6 +169,7 @@ class ExtensionServer(
                 val beat = runCatching { json.decodeFromString(Heartbeat.serializer(), body) }.getOrNull()
                     ?: return Reply(400, "bad heartbeat")
                 val leave = SiteSightings.report(beat.host?.let(Sites::normalize), beat.standIn)
+                beat.version?.let(websites::onVersion)
                 Reply(200, encode(verdict(beat.host).copy(leave = leave)))
             }
             method == "GET" && path == "/ext/check" -> Reply(200, encode(verdict(query["host"])))

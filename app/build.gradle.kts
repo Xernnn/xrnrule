@@ -77,7 +77,8 @@ android {
 // http://127.0.0.1:47321/block (see ExtensionServer); copied in at build time so there's one copy.
 val blockPage = tasks.register<Sync>("blockPage") {
     from(rootProject.file("extension")) {
-        include("block.html", "block.js", "shared.js", "page.css", "icons/icon-48.png")
+        // manifest.json only for its version: the extension this build was made with (not served).
+        include("block.html", "block.js", "shared.js", "page.css", "icons/icon-48.png", "manifest.json")
     }
     into(layout.buildDirectory.dir("generated/blockPage/web"))
 }

@@ -43,7 +43,15 @@ interface DesktopBus : DBusInterface {
 class Foreground(private val store: Store) {
     @Serializable
     /** [standIn]: the extension's own block page, standing in for the site it blocks (as our block page does). */
-    data class Heartbeat(val host: String? = null, val app: String? = null, val focused: Boolean = false, val fromBlockPage: Boolean = false, val standIn: Boolean = false)
+    data class Heartbeat(
+        val host: String? = null,
+        val app: String? = null,
+        val focused: Boolean = false,
+        val fromBlockPage: Boolean = false,
+        val standIn: Boolean = false,
+        /** The extension's version (versions up to 2.1.1 don't say). */
+        val version: String? = null,
+    )
 
     @Volatile var active: AppWindow? = null
         set(value) {
@@ -55,6 +63,9 @@ class Foreground(private val store: Store) {
     @Volatile private var heartbeat: Heartbeat? = null
     @Volatile private var heartbeatAtMono = 0L
     @Volatile var lastExtensionAtMono = Long.MIN_VALUE / 2
+
+    /** The version the extension last said it is. */
+    @Volatile var extensionVersion: String? = null
         private set
     /** The (app, site) last sent to the engine. */
     var sent: Pair<String?, String?>? = null
@@ -67,6 +78,7 @@ class Foreground(private val store: Store) {
     fun onHeartbeat(beat: Heartbeat) {
         val now = store.clock.nowMonotonicMs()
         if (!beat.fromBlockPage) lastExtensionAtMono = now
+        if (!beat.fromBlockPage && beat.version != null && beat.version.length <= 20) extensionVersion = beat.version
         val current = heartbeat
         if (beat.focused) {
             heartbeat = beat

@@ -648,6 +648,7 @@ function alerts() {
   if (!state) return out;
   if (state.kwinSeenAgoMs == null) out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
   if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering. Turn it on in the browser's extensions page."]);
+  else if (state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
   if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnrule/desktop.properties to share blocks and unlocks with the phone.`]);
   return out;

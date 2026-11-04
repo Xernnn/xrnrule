@@ -10,6 +10,21 @@ import kotlinx.serialization.Serializable
  */
 object ExtensionApi {
 
+    /**
+     * Whether extension [version] is older than [than], part by part ("2.1.0" < "2.1.1" < "2.10").
+     * A version that isn't dotted numbers is never called old: nothing to warn about.
+     */
+    fun isOlder(version: String, than: String): Boolean {
+        val a = version.split('.').map { it.toIntOrNull() ?: return false }
+        val b = than.split('.').map { it.toIntOrNull() ?: return false }
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val x = a.getOrElse(i) { 0 }
+            val y = b.getOrElse(i) { 0 }
+            if (x != y) return x < y
+        }
+        return false
+    }
+
     /** One site rule: [domain] and its subdomains, except [except] (I18, I31). */
     @Serializable
     data class SiteRule(val domain: String, val except: List<String> = emptyList())

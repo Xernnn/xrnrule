@@ -22,6 +22,11 @@ application {
     applicationDefaultJvmArgs = listOf("-Xmx96m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-Xss512k")
 }
 
+// The extension this build was made with, to tell an out-of-date one (see Foreground.extensionVersion).
+tasks.processResources {
+    from(rootProject.file("extension/manifest.json")) { rename { "extension-manifest.json" } }
+}
+
 dependencies {
     implementation(project(":domain"))
     implementation(libs.kotlinx.coroutines.core)

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
+import com.xern.xrnrule.domain.ExtensionApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -116,7 +117,21 @@ interface WebsiteMonitor {
 
     /** Where to go to set it up: the browser that has (or should have) the extension. */
     fun settingsIntent(): Intent
+
+    /** The extension's version, as it last said. */
+    val version: String? get() = null
+
+    /** The version this app was built with, which the home server hands out. */
+    val latestVersion: String? get() = null
 }
+
+/** Whether the extension is older than the one this app was built with. */
+val WebsiteMonitor.outOfDate: Boolean
+    get() {
+        val have = version ?: return false
+        val latest = latestVersion ?: return false
+        return ExtensionApi.isOlder(have, latest)
+    }
 
 enum class WebsiteTracking { OFF, NOT_RUNNING, ON }
 
@@ -153,6 +168,21 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
         if (now - lastHeardWall > 60_000) prefs.edit().putLong(KEY_HEARD, now).apply()
     }
 
+    /** The version the extension last said it is (versions up to 2.1.1 don't say). */
+    override val version: String? get() = prefs.getString(KEY_VERSION, null)
+
+    fun onVersion(value: String) {
+        if (value.length <= 20 && value != version) prefs.edit().putString(KEY_VERSION, value).apply()
+    }
+
+    /** The extension this app was built with: what the home server should be handing out. */
+    override val latestVersion: String? by lazy {
+        runCatching {
+            val text = context.assets.open("web/manifest.json").use { it.readBytes().decodeToString() }
+            Regex("\"version\"\\s*:\\s*\"([0-9.]+)\"").find(text)?.groupValues?.get(1)
+        }.getOrNull()
+    }
+
     override fun isSupported() = true
 
     override fun isEnabled(context: Context) = lastHeardWall > 0 || SiteSightings.everHeard
@@ -164,6 +194,7 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
     private companion object {
         const val KEY_BROWSER = "browser"
         const val KEY_HEARD = "heardAt"
+        const val KEY_VERSION = "version"
         const val QUETTA = "net.quetta.browser"
     }
 }

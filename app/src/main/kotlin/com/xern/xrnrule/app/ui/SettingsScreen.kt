@@ -94,6 +94,7 @@ import com.xern.xrnrule.app.ui.theme.ThemeMode
 import com.xern.xrnrule.app.update.AppUpdates
 import com.xern.xrnrule.app.web.WebsiteMonitor
 import com.xern.xrnrule.app.web.WebsiteTracking
+import com.xern.xrnrule.app.web.outOfDate
 import com.xern.xrnrule.app.web.tracking
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockMode
@@ -211,12 +212,13 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                     title = "Browser extension",
                     icon = Icons.Outlined.Extension,
                     iconTint = kinds.appTime.color,
-                    subtitle = when (websiteTracking) {
-                        WebsiteTracking.OFF -> "Not set up: sites aren't blocked"
-                        WebsiteTracking.NOT_RUNNING -> "Not answering"
-                        WebsiteTracking.ON -> "Blocking sites in your browser"
+                    subtitle = when {
+                        websiteTracking == WebsiteTracking.OFF -> "Not set up: sites aren't blocked"
+                        websiteTracking == WebsiteTracking.NOT_RUNNING -> "Not answering"
+                        deps.websites.outOfDate -> "Out of date: ${deps.websites.version}, ${deps.websites.latestVersion} is out"
+                        else -> "Blocking sites in your browser"
                     },
-                    subtitleColor = if (websiteTracking == WebsiteTracking.ON) MaterialTheme.colorScheme.onSurfaceVariant
+                    subtitleColor = if (websiteTracking == WebsiteTracking.ON && !deps.websites.outOfDate) MaterialTheme.colorScheme.onSurfaceVariant
                     else MaterialTheme.colorScheme.error,
                     onClick = { onOpen(SettingsPage.WEBSITES) },
                 )
@@ -918,6 +920,14 @@ private fun WebsitesPage(deps: SettingsDeps) {
         "Sites are blocked by the xrnrule extension in Quetta; nothing reads your screen. Install it once by opening " +
             "$url/update/xrnrule.crx in Quetta; it keeps itself up to date from there.",
     )
+    deps.websites.version?.let { version ->
+        // Quetta checks the home server every few hours; its options page has "Check now".
+        if (deps.websites.outOfDate) {
+            StatusLine("Version $version, out of date: ${deps.websites.latestVersion} is out. It updates itself within a few hours, or now from its options page (Check now).", ok = false)
+        } else {
+            StatusLine("Version $version", ok = true)
+        }
+    }
     Gap(16)
     WebsiteTrackingWarning(deps.websites)
     Gap(8)

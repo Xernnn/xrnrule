@@ -143,7 +143,7 @@ async function moveBlockedTabs(rules) {
  */
 async function beat(host, focused, standIn = false) {
   try {
-    const verdict = await call("/ext/heartbeat", { host, focused, standIn });
+    const verdict = await call("/ext/heartbeat", { host, focused, standIn, version: chrome.runtime.getManifest().version });
     badge(true);
     const rules = await cachedRules();
     if (!rules || rules.v !== verdict.rules) refreshRules();
@@ -223,7 +223,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     refreshRules();
     checkIfUnpacked();
   }
-  if (alarm.name === UPDATE_ALARM) checkForUpdate();
 });
 
 // ---- updating itself -----------------------------------------------------------------------
@@ -231,12 +230,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Nobody installs a new version by hand. Installed from the signed .crx (the phone; see
 // scripts/release.mjs), the manifest carries an update_url on the home server and the browser
 // fetches new versions from there on its own, every few hours, or now through
-// requestUpdateCheck(). Loaded unpacked (the laptop, from the working copy) there is no update
+// requestUpdateCheck() (the options page's "Check now"). Not on a timer: the browser counts each
+// "no update" answer toward a backoff, so hourly checks kept it "throttled", Check now included.
+// Loaded unpacked (the laptop, from the working copy) there is no update
 // URL, but the browser serves an unpacked extension's files straight from its folder, so a
 // manifest there naming another version means the folder has moved on. Either way the new version
 // runs at once, not at the next browser start.
 
-const UPDATE_ALARM = "update";
 chrome.runtime.onUpdateAvailable.addListener(() => chrome.runtime.reload());
 
 async function checkForUpdate() {
@@ -266,11 +266,7 @@ async function checkForUpdate() {
   }
 }
 
-// Created only when missing: creating an alarm again restarts its period, and this worker
-// starts far more often than once an hour.
-chrome.alarms.get(UPDATE_ALARM).then((a) => {
-  if (!a) chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 60 });
-});
+chrome.alarms.clear("update"); // the hourly check versions up to 2.1.1 made
 // Reading one local file is cheap enough for every start of the worker and every minute (the
 // rules alarm), so the laptop runs a new version within a minute of it landing in the folder.
 // The worker may never stop for an hour: pages beating keep it awake.
