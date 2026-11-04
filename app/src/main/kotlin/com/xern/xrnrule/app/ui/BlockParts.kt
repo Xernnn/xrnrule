@@ -26,6 +26,12 @@ sealed interface HabitPart {
         override val done get() = item.done
     }
 
+    /** An NFC tag the phone must read (I43); its name is the item's text. */
+    data class Tag(val item: ChecklistItem) : HabitPart {
+        override val done get() = item.done
+        val name: String get() = item.text.ifBlank { "the tag" }
+    }
+
     /**
      * A habit (contract I23, I36): [amount] of it counts toward this block's next unlock, out of
      * the habit's unlock's worth; [spent] is what earlier unlocks of this block used on [day], the
@@ -77,6 +83,8 @@ fun habitParts(
                     item, g?.habit, g?.amount ?: 0, g?.spent ?: 0, g?.day ?: 0, g?.dayValue ?: HabitEntry.UNKNOWN,
                     focusing = focusHabitId != null && focusHabitId == habitId,
                 )
+            } else if (item.tag != null) {
+                HabitPart.Tag(item)
             } else {
                 HabitPart.Task(item)
             }
@@ -155,6 +163,7 @@ fun partsFraction(block: Block, parts: List<HabitPart>): Float {
  */
 fun whatsLeft(block: Block, parts: List<HabitPart>): String? {
     val tasks = parts.filterIsInstance<HabitPart.Task>().filterNot { it.done }.map { it.item.text.ifBlank { "your task" } }
+    val tags = parts.filterIsInstance<HabitPart.Tag>().filterNot { it.done }.map { it.name }
     val goals = parts.filterIsInstance<HabitPart.Goal>().filterNot { it.done }
     val checks = goals.filter { it.habit == null || it.habit.kind == HabitKind.CHECK }
     val checkNames = checks.map { it.name }
@@ -168,7 +177,7 @@ fun whatsLeft(block: Block, parts: List<HabitPart>): String? {
         if (partial) {
             val doneCount = parts.count { it.done }
             val more = (need - doneCount).coerceAtLeast(0)
-            if (more > 0) add("tick $more more of ${andList(tasks + goals.map { it.name })}")
+            if (more > 0) add("tick $more more of ${andList(tasks + goals.map { it.name } + tags)}")
         } else {
             if (checks.isNotEmpty()) {
                 add("check off ${andList(checkNames)}" + if (checks.all { it.yesterday }) " for yesterday" else "")
@@ -176,6 +185,7 @@ fun whatsLeft(block: Block, parts: List<HabitPart>): String? {
             counts.forEach { add("do ${habitLeftText(it.habit!!, it.amount)}") }
             focus.forEach { add("focus on ${it.name} for ${habitLeftText(it.habit!!, it.amount)}") }
             if (tasks.isNotEmpty()) add("tick ${andList(tasks)}")
+            if (tags.isNotEmpty()) add("hold your phone to ${andList(tags)}")
         }
     }
     val timerClause = timer?.let {

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.FreeBreakfast
 import androidx.compose.material.icons.outlined.GppBad
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Nfc
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
@@ -496,6 +497,23 @@ private fun HabitBody(
                         onClick = { if (armed) store.dispatch(BlockEvent.ToggleChecklistItem(part.item.id, !part.done)) },
                     )
                 },
+            )
+            is HabitPart.Tag -> HabitRow(
+                icon = Icons.Outlined.Nfc,
+                kind = kinds.blue,
+                label = part.name.replaceFirstChar { it.uppercase() },
+                dim = part.done,
+                note = if (!part.done && armed) "Hold your phone to it" else null,
+                // Only reading the tag ticks it (I43); unticking is always fine.
+                action = if (part.done && armed) ({
+                    RowAction(
+                        Icons.Filled.Check,
+                        "Untick ${part.name}",
+                        kinds.blue.color,
+                        filled = true,
+                        onClick = { store.dispatch(BlockEvent.ToggleChecklistItem(part.item.id, false)) },
+                    )
+                }) else null,
             )
             is HabitPart.Timer -> {
                 val kind = if (part.appLabel != null) kinds.appTime else kinds.timer

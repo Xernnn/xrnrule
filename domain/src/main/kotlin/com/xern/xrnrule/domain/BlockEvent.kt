@@ -18,6 +18,9 @@ sealed interface BlockEvent {
     /** User ticked/unticked a to-do item on the block detail or the overlay. No-op unless ARMED (I12). */
     data class ToggleChecklistItem(val itemId: String, val done: Boolean) : BlockEvent
 
+    /** The phone read an NFC tag ([Tags.id]): it ticks every tag item waiting for it (I43). */
+    data class TagScanned(val tag: String) : BlockEvent
+
     /** User pressed "Redeem" on an EARNED block. */
     data class Redeem(val blockId: String) : BlockEvent
 

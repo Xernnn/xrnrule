@@ -46,6 +46,19 @@ enum class Devices {
     fun covers(other: Devices): Boolean = this == BOTH || this == other
 }
 
+/** NFC tags (I43): what a tag item stores of a tag. */
+object Tags {
+    /**
+     * A tag's id from its UID: hashed, so the shared state and the home server never hold the
+     * UID itself. Some cards (bank cards, passports) show a new random UID on every read; the
+     * phone reads a tag twice before it saves one, and such a card never matches itself.
+     */
+    fun id(uid: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest("xrnrule-tag:".toByteArray() + uid)
+        return digest.take(8).joinToString("") { "%02x".format(it) }
+    }
+}
+
 /** I42: whether [block] holds on this device. */
 fun World.appliesHere(block: Block): Boolean = block.devices.include(deviceKind)
 
@@ -362,6 +375,11 @@ data class ChecklistItem(
     val habitId: String? = null,
     /** Habit items: how much of the habit this block spent on [spentEpochDay] (I24). */
     val spentAmount: Long = 0,
+    /**
+     * A *tag item* (I43): the NFC tag ([Tags.id]) the phone must read to tick it. Tapping it
+     * never ticks it; a read of the tag does, in every block waiting for it.
+     */
+    val tag: String? = null,
 ) {
     /** Ticked from outside the block rather than by hand: a habit item (I23), or a linked one still to convert. */
     val derived: Boolean get() = externalHabitId != null || habitId != null

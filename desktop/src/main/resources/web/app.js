@@ -242,6 +242,10 @@ function blockCard(b) {
         h("button", { class: "btn", onclick: () => act({ type: "timer", blockId: b.id, running: !b.timerRunning }) }, b.timerRunning ? "Pause" : "Start"),
         b.timerRunning && !onBlockPage && h("span", { class: "note" }, "It counts while you wait on this block's block page."))),
     b.items.length > 0 && b.mode === "HABIT" && h("div", { class: "items" }, b.items.map((i) => i.habit ? habitItem(i.habit) :
+      // An NFC tag (I43): only the phone ticks it, by reading the tag.
+      i.tag ? h("label", {},
+        h("input", { type: "checkbox", checked: i.done, disabled: !(manualOpen && i.done), onchange: (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }) }),
+        i.text, h("small", {}, i.done ? " · scanned" : " · hold the phone to it")) :
       h("label", {},
         h("input", { type: "checkbox", checked: i.done, disabled: !manualOpen, onchange: (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }) }),
         i.text))),
@@ -472,7 +476,7 @@ function buildForm(b) {
 function itemRows(b) {
   if (!b.items.length) return [h("div", { class: "note" }, "No tasks yet.")];
   return b.items.map((i) => h("div", { class: "row item" },
-    h("span", {}, i.text, i.habit && h("small", {}, i.habit.yesterday ? " · habit, yesterday's tick" : " · habit")),
+    h("span", {}, i.text, i.habit && h("small", {}, i.habit.yesterday ? " · habit, yesterday's tick" : " · habit"), i.tag && h("small", {}, " · NFC tag, set up on the phone")),
     h("button", { class: "btn ghost", type: "button", title: "Removing a task waits 60 s", onclick: () => itemOp({ op: "remove", itemId: i.id }, `Removing "${i.text}"`) }, "Remove")));
 }
 

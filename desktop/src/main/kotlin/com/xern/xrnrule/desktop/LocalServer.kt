@@ -356,6 +356,8 @@ class LocalServer(
         val done: Boolean,
         /** Set on a habit item (I23, I36): the habit and where it stands. */
         val habit: UiHabit? = null,
+        /** An NFC tag item (I43): only the phone, reading the tag, ticks it. */
+        val tag: Boolean = false,
     )
 
     /**
@@ -577,6 +579,7 @@ class LocalServer(
                 val habit = item.habitId?.let(world::habit)
                 UiItem(
                     item.id, habit?.name ?: item.text, item.done,
+                    tag = item.tag != null,
                     habit = habit?.let { h ->
                         val focus = world.focus?.takeIf { it.habitId == h.id }
                         val day = engine.itemDay(world, item, clock)

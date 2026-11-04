@@ -2065,4 +2065,53 @@ class InvariantTests {
         assertTrue(BlockEdits.loosens(block.copy(devices = Devices.PHONE), block.copy(devices = Devices.LAPTOP)))
         assertFalse(BlockEdits.loosens(block.copy(devices = Devices.LAPTOP), block))
     }
+
+    // ---- I43: NFC tags -----------------------------------------------------------------
+
+    private val kitchen = Tags.id(byteArrayOf(4, 0x51, 0x22, 0x7a, 0x1c, 0x60, 0x80.toByte()))
+
+    @Test
+    fun i43_aTagItemTicksOnlyFromItsTag() {
+        val clock = FakeClock()
+        val item = ChecklistItem(id = "t", blockId = "c1", text = "the kitchen tag", order = 0, tag = kitchen)
+        var w = buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to listOf(item)), clock = clock)
+
+        w = engine.reduce(w, BlockEvent.ToggleChecklistItem("t", true), clock).world
+        assertFalse("a tap doesn't tick it", w.items("c1").single().done)
+        w = engine.reduce(w, BlockEvent.TagScanned(Tags.id(byteArrayOf(9, 9, 9, 9))), clock).world
+        assertFalse("another tag doesn't", w.items("c1").single().done)
+
+        w = engine.reduce(w, BlockEvent.TagScanned(kitchen), clock).world
+        assertTrue(w.items("c1").single().done)
+        assertEquals(BlockState.EARNED, w.block("c1")!!.state)
+    }
+
+    @Test
+    fun i43_oneScanTicksEveryBlockWaitingForIt() {
+        val clock = FakeClock()
+        fun tagItem(block: String) = ChecklistItem(id = "$block-t", blockId = block, text = "tag", order = 0, tag = kitchen)
+        val plain = ChecklistItem(id = "c2-p", blockId = "c2", text = "Stretch", order = 1)
+        var w = buildWorld(
+            listOf(checklistBlock("c1"), checklistBlock("c2", target = "com.other"), checklistBlock("c3", state = BlockState.UNLOCKED)),
+            mapOf("c1" to listOf(tagItem("c1")), "c2" to listOf(tagItem("c2"), plain), "c3" to listOf(tagItem("c3"))),
+            clock = clock,
+        )
+        w = engine.reduce(w, BlockEvent.TagScanned(kitchen), clock).world
+        assertEquals(BlockState.EARNED, w.block("c1")!!.state)
+        assertTrue(w.items("c2").first { it.tag != null }.done)
+        assertEquals("the other item is still wanted", BlockState.ARMED, w.block("c2")!!.state)
+        assertFalse("an open block's items wait for it to lock again", w.items("c3").single().done)
+        w = engine.reduce(w, BlockEvent.ToggleChecklistItem("c2-t", false), clock).world
+        assertFalse("unticking by hand is fine", w.items("c2").first { it.tag != null }.done)
+    }
+
+    @Test
+    fun i43_aDifferentTagLoosens() {
+        val item = ChecklistItem(id = "t", blockId = "c1", text = "tag", order = 0, tag = kitchen)
+        assertTrue(itemsLoosen(listOf(item), listOf(item.copy(tag = Tags.id(byteArrayOf(1))))))
+        assertTrue("a plain task instead", itemsLoosen(listOf(item), listOf(item.copy(tag = null))))
+        assertFalse("a renamed one", itemsLoosen(listOf(item), listOf(item.copy(text = "the fridge tag"))))
+        assertFalse("a tag on a plain task", itemsLoosen(listOf(item.copy(tag = null)), listOf(item)))
+        assertEquals("the id is the hash, not the UID", 16, kitchen.length)
+    }
 }

@@ -6,10 +6,13 @@ import java.util.UUID
 enum class WhenMode { ALWAYS, SCHEDULE, FOR_A_WHILE }
 
 /** The ways to unlock (or limit) a block that the phone's form offers. */
-enum class FormKind { APP_TIME, TIMER, MANUAL, FOCUS, LOOP, LIMIT }
+enum class FormKind { APP_TIME, TIMER, MANUAL, FOCUS, LOOP, LIMIT, TAG }
 
 /** A task row being edited; [id] is the checklist item it was, null for a new one. */
 data class TaskDraft(val key: String, val id: String?, val text: String)
+
+/** An NFC tag to scan (I43) being edited: its [name] ("the kitchen tag") and [tag] ([Tags.id]). */
+data class TagDraft(val key: String, val id: String?, val name: String, val tag: String)
 
 /**
  * A habit item with a day rule being edited (contract I23: yesterday's entry, or days its goal is
@@ -56,6 +59,9 @@ data class BlockDraft(
     /** The habits the block asks for with no day rule (contract I36), in order. */
     val habitIds: List<String> = emptyList(),
     val manualOn: Boolean = false,
+    /** I43: tags to scan. */
+    val tagOn: Boolean = false,
+    val tags: List<TagDraft> = emptyList(),
     val focusOn: Boolean = false,
     /** Habit items with a day rule (yesterday's, or goal days): the "Tracked habit" card. */
     val links: List<LinkDraft> = emptyList(),
@@ -92,11 +98,11 @@ data class BlockDraft(
     val doHabits: List<String> get() = habitIds.filterNot(::isTimer)
     val timerHabits: List<String> get() = habitIds.filter(::isTimer)
 
-    val habitChosen: Boolean get() = appTimeOn || timerOn || manualOn || focusOn || loopOn
+    val habitChosen: Boolean get() = appTimeOn || timerOn || manualOn || focusOn || loopOn || tagOn
     val hasTimer: Boolean get() = appTimeOn || timerOn
     val hasChecklist: Boolean
         get() = (manualOn && (tasks.any { it.text.isNotBlank() } || doHabits.isNotEmpty())) ||
-            (focusOn && timerHabits.isNotEmpty()) || (loopOn && links.isNotEmpty())
+            (focusOn && timerHabits.isNotEmpty()) || (loopOn && links.isNotEmpty()) || (tagOn && tags.isNotEmpty())
 
     /** The block's kind, from what's picked: a limit, habits, or nothing (a schedule or a lockdown). */
     val mode: BlockMode
@@ -120,8 +126,9 @@ data class BlockDraft(
             FormKind.FOCUS -> copy(focusOn = on)
             FormKind.LOOP -> copy(loopOn = on)
             FormKind.LIMIT -> copy(limitOn = on)
+            FormKind.TAG -> copy(tagOn = on)
         }
-        if (on && kind == FormKind.LIMIT) d = d.copy(appTimeOn = false, timerOn = false, manualOn = false, focusOn = false, loopOn = false)
+        if (on && kind == FormKind.LIMIT) d = d.copy(appTimeOn = false, timerOn = false, manualOn = false, focusOn = false, loopOn = false, tagOn = false)
         if (on && kind != FormKind.LIMIT) d = d.copy(limitOn = false)
         if ((d.habitChosen || d.limitOn) && d.whenMode == WhenMode.FOR_A_WHILE) d = d.copy(whenMode = WhenMode.ALWAYS)
         return d
@@ -171,6 +178,7 @@ data class BlockDraft(
         manualOn && tasks.none { it.text.isNotBlank() } && doHabits.isEmpty() -> "Pick or make a habit"
         focusOn && timerHabits.isEmpty() -> "Pick or make a timer"
         loopOn && links.isEmpty() -> "Pick at least one habit"
+        tagOn && tags.isEmpty() -> "Scan a tag"
         limitOn && !dailyOn && !rowOn -> "Set minutes a day, minutes in a row, or both"
         existing?.mode == BlockMode.HABIT && !habitChosen -> "Pick at least one way to unlock it"
         else -> null
@@ -275,7 +283,12 @@ data class BlockDraft(
                     countsGoal = l.goal,
                 )
         }
-        return plain + linked
+        val tagItems = (if (tagOn) tags else emptyList()).mapIndexed { i, t ->
+            val name = t.name.trim().ifEmpty { "the tag" }
+            byId[t.id]?.copy(text = name, order = plain.size + linked.size + i, tag = t.tag)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = name, order = plain.size + linked.size + i, tag = t.tag)
+        }
+        return plain + linked + tagItems
     }
 
     /**
@@ -296,7 +309,8 @@ data class BlockDraft(
             val timerMinutes = trigger.requiredAmount / 60_000
             val appTimeOn = hadTimer && trigger.habitPackages.isNotEmpty()
             val timerOn = hadTimer && trigger.habitPackages.isEmpty()
-            val tasks = items.filter { !it.derived }.sortedBy { it.order }.map { TaskDraft(it.id, it.id, it.text) }
+            val tasks = items.filter { !it.derived && it.tag == null }.sortedBy { it.order }.map { TaskDraft(it.id, it.id, it.text) }
+            val tags = items.filter { it.tag != null }.sortedBy { it.order }.map { TagDraft(it.id, it.id, it.text, it.tag!!) }
             fun hasDayRule(item: ChecklistItem) = item.linkedDay == LinkedDay.YESTERDAY || item.countsGoal
             val habitIds = items.filter { it.derived && !hasDayRule(it) }.sortedBy { it.order }.map { it.habitId ?: it.externalHabitId!! }
             val links = items.filter { it.derived && hasDayRule(it) }.sortedBy { it.order }.map {
@@ -347,20 +361,27 @@ data class BlockDraft(
                 selfPaced = existing.selfPaced,
                 hardcore = existing.enforcementTier == EnforcementTier.HARDCORE,
             )
-            return draft.copy(manualOn = tasks.isNotEmpty() || draft.doHabits.isNotEmpty(), focusOn = draft.timerHabits.isNotEmpty())
+            return draft.copy(
+                manualOn = tasks.isNotEmpty() || draft.doHabits.isNotEmpty(),
+                focusOn = draft.timerHabits.isNotEmpty(),
+                tagOn = tags.isNotEmpty(),
+                tags = tags,
+            )
         }
     }
 }
 
 /**
- * Whether going from [old] to [new] items makes the checklist easier: an item gone, or a habit
- * item counting a different day or goal days (contract §2.3). Adding items only tightens it.
+ * Whether going from [old] to [new] items makes the checklist easier: an item gone, a habit item
+ * counting a different day or goal days, or a tag item wanting another tag (one that may be in
+ * your pocket) or none (contract §2.3, I43). Adding items only tightens it.
  */
 fun itemsLoosen(old: List<ChecklistItem>, new: List<ChecklistItem>): Boolean {
     val newById = new.associateBy { it.id }
     return old.any { o ->
         val n = newById[o.id] ?: return@any true
-        o.derived && (n.linkedDay != o.linkedDay || (n.countsGoal && !o.countsGoal))
+        (o.derived && (n.linkedDay != o.linkedDay || (n.countsGoal && !o.countsGoal))) ||
+            (o.tag != null && n.tag != o.tag)
     }
 }
 

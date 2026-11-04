@@ -1,6 +1,5 @@
 package com.xern.xrnrule.app.ui
 
-import com.xern.xrnrule.domain.SiteIcons
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -10,14 +9,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -33,6 +32,7 @@ import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Nfc
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
@@ -68,6 +68,7 @@ import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
+import com.xern.xrnrule.domain.SiteIcons
 import kotlinx.coroutines.delay
 
 private const val HOLD_MS = 1200
@@ -264,6 +265,15 @@ private fun OverlayPartRow(
             kind = kinds.habit,
             enabled = armed,
             onToggle = { onToggleItem(part.item.id, it) },
+        )
+        // I43: nothing to press; the tag read anywhere ticks it, and this screen moves on.
+        is HabitPart.Tag -> HabitRow(
+            icon = Icons.Outlined.Nfc,
+            kind = kinds.blue,
+            label = part.name.replaceFirstChar { it.uppercase() },
+            dim = part.done,
+            note = if (part.done) null else "Hold your phone to it: this screen opens up once it's read",
+            action = if (part.done) ({ RowAction(Icons.Filled.Check, "Scanned", kinds.blue.color, filled = true, onClick = {}) }) else null,
         )
         is HabitPart.Timer -> {
             val kind = if (part.appLabel != null) kinds.appTime else kinds.timer

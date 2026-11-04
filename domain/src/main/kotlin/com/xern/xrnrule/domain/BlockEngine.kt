@@ -20,6 +20,7 @@ class BlockEngine {
             is BlockEvent.ForegroundChanged -> onForegroundChanged(world, event, clock, effects)
             is BlockEvent.Tick -> accrueAndCheckTimers(world, clock, effects)
             is BlockEvent.ToggleChecklistItem -> onToggleItem(world, event, clock, effects)
+            is BlockEvent.TagScanned -> onTagScanned(world, event.tag, clock, effects)
             is BlockEvent.Redeem -> onRedeem(world, event.blockId, clock, effects)
             is BlockEvent.UserResetEarned -> onUserReset(world, event.blockId, clock)
             is BlockEvent.TimerControl -> onTimerControl(world, event, clock)
@@ -518,6 +519,7 @@ class BlockEngine {
         val block = world.block(owner) ?: return world
         if (block.mode != BlockMode.HABIT || block.state != BlockState.ARMED) return world // I12, §2.2
         if (world.items(owner).any { it.id == event.itemId && it.derived }) return world // I23, I36
+        if (event.done && world.items(owner).any { it.id == event.itemId && it.tag != null }) return world // I43: only its tag
 
         val updated = world.items(owner).map { item ->
             if (item.id != event.itemId) item
@@ -529,6 +531,21 @@ class BlockEngine {
         var w = world.copy(checklist = world.checklist + (owner to updated))
         if (hasChecklist(block) && triggerMet(w, block)) {
             w = armedToEarned(w, block, clock, effects)
+        }
+        return w
+    }
+
+    /** I43: a read of [tag] ticks its items in every ARMED HABIT block, which may then be earned. */
+    private fun onTagScanned(world: World, tag: String, clock: Clock, effects: MutableList<Effect>): World {
+        var w = world
+        for (block in world.blocks) {
+            if (block.mode != BlockMode.HABIT || block.state != BlockState.ARMED) continue
+            val items = w.items(block.id)
+            if (items.none { it.tag == tag && !it.done }) continue
+            val updated = items.map { if (it.tag == tag && !it.done) it.copy(done = true, doneAtMonotonic = clock.nowMonotonicMs()) else it }
+            w = w.copy(checklist = w.checklist + (block.id to updated))
+            val now = w.block(block.id) ?: continue
+            if (hasChecklist(now) && triggerMet(w, now)) w = armedToEarned(w, now, clock, effects)
         }
         return w
     }

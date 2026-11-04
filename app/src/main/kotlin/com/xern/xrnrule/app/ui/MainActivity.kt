@@ -37,8 +37,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -52,9 +55,14 @@ import com.xern.xrnrule.app.block.BlockerForegroundService
 import com.xern.xrnrule.app.data.AppContainer
 import com.xern.xrnrule.app.data.AppLock
 import com.xern.xrnrule.app.loop.LinksContract
+import com.xern.xrnrule.app.nfc.TagReader
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 import com.xern.xrnrule.domain.BlockEvent
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /**
  * The app's one activity. A [FragmentActivity] because [BiometricPrompt] needs one: while
@@ -110,6 +118,19 @@ class MainActivity : FragmentActivity() {
         // The process may have come up in the background, where Android refused this start;
         // being on screen is always an allowed moment, so retry here.
         BlockerForegroundService.start(this)
+
+        // NFC tags (I43): read here while in front, when a block wants one or one is being set up.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                try {
+                    combine(container.store.world.map(TagReader::wanted), TagReader.registering.map { it != null }) { a, b -> a || b }
+                        .distinctUntilChanged()
+                        .collect { TagReader.readerMode(this@MainActivity, it) }
+                } finally {
+                    TagReader.readerMode(this@MainActivity, false)
+                }
+            }
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

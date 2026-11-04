@@ -3,6 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Phase A: foreground-app detection baseline (Option C, brainstorm §4.1) -->
+    <!-- Reading NFC tags that unlock blocks (I43); not every phone has NFC. -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
     <!-- Phase A: the block screen is drawn as an overlay (brainstorm §4.3) -->
@@ -54,6 +57,22 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="xrnrule" android:host="open" />
             </intent-filter>
+        </activity>
+
+        <!-- NFC tags that unlock blocks (contract I43): a read anywhere ticks and finishes at once. -->
+        <activity
+            android:name=".nfc.TagActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.nfc.action.TECH_DISCOVERED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.action.TECH_DISCOVERED"
+                android:resource="@xml/nfc_tech" />
         </activity>
 
         <service

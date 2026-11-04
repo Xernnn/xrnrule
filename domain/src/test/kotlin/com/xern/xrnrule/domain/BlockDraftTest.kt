@@ -65,6 +65,9 @@ class BlockDraftTest {
                 startMinute = 22 * 60, endMinute = 6 * 60, moreWindows = listOf(DayWindow(setOf(6, 7), TimeWindow(9 * 60, 12 * 60)))),
             BlockDraft(name = "Focus", sites = setOf("x.com"), whenMode = WhenMode.FOR_A_WHILE, lockdownMinutes = 90, devices = Devices.LAPTOP),
             BlockDraft(name = "Phone", apps = setOf("com.x"), devices = Devices.PHONE),
+            habitBlock.copy(tagOn = true, tags = listOf(TagDraft("k", null, "the kitchen tag", Tags.id(byteArrayOf(1, 2, 3, 4))))),
+            BlockDraft(name = "Tag only", apps = setOf("com.x")).withKind(FormKind.TAG, true)
+                .copy(tags = listOf(TagDraft("k", null, "desk", Tags.id(byteArrayOf(5))))),
         )
         for (draft in drafts) {
             val (block, items) = made(draft)
@@ -97,6 +100,7 @@ class BlockDraftTest {
         assertFalse("a new exception that matches nothing", loosens { it.copy(exceptSites = it.exceptSites + "nothing.org") })
         assertTrue("an exception under a blocked site", loosens { it.copy(exceptSites = it.exceptSites + "new.reddit.com") })
         assertTrue("phone only (I42)", loosens { it.copy(devices = Devices.PHONE) })
+        assertFalse("a tag added (I43)", loosens { it.copy(tagOn = true, tags = listOf(TagDraft("k", null, "desk", Tags.id(byteArrayOf(5))))) })
     }
 
     @Test

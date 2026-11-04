@@ -49,6 +49,9 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     var links by mutableStateOf(start.links)
     var loopOn by mutableStateOf(start.loopOn)
     var combineMode by mutableStateOf(start.combineMode)
+    /** I43: NFC tags to scan. */
+    var tagOn by mutableStateOf(start.tagOn)
+    var tags by mutableStateOf(start.tags)
 
     // ---- daily limit ----
     var limitOn by mutableStateOf(start.limitOn)
@@ -79,7 +82,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
         existing = existing, habits = knownHabits, name = name, apps = apps, sites = sites, exceptSites = exceptSites, devices = devices,
         appTimeOn = appTimeOn, appTimeApps = appTimeApps, appTimeMinutes = appTimeMinutes, timerOn = timerOn,
         timerMinutes = timerMinutes, tasks = tasks, habitIds = habitIds, manualOn = manualOn, focusOn = focusOn,
-        links = links, loopOn = loopOn, combineMode = combineMode, limitOn = limitOn, dailyOn = dailyOn,
+        links = links, loopOn = loopOn, combineMode = combineMode, tagOn = tagOn, tags = tags, limitOn = limitOn, dailyOn = dailyOn,
         dailyMinutes = dailyMinutes, rowOn = rowOn, rowMinutes = rowMinutes, rowBreakMinutes = rowBreakMinutes,
         perDevice = perDevice, whenMode = whenMode, scheduleDays = scheduleDays, timeOn = timeOn,
         startMinute = startMinute, endMinute = endMinute, moreWindows = moreWindows, lockdownMinutes = lockdownMinutes,
@@ -89,12 +92,12 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     /** Takes in what a [BlockDraft] edit changed (only the fields such edits touch). */
     private fun load(d: BlockDraft) {
         appTimeOn = d.appTimeOn; timerOn = d.timerOn; manualOn = d.manualOn; focusOn = d.focusOn; loopOn = d.loopOn
-        limitOn = d.limitOn; whenMode = d.whenMode; habitIds = d.habitIds; links = d.links
+        limitOn = d.limitOn; whenMode = d.whenMode; habitIds = d.habitIds; links = d.links; tagOn = d.tagOn
     }
 
     val doHabits get() = draft().doHabits
     val timerHabits get() = draft().timerHabits
-    val habitChosen get() = appTimeOn || timerOn || manualOn || focusOn || loopOn
+    val habitChosen get() = draft().habitChosen
     val mode: BlockMode get() = draft().mode
     val hasTargets get() = draft().hasTargets
 

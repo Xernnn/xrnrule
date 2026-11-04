@@ -51,6 +51,7 @@ import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.HourglassTop
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Nfc
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.VpnKey
@@ -69,6 +70,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimeInput
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -100,6 +102,7 @@ import com.xern.xrnrule.app.data.InstalledApp
 import com.xern.xrnrule.app.data.InstalledApps
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.nfc.TagReader
 import com.xern.xrnrule.app.ui.theme.KindColors
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.web.WebsiteMonitor
@@ -113,6 +116,7 @@ import com.xern.xrnrule.domain.HabitKind
 import com.xern.xrnrule.domain.LinkDraft
 import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.Sites
+import com.xern.xrnrule.domain.TagDraft
 import com.xern.xrnrule.domain.TimeWindow
 import com.xern.xrnrule.domain.WhenMode
 import com.xern.xrnrule.domain.deleteBlock
@@ -647,6 +651,12 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             DashedButton("Pick habits", kinds.loop) { pickingLoop = true }
             KindNote("Yesterday: a habit you tick at night counts the next day. Goal days: a habit that isn't daily counts on every day its goal is met. Each tick opens the block once.")
         }
+
+        // A phone without NFC isn't offered tags, but still shows the ones a block has.
+        if (TagReader.hasNfc(LocalContext.current) || form.tags.isNotEmpty()) {
+            if (headers) SectionLabel("Somewhere else", top = 6.dp)
+            TagCard(form)
+        }
     }
 
     if (mode == null || mode == BlockMode.ALLOWANCE) {
@@ -930,6 +940,108 @@ private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
     if (custom) {
         MinutesDialog(initial = form.unlockMinutes, max = capMinutes, onDismiss = { custom = false }, onConfirm = { form.unlockMinutes = it; custom = false })
     }
+}
+
+/**
+ * I43: NFC tags to scan. A tag stuck somewhere out of reach (the kitchen, the gym bag) opens the
+ * block when the phone is held to it, from any screen. Setting one up reads it twice: some cards
+ * show a new id on every read and could never match.
+ */
+@Composable
+private fun TagCard(form: BlockFormState) {
+    val kinds = LocalKinds.current
+    val context = LocalContext.current
+    val resume = rememberResumeSignal()
+    val hasNfc = remember { TagReader.hasNfc(context) }
+    val nfcOn = remember(resume) { TagReader.isOn(context) }
+    var scanning by remember { mutableStateOf(false) }
+    KindCard(
+        icon = Icons.Outlined.Nfc,
+        title = "NFC tag",
+        kind = kinds.blue,
+        selected = form.tagOn,
+        summary = if (form.tags.isEmpty()) "no tag yet" else andList(form.tags.map { it.name.ifBlank { "the tag" } }),
+        onToggle = { form.setKind(FormKind.TAG, it) },
+    ) {
+        form.tags.forEachIndexed { i, tag ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FieldBox(
+                    tag.name,
+                    onChange = { v -> form.tags = form.tags.toMutableList().also { it[i] = tag.copy(name = v) } },
+                    placeholder = "Name it: the kitchen tag",
+                    modifier = Modifier.weight(1f),
+                    container = Color.Black.copy(alpha = 0.18f),
+                )
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Remove tag",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp).size(22.dp).clickable {
+                        form.tags = form.tags.toMutableList().also { it.removeAt(i) }
+                    },
+                )
+            }
+            Gap(8)
+        }
+        when {
+            !hasNfc -> KindNote("This phone has no NFC.")
+            !nfcOn -> {
+                DashedButton("Turn on NFC", kinds.blue) { runCatching { context.startActivity(TagReader.settingsIntent()) } }
+                Gap(8)
+            }
+            else -> {
+                DashedButton("Scan a tag", kinds.blue) { scanning = true }
+                Gap(8)
+            }
+        }
+        KindNote("Stick a tag somewhere out of reach. Hold your phone to it, on any screen, and the block opens. A blank sticker or key fob works best: a tag with a link on it opens its link unless xrnrule is in front.")
+    }
+    if (scanning) {
+        TagScanDialog(
+            onDismiss = { scanning = false },
+            onScanned = { id ->
+                scanning = false
+                if (form.tags.none { it.tag == id }) {
+                    form.tags = form.tags + TagDraft(UUID.randomUUID().toString(), null, "", id)
+                }
+            },
+        )
+    }
+}
+
+/** Reads a new tag twice; [onScanned] gets its [com.xern.xrnrule.domain.Tags.id] once both agree. */
+@Composable
+private fun TagScanDialog(onDismiss: () -> Unit, onScanned: (String) -> Unit) {
+    var first by remember { mutableStateOf<String?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(Unit) {
+        TagReader.startRegistering { id ->
+            val seen = first
+            when {
+                seen == null -> { first = id; problem = null }
+                seen == id -> onScanned(id)
+                else -> {
+                    // A card that makes up a new id on each read: it would never open the block.
+                    first = null
+                    problem = "That tag reads differently each time. Use a sticker or a key fob instead."
+                }
+            }
+        }
+        onDispose { TagReader.stopRegistering() }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Outlined.Nfc, contentDescription = null) },
+        title = { Text(if (first == null) "Hold your phone to the tag" else "Once more, to check it") },
+        text = {
+            Text(
+                problem ?: if (first == null) "Near the top of the phone's back, until it buzzes." else "Take the phone away, then hold it to the same tag again.",
+                color = if (problem != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**
