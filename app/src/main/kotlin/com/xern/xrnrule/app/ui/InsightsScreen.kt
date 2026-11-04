@@ -2,6 +2,8 @@ package com.xern.xrnrule.app.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,21 +19,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -46,18 +52,19 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.AppUsage
 import com.xern.xrnrule.app.data.DayUsage
 import com.xern.xrnrule.app.data.InstalledApps
 import com.xern.xrnrule.app.data.LocalTelemetry
-import com.xern.xrnrule.app.data.TelemetryEvent
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.ScreenTime
 import com.xern.xrnrule.app.data.SiteUsageLog
+import com.xern.xrnrule.app.data.TelemetryEvent
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.web.WebsiteMonitor
@@ -66,13 +73,13 @@ import com.xern.xrnrule.app.web.tracking
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private const val DAYS = 7
 private const val APPS_COLLAPSED = 8
@@ -104,86 +111,208 @@ fun InsightsScreen(world: World, websites: WebsiteMonitor, siteUsage: SiteUsageL
         }
     }
     var selected by rememberSaveable { mutableIntStateOf(DAYS - 1) }
+    var week by rememberSaveable { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val blocked = remember(world.blocks) { world.blocks.flatMapTo(HashSet()) { it.targetPackages } }
+    val days = usage
+    // The day picked on the chart, or all of them; today when there's no chart to pick from.
+    val today = LocalDate.now()
+    val pickedDate = days?.takeIf { it.isNotEmpty() }?.let { it[selected.coerceIn(it.indices)].date } ?: today
+    val dates: List<LocalDate> =
+        if (week) days?.takeIf { it.isNotEmpty() }?.map { it.date } ?: (DAYS - 1 downTo 0).map { today.minusDays(it.toLong()) }
+        else listOf(pickedDate)
+    val rangeTitle = if (week) "This week" else dayTitle(pickedDate)
 
-    Scaffold(topBar = { HFTopAppBar(title = { Text("Insights") }) }) { pad ->
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // Habits First's header: the page's name, and whether it shows a day or the week.
+        PageTitle("insights") {
+            RangeSwitch(
+                week = week,
+                onDay = { week = false; selected = DAYS - 1 },
+                onWeek = { week = true },
+            )
+        }
+        InsightTabs(tab, onSelect = { tab = it })
         Column(
             Modifier
                 .fillMaxSize()
-                .padding(pad)
                 .verticalScroll(rememberScrollState())
                 .padding(ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            val days = usage
-            when {
-                !hasAccess -> UsageAccessCard {
-                    runCatching { context.startActivity(AppPermission.USAGE_ACCESS.settingsIntent(context)) }
+            if (tab == 0) {
+                when {
+                    !hasAccess -> UsageAccessEmpty {
+                        runCatching { context.startActivity(AppPermission.USAGE_ACCESS.settingsIntent(context)) }
+                    }
+                    days.isNullOrEmpty() -> HFCard {
+                        Text("Screen time", style = MaterialTheme.typography.titleMedium)
+                        Gap(4)
+                        Text(
+                            "Reading usage data…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> {
+                        val index = selected.coerceIn(days.indices)
+                        ScreenTimeCard(days, if (week) null else index, blocked, onSelect = { selected = it; week = false })
+                        MostUsedCard(rangeTitle, if (week) addUp(days) else days[index].apps, blocked)
+                    }
                 }
-                days.isNullOrEmpty() -> HFCard {
-                    Text("Screen time", style = MaterialTheme.typography.titleMedium)
-                    Gap(4)
+                if (hasAccess && websites.isSupported()) {
+                    val sites = remember(siteDays, dates) {
+                        HashMap<String, Long>().also { sum ->
+                            dates.forEach { d -> siteDays[d.toEpochDay()]?.forEach { (host, ms) -> sum[host] = (sum[host] ?: 0L) + ms } }
+                        }
+                    }
+                    WebsitesCard(rangeTitle, sites, blockedSites, websiteTracking) {
+                        runCatching { context.startActivity(websites.settingsIntent()) }
+                    }
+                }
+            } else {
+                HistoryCard(rangeTitle, dates.toSet(), history)
+                val usedMin = (world.dailyUnlockUsedMs + world.unlockLog.values.sum()) / 60_000 // I28
+                val capMin = world.settings.dailyCapMs / 60_000
+                HFCard {
                     Text(
-                        "Reading usage data…",
+                        "Unlock time used today",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Gap(4)
+                    Text("$usedMin / $capMin min", style = MaterialTheme.typography.headlineMedium)
+                    Gap(10)
+                    MeterBar(if (capMin == 0L) 0f else usedMin.toFloat() / capMin)
                 }
-                else -> {
-                    val index = selected.coerceIn(days.indices)
-                    ScreenTimeCard(days, index, blocked, onSelect = { selected = it })
-                    MostUsedCard(days[index], blocked)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    BigStat(world.blocks.count { it.state == BlockState.ARMED }.toString(), "Locked", Modifier.weight(1f))
+                    BigStat(world.blocks.count { it.state == BlockState.EARNED }.toString(), "Ready", Modifier.weight(1f))
+                    BigStat(world.blocks.count { it.state == BlockState.UNLOCKED }.toString(), "Open", Modifier.weight(1f))
                 }
-            }
-
-            if (websites.isSupported()) {
-                // Follows the day picked on the chart; today when there's no chart to pick from.
-                val date = days?.takeIf { it.isNotEmpty() }?.let { it[selected.coerceIn(it.indices)].date } ?: LocalDate.now()
-                WebsitesCard(date, siteDays, blockedSites, websiteTracking) {
-                    runCatching { context.startActivity(websites.settingsIntent()) }
-                }
-            }
-
-            SectionLabel("xrnrule")
-            val historyDate = days?.takeIf { it.isNotEmpty() }?.let { it[selected.coerceIn(it.indices)].date } ?: LocalDate.now()
-            HistoryCard(historyDate, history)
-            val usedMin = (world.dailyUnlockUsedMs + world.unlockLog.values.sum()) / 60_000 // I28
-            val capMin = world.settings.dailyCapMs / 60_000
-            HFCard {
-                Text(
-                    "Unlock time used today",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Gap(4)
-                Text("$usedMin / $capMin min", style = MaterialTheme.typography.headlineMedium)
-                Gap(10)
-                MeterBar(if (capMin == 0L) 0f else usedMin.toFloat() / capMin)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                BigStat(world.blocks.count { it.state == BlockState.ARMED }.toString(), "Locked", Modifier.weight(1f))
-                BigStat(world.blocks.count { it.state == BlockState.EARNED }.toString(), "Ready", Modifier.weight(1f))
-                BigStat(world.blocks.count { it.state == BlockState.UNLOCKED }.toString(), "Open", Modifier.weight(1f))
             }
             Gap(8)
         }
     }
 }
 
+/** Every app's time over [days], most first. */
+private fun addUp(days: List<DayUsage>): List<AppUsage> =
+    days.flatMap { it.apps }
+        .groupBy { it.packageName }
+        .map { (pkg, list) -> AppUsage(pkg, list.first().label, list.sumOf { it.foregroundMs }) }
+        .sortedByDescending { it.foregroundMs }
+
+/** Habits First's "✓ Today | Week": an outlined pair, the chosen one filled and ticked. */
 @Composable
-private fun UsageAccessCard(onGrant: () -> Unit) {
-    HFCard {
-        Text("Screen time", style = MaterialTheme.typography.titleMedium)
+private fun RangeSwitch(week: Boolean, onDay: () -> Unit, onWeek: () -> Unit) {
+    val outline = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    Row(
+        Modifier
+            .height(40.dp)
+            .clip(CircleShape)
+            .border(1.dp, outline, CircleShape),
+    ) {
+        listOf("Today" to !week, "Week" to week).forEachIndexed { i, (label, on) ->
+            if (i == 1) Box(Modifier.width(1.dp).fillMaxHeight().background(outline))
+            Row(
+                Modifier
+                    .fillMaxHeight()
+                    .background(if (on) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+                    .selectable(selected = on, onClick = if (i == 0) onDay else onWeek, role = Role.Tab)
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (on) {
+                    Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    WGap(6)
+                }
+                Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp))
+            }
+        }
+    }
+}
+
+/** "Screen time | Habits", underlined like Habits First's tabs. */
+@Composable
+private fun InsightTabs(selected: Int, onSelect: (Int) -> Unit) {
+    val tabs = listOf(Icons.Filled.PhoneAndroid to "Screen time", Icons.Filled.GridView to "Habits")
+    Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        Box(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        )
+        Row(Modifier.fillMaxWidth()) {
+            tabs.forEachIndexed { i, (icon, label) ->
+                val on = i == selected
+                val ink = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .selectable(selected = on, onClick = { onSelect(i) }, role = Role.Tab),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Row(Modifier.height(46.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
+                        WGap(8)
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal),
+                            color = ink,
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .background(if (on) MaterialTheme.colorScheme.onSurface else Color.Transparent, RoundedCornerShape(2.dp)),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Without usage access: Habits First's empty page, a chart mark and one button. */
+@Composable
+private fun UsageAccessEmpty(onGrant: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 160.dp, bottom = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(Icons.Filled.BarChart, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(44.dp))
+        Gap(18)
+        Text("See where your day goes", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal, fontSize = 19.sp))
         Gap(12)
-        Button(onClick = onGrant, modifier = Modifier.fillMaxWidth()) { Text("Allow usage access") }
+        Text(
+            "Allow usage access to see your usage breakdown.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Gap(18)
+        Text(
+            "Allow usage access",
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Medium),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onSurface)
+                .clickable(onClick = onGrant)
+                .padding(horizontal = 22.dp, vertical = 10.dp),
+        )
     }
 }
 
 // ---- screen time: headline + week ------------------------------------------------------
 
 @Composable
-private fun ScreenTimeCard(days: List<DayUsage>, selected: Int, blocked: Set<String>, onSelect: (Int) -> Unit) {
-    val day = days[selected]
+private fun ScreenTimeCard(days: List<DayUsage>, selected: Int?, blocked: Set<String>, onSelect: (Int) -> Unit) {
+    val picked = if (selected == null) days else listOf(days[selected])
+    val totalMs = picked.sumOf { it.totalMs }
     // Past days only: today is partial and would drag the average down all morning. Zero days
     // are usually just outside the OS's event retention, not a phone left untouched.
     val avgMs = days.dropLast(1).map { it.totalMs }.filter { it > 0 }
@@ -191,14 +320,14 @@ private fun ScreenTimeCard(days: List<DayUsage>, selected: Int, blocked: Set<Str
 
     HFCard {
         Text(
-            "Screen time · ${dayTitle(day.date)}",
+            "Screen time · ${if (selected == null) "This week" else dayTitle(days[selected].date)}",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Gap(2)
-        Text(formatDuration(day.totalMs), style = TextStyle(fontSize = 40.sp, fontWeight = FontWeight.SemiBold))
+        Text(formatDuration(totalMs), style = TextStyle(fontSize = 40.sp, fontWeight = FontWeight.SemiBold))
         if (blocked.isNotEmpty()) {
-            val blockedMs = day.apps.filter { it.packageName in blocked }.sumOf { it.foregroundMs }
+            val blockedMs = picked.flatMap { it.apps }.filter { it.packageName in blocked }.sumOf { it.foregroundMs }
             Text(
                 if (blockedMs > 0) "${formatDuration(blockedMs)} of it in apps you block" else "None of it in apps you block",
                 style = MaterialTheme.typography.bodyMedium,
@@ -206,7 +335,7 @@ private fun ScreenTimeCard(days: List<DayUsage>, selected: Int, blocked: Set<Str
             )
         }
         Gap(16)
-        WeekChart(days, selected, avgMs, onSelect)
+        WeekChart(days, selected ?: -1, avgMs, onSelect)
         if (avgMs != null) {
             Gap(10)
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -296,10 +425,10 @@ private fun WeekChart(days: List<DayUsage>, selected: Int, avgMs: Long?, onSelec
 // ---- screen time: per app ----------------------------------------------------------------
 
 @Composable
-private fun MostUsedCard(day: DayUsage, blocked: Set<String>) {
+private fun MostUsedCard(title: String, used: List<AppUsage>, blocked: Set<String>) {
     var showAll by rememberSaveable { mutableStateOf(false) }
     // Sub-minute blips (a share sheet, a permission prompt) still count toward the total above.
-    val apps = day.apps.filter { it.foregroundMs >= 60_000 }
+    val apps = used.filter { it.foregroundMs >= 60_000 }
     val shown = if (showAll) apps else apps.take(APPS_COLLAPSED)
     val maxMs = apps.firstOrNull()?.foregroundMs ?: 1L
 
@@ -307,7 +436,7 @@ private fun MostUsedCard(day: DayUsage, blocked: Set<String>) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Most used", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             Text(
-                dayTitle(day.date),
+                title,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -390,13 +519,13 @@ private fun UsageRow(label: String, ms: Long, fraction: Float, isBlocked: Boolea
 }
 
 /**
- * Time per website for the selected day. Android keeps no per-site history, so this only covers
- * time since the browser extension first reported a site.
+ * Time per website for the day or week shown. Android keeps no per-site history, so this only
+ * covers time since the browser extension first reported a site.
  */
 @Composable
 private fun WebsitesCard(
-    date: LocalDate,
-    perDay: Map<Long, Map<String, Long>>,
+    title: String,
+    perSite: Map<String, Long>,
     blockedSites: Set<String>,
     tracking: WebsiteTracking,
     onTurnOn: () -> Unit,
@@ -404,7 +533,7 @@ private fun WebsitesCard(
     // Time per site comes from the browser extension; once it has ever answered there is data to show.
     val trackingOn = tracking != WebsiteTracking.OFF
     var showAll by rememberSaveable { mutableStateOf(false) }
-    val sites = perDay[date.toEpochDay()].orEmpty().entries
+    val sites = perSite.entries
         .filter { it.value >= 60_000 }
         .sortedByDescending { it.value }
     val shown = if (showAll) sites else sites.take(APPS_COLLAPSED)
@@ -414,7 +543,7 @@ private fun WebsitesCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Websites", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             Text(
-                dayTitle(date),
+                title,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -470,15 +599,16 @@ private val ShortDay = DateTimeFormatter.ofPattern("EEE")
 private val LongDay = DateTimeFormatter.ofPattern("EEEE, d MMM")
 
 /**
- * What xrnrule itself saw on [date] (the day picked on the chart): habits done, attempts to open
- * a blocked app and which apps, unlock time used. Plus the run of days with a habit done.
+ * What xrnrule itself saw on [dates] (the day picked on the chart, or the week): habits done,
+ * attempts to open a blocked app and which apps, unlock time used. Plus the run of days with a
+ * habit done.
  */
 @Composable
-private fun HistoryCard(date: LocalDate, events: List<TelemetryEvent>) {
+private fun HistoryCard(title: String, dates: Set<LocalDate>, events: List<TelemetryEvent>) {
     val context = LocalContext.current
     val zone = ZoneId.systemDefault()
     fun TelemetryEvent.date(): LocalDate = Instant.ofEpochMilli(atWallMs).atZone(zone).toLocalDate()
-    val onDay = events.filter { it.date() == date }
+    val onDay = events.filter { it.date() in dates }
     val habits = onDay.count { it is TelemetryEvent.HabitDone }
     val blocked = onDay.filterIsInstance<TelemetryEvent.Blocked>()
     val unlockMs = onDay.filterIsInstance<TelemetryEvent.UnlockUsed>().sumOf { it.ms }
@@ -498,7 +628,7 @@ private fun HistoryCard(date: LocalDate, events: List<TelemetryEvent>) {
 
     HFCard {
         Text(
-            "Your habits · ${dayTitle(date)}",
+            "Your habits · $title",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
