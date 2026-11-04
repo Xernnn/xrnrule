@@ -651,6 +651,61 @@ class InvariantTests {
         assertEquals(0L, engine.allowanceUsedMs(laptop.world, laptop.block("a1"), laptop.clock))
     }
 
+    /** Rounds in turn on both devices, until a whole pass writes nothing. */
+    private fun settle(phone: Device, laptop: Device, server: FakeServer) {
+        repeat(6) {
+            val phoneWrote = phone.sync(server)
+            val laptopWrote = laptop.sync(server)
+            if (!phoneWrote && !laptopWrote) return
+        }
+        throw AssertionError("the devices keep rewriting each other's state")
+    }
+
+    @Test
+    fun i19_aStaleUseOfThisDeviceSettles() {
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 10L * 60_000)
+        val (phone, laptop, server) = twoDevices(listOf(block))
+
+        laptop.on(BlockEvent.ForegroundChanged("com.target"))
+        advanceAll(3L * 60_000, phone, laptop)
+        laptop.on(BlockEvent.Tick)
+        laptop.on(BlockEvent.ForegroundChanged(null))
+        laptop.sync(server)
+        phone.sync(server)
+        assertEquals(3L * 60_000, phone.world.otherAllowance.getValue("a1").getValue("laptop").ms)
+
+        // The next day the laptop uses nothing, and the phone still holds yesterday's report.
+        advanceAll(24L * 60 * 60_000, phone, laptop)
+        phone.on(BlockEvent.Tick)
+        laptop.on(BlockEvent.Tick)
+
+        settle(phone, laptop, server)
+        val report = phone.world.otherAllowance.getValue("a1").getValue("laptop")
+        assertEquals(phone.clock.startOfLocalDayMs(), report.dayStartWall)
+        assertEquals(0L, report.ms)
+    }
+
+    @Test
+    fun i19_thisDevicesUseComesBackFromTheServer() {
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 10L * 60_000)
+        val (phone, laptop, server) = twoDevices(listOf(block))
+
+        laptop.on(BlockEvent.ForegroundChanged("com.target"))
+        advanceAll(4L * 60_000, phone, laptop)
+        laptop.on(BlockEvent.Tick)
+        laptop.on(BlockEvent.ForegroundChanged(null))
+        laptop.sync(server)
+        phone.sync(server)
+
+        // The laptop loses its count; the server and the phone still have it.
+        laptop.world = laptop.world.copy(progress = emptyMap())
+
+        settle(phone, laptop, server)
+        assertEquals(4L * 60_000, laptop.world.progress.getValue("a1").accumulatedMs)
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(laptop.world, laptop.block("a1"), laptop.clock))
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(phone.world, phone.block("a1"), phone.clock))
+    }
+
     @Test
     fun i26_creditUsedElsewhereIsNotResurrected() {
         val (phone, laptop, server) = twoDevices(listOf(checklistBlock("c1")), mapOf("c1" to items("c1", 1)))

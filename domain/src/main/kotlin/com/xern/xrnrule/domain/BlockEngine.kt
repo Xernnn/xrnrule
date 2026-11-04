@@ -950,6 +950,19 @@ class BlockEngine {
             .toMutableMap()
 
         val progress = world.progress.filterKeys { it in blockIds }.toMutableMap()
+        // §2.4: more of this device's own use on the server than it remembers here (its state was
+        // lost or restored) comes back, so what it projects next agrees and the rounds settle.
+        val runs = world.runs.toMutableMap()
+        if (world.deviceId.isNotEmpty()) {
+            for ((blockId, byDevice) in shared.allowance) {
+                if (shared.blocks[blockId]?.mode != BlockMode.ALLOWANCE) continue
+                val theirs = byDevice[world.deviceId] ?: continue
+                val p = progress[blockId]
+                if (p != null && SharedState.newerUse.compare(theirs, SharedState.ownUse(world, p)) <= 0) continue
+                progress[blockId] = (p ?: freshProgress(blockId, clock)).copy(windowStart = theirs.dayStartWall, accumulatedMs = theirs.ms)
+                if (theirs.run != null) runs[blockId] = theirs.run else runs.remove(blockId)
+            }
+        }
         val blocks = shared.blocks.values.map { b ->
             val state = when {
                 b.mode != BlockMode.HABIT -> BlockState.ARMED
@@ -995,6 +1008,7 @@ class BlockEngine {
             otherAllowance = shared.allowance
                 .mapValues { (_, byDevice) -> byDevice - world.deviceId }
                 .filterValues { it.isNotEmpty() },
+            runs = runs,
         )
     }
 

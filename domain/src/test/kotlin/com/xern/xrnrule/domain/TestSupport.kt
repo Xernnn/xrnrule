@@ -259,12 +259,14 @@ class Device(
 
     fun on(event: BlockEvent): Outcome = engine.reduce(world, event, clock).also { world = it.world }
 
-    /** One round: merge with what the server has, adopt it, push the result. */
-    fun sync(server: FakeServer) {
+    /** One round: merge with what the server has, adopt it, push the result. True if that wrote anything. */
+    fun sync(server: FakeServer): Boolean {
         on(BlockEvent.SharedStateMerged(base, server.state))
         val pushed = SharedState.of(world)
+        val wrote = pushed != server.state
         server.state = pushed
         base = pushed
+        return wrote
     }
 
     fun block(id: String): Block = world.block(id)!!

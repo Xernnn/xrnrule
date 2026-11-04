@@ -46,6 +46,16 @@ data class SharedState(
 
     companion object {
 
+        /** Which of two reports of one device's use of a block wins (§2.4): the later day, more use, the later count. */
+        val newerUse: Comparator<AllowanceUse> =
+            compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.atWall }
+
+        /** This device's own report of its use of an ALLOWANCE block with progress [p] (I19, I32). */
+        fun ownUse(world: World, p: HabitProgress): AllowanceUse {
+            val run = world.runs[p.blockId]
+            return AllowanceUse(p.windowStart, p.accumulatedMs, run, run?.lastActiveWall ?: 0)
+        }
+
         /** This device's view of the shared state. */
         fun of(world: World): SharedState {
             val allowance = world.otherAllowance.mapValues { it.value.toMutableMap() }.toMutableMap()
@@ -53,10 +63,9 @@ data class SharedState(
                 for (block in world.blocks) {
                     if (block.mode != BlockMode.ALLOWANCE) continue
                     val p = world.progress[block.id] ?: continue
-                    val run = world.runs[block.id]
-                    if (p.accumulatedMs <= 0 && run == null) continue
-                    allowance.getOrPut(block.id) { mutableMapOf() }[world.deviceId] =
-                        AllowanceUse(p.windowStart, p.accumulatedMs, run, run?.lastActiveWall ?: 0)
+                    // Even unused (§2.4): the merge never drops a device's entry, so only this
+                    // device's newer day can replace an older copy of its use kept elsewhere.
+                    allowance.getOrPut(block.id) { mutableMapOf() }[world.deviceId] = ownUse(world, p)
                 }
             }
             return SharedState(
@@ -173,7 +182,7 @@ data class SharedState(
                     val l = local.allowance[blockId].orEmpty()
                     val r = remote.allowance[blockId].orEmpty()
                     (l.keys + r.keys).associateWith { device ->
-                        listOfNotNull(l[device], r[device]).maxWith(compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.atWall })
+                        listOfNotNull(l[device], r[device]).maxWith(newerUse)
                     }
                 },
                 overrides = mergeMaps(b.overrides, local.overrides, remote.overrides) { l, r ->
