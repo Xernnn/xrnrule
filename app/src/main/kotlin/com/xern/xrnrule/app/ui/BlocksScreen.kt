@@ -389,6 +389,7 @@ private fun HabitBody(
                     else BlockEvent.LogHabit(h.id, amount),
                 )
             },
+            onSetTotal = { value -> store.dispatch(BlockEvent.SetHabitEntry(h.id, goal.day, value)) },
             onDismiss = { counting = null },
             dayLabel = if (goal.yesterday) "yesterday" else "today",
         )

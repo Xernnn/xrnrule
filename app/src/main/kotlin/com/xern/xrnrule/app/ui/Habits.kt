@@ -1,8 +1,5 @@
 package com.xern.xrnrule.app.ui
 
-import androidx.compose.foundation.layout.width
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,18 +11,23 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.AutoStories
@@ -52,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -61,11 +64,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.xern.xrnrule.app.ui.theme.Kinds
+import androidx.compose.ui.unit.sp
 import com.xern.xrnrule.app.ui.theme.KindColors
+import com.xern.xrnrule.app.ui.theme.Kinds
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.HabitEntry
@@ -461,48 +473,107 @@ fun HabitPickerSheet(
         }
     }
 }
-
-/** Adding to a counted habit today (I35): quick amounts, any amount, or taking some back. */
+/**
+ * Habits First's "How many more would you like to add?": a number with the habit's unit beside
+ * it, added to [dayLabel]'s amount; "Edit total" turns it into setting that day's total (which
+ * is how a mistake is taken back).
+ */
 @Composable
-fun LogAmountDialog(habit: Habit, todayTotal: Long, onLog: (Long) -> Unit, onDismiss: () -> Unit, dayLabel: String = "today") {
-    val left = ((habit.unlockUnit ?: habit.goal) - todayTotal).coerceAtLeast(0)
-    var text by remember { mutableStateOf(formatAmount(if (left > 0) left else 1000)) }
-    val n = parseAmount(text)?.takeIf { it > 0 }
+fun LogAmountDialog(
+    habit: Habit,
+    todayTotal: Long,
+    onLog: (Long) -> Unit,
+    onSetTotal: (Long) -> Unit,
+    onDismiss: () -> Unit,
+    dayLabel: String = "today",
+) {
+    var editingTotal by remember { mutableStateOf(false) }
+    // A value with its selection, so "Edit total" can hand over the total selected: typing replaces it.
+    var field by remember { mutableStateOf(TextFieldValue("")) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(editingTotal) { if (editingTotal) runCatching { focus.requestFocus() } }
+    val text = field.text
+    val n = parseAmount(text)?.takeIf { if (editingTotal) it >= 0 else it > 0 }
+    fun confirm() {
+        val value = n ?: return
+        if (editingTotal) onSetTotal(value) else onLog(value)
+        onDismiss()
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(habit.name) },
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text(
+                if (editingTotal) "What's the total for $dayLabel?" else "How many more would you like to add?",
+                style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.5.sp, fontWeight = FontWeight.Bold),
+            )
+        },
         text = {
             Column {
                 Text(
-                    "${habitAmountText(habit, todayTotal)} $dayLabel · ${habitGoalText(habit)}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    "${habit.name} · ${habitAmountText(habit, todayTotal)} $dayLabel · ${habitGoalText(habit)}",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Gap(12)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(1L, 5L, 10L).forEach { q -> ChoicePill("+$q", selected = false) { onLog(q * 1000); onDismiss() } }
-                }
-                Gap(12)
-                FieldBox(
-                    text,
-                    onChange = { v -> text = v.filter { it.isDigit() || it == '.' || it == ',' }.take(8) },
-                    placeholder = "How many",
-                    container = MaterialTheme.colorScheme.surfaceVariant,
-                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-            }
-        },
-        confirmButton = { TextButton(enabled = n != null, onClick = { onLog(n!!); onDismiss() }) { Text("Add") } },
-        dismissButton = {
-            Row {
-                if (todayTotal > 0) {
-                    TextButton(enabled = n != null, onClick = { onLog(-minOf(n!!, todayTotal)); onDismiss() }) {
-                        Text("Take back", color = MaterialTheme.colorScheme.error)
+                Gap(14)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 58.dp)
+                        .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        val style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp)
+                        if (text.isEmpty()) Text("0", style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        BasicTextField(
+                            value = field,
+                            onValueChange = { v ->
+                                val clean = v.text.filter { it.isDigit() || it == '.' || it == ',' }.take(8)
+                                field = if (clean == v.text) v else TextFieldValue(clean, TextRange(clean.length))
+                            },
+                            singleLine = true,
+                            textStyle = style.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { confirm() }),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                        )
+                    }
+                    if (habit.unit.isNotBlank()) {
+                        WGap(10)
+                        Text(habit.unit, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
             }
         },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DialogPill(if (editingTotal) "Add more" else "Edit total") {
+                    editingTotal = !editingTotal
+                    val start = if (editingTotal) formatAmount(todayTotal) else ""
+                    field = TextFieldValue(start, TextRange(0, start.length))
+                }
+                DialogPill("Cancel", onClick = onDismiss)
+                DialogPill(if (editingTotal) "Set" else "Add", enabled = n != null, onClick = ::confirm)
+            }
+        },
+    )
+}
+
+/** Habits First's dialog buttons: grey pills, the label greyed while it can't be pressed. */
+@Composable
+private fun DialogPill(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+        color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
     )
 }
 
