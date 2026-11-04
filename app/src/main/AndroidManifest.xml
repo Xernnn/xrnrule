@@ -84,6 +84,13 @@
             </intent-filter>
         </service>
 
+        <!-- xrnloops reads which of its habits unlock which block (loop/LoopLinks.kt); only our Loop build can. -->
+        <provider
+            android:name=".loop.LoopLinksProvider"
+            android:authorities="com.xern.xrnrule.links"
+            android:exported="true"
+            android:readPermission="com.xern.xrnrule.permission.HABITS" />
+
         <!-- Loop pushes this after every habit change; only our Loop build can send it. -->
         <receiver
             android:name=".loop.LoopChangedReceiver"
