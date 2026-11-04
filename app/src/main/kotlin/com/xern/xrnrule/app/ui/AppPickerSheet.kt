@@ -51,10 +51,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.xern.xrnrule.app.data.InstalledApp
 import com.xern.xrnrule.app.web.WebsiteMonitor
 import com.xern.xrnrule.app.web.WebsiteTracking
@@ -91,15 +94,24 @@ fun AppPickerSheet(
     ) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.92f).imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onDismiss) { Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1)
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal, fontSize = 18.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Box(
                     Modifier
                         .padding(end = 8.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary)
                         .clickable { onDone(PickedTargets(picked, sites, excepts)) }
-                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                        .padding(horizontal = 18.dp, vertical = 7.dp),
                 ) { Text("Done", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimary) }
             }
             Gap(10)
@@ -148,12 +160,12 @@ fun SegmentSwitch(options: List<String>, selected: Int, onSelect: (Int) -> Unit,
                     .clip(RoundedCornerShape(11.dp))
                     .background(if (on) MaterialTheme.colorScheme.onSurface else androidx.compose.ui.graphics.Color.Transparent)
                     .clickable { onSelect(i) }
-                    .padding(vertical = 10.dp),
+                    .padding(vertical = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label,
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = if (on) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                 )
@@ -202,10 +214,10 @@ private fun AppList(apps: List<InstalledApp>, picked: Set<String>, onToggle: (St
                 Modifier
                     .fillMaxWidth()
                     .clickable { onToggle(app.packageName) }
-                    .padding(horizontal = 20.dp, vertical = 9.dp),
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AppIcon(app.packageName, size = 44.dp)
+                AppIcon(app.packageName, size = 36.dp)
                 WGap(14)
                 Column(Modifier.weight(1f)) {
                     Text(app.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -224,15 +236,15 @@ private fun AppList(apps: List<InstalledApp>, picked: Set<String>, onToggle: (St
 fun CheckCircle(on: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier
-            .size(26.dp)
+            .size(22.dp)
             .clip(CircleShape)
             .then(
                 if (on) Modifier.background(MaterialTheme.colorScheme.primary)
-                else Modifier.border(2.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
+                else Modifier.border(1.6.dp, MaterialTheme.colorScheme.onSurfaceVariant, CircleShape),
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (on) Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+        if (on) Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -241,14 +253,14 @@ fun CheckCircle(on: Boolean, modifier: Modifier = Modifier) {
 fun ChoicePill(label: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         label,
-        style = MaterialTheme.typography.labelMedium,
+        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
         color = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface,
         maxLines = 1,
         modifier = Modifier
             .clip(CircleShape)
             .background(if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 5.dp),
     )
 }
 
@@ -267,8 +279,8 @@ fun SearchField(
     Row(
         modifier
             .fillMaxWidth()
-            .height(50.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(42.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(start = 14.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

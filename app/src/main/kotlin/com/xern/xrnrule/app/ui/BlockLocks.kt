@@ -91,10 +91,11 @@ fun LockPill(name: String, active: Boolean, onClick: () -> Unit) {
 /**
  * "Lock Zen?": until the hardcore password says otherwise (sideload builds), or for a time
  * (I39), only lengths that end later than the lock it has. A length is confirmed before it
- * locks, since only an emergency unlock (I40) ends it early.
+ * locks, since only an emergency unlock (I40) ends it early. A block behind the password offers
+ * [onUnhardcore] instead, which asks for the password like any loosening.
  */
 @Composable
-fun LockDialog(block: Block, store: WorldStore, guard: HardcoreGuard, onDismiss: () -> Unit) {
+fun LockDialog(block: Block, store: WorldStore, guard: HardcoreGuard, onUnhardcore: () -> Unit, onDismiss: () -> Unit) {
     val world by store.world.collectAsStateWithLifecycle()
     val current = world.block(block.id) ?: block
     val now = store.clock.nowWallMs()
@@ -168,6 +169,12 @@ fun LockDialog(block: Block, store: WorldStore, guard: HardcoreGuard, onDismiss:
                 if (guard.isSupported() && !hardcore) {
                     LockChoice(if (guard.hasPassword()) "Until I unlock it (password)" else "Until I unlock it (set password)") {
                         if (guard.hasPassword()) makeHardcore() else settingPassword = true
+                    }
+                }
+                if (hardcore) {
+                    LockChoice("Unlock it with the password") {
+                        onDismiss()
+                        onUnhardcore()
                     }
                 }
                 choices.forEach { c -> LockChoice(c.first) { picked = c } }

@@ -179,6 +179,14 @@ fun BlocksScreen(
                         }
                     },
                     guard = guard,
+                    onUnhardcore = {
+                        guarded(
+                            block,
+                            LoosenRequest("Take ${block.name} off the password?", "Making it easier to get past won't ask for the password any more.", true, listOf(block.id)) {
+                                store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == block.id) it.copy(enforcementTier = EnforcementTier.SOFT) else it }) }
+                            },
+                        )
+                    },
                 )
             }
         }
@@ -283,12 +291,13 @@ private fun BlockCard(
     onEnabledChange: (Boolean) -> Unit,
     onDelete: () -> Unit,
     guard: HardcoreGuard,
+    onUnhardcore: () -> Unit,
 ) {
     if (block.mode != BlockMode.HABIT || block.state == BlockState.UNLOCKED) rememberTicker() // countdowns move with time
     var menu by remember { mutableStateOf(false) }
     var locking by remember { mutableStateOf(false) }
     val hardcore = block.enforcementTier == EnforcementTier.HARDCORE
-    if (locking) LockDialog(block, store, guard, onDismiss = { locking = false })
+    if (locking) LockDialog(block, store, guard, onUnhardcore = onUnhardcore, onDismiss = { locking = false })
 
     Box {
         HFCard(

@@ -10,12 +10,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,23 +31,31 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.AllInclusive
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.HourglassTop
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -77,10 +86,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.InstalledApp
 import com.xern.xrnrule.app.data.InstalledApps
@@ -95,6 +105,7 @@ import com.xern.xrnrule.domain.CombineMode
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.HabitKind
 import com.xern.xrnrule.domain.Schedule
+import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TimeWindow
 import com.xern.xrnrule.domain.withHabit
 import java.util.UUID
@@ -135,15 +146,19 @@ fun NewBlockScreen(
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
         WizardBar(step, onClose = onDone, onBack = { step-- })
+        // Steps 1 and 3 sit in the middle of the page, as Habits First's do; the long step 2 starts at the top.
+        BoxWithConstraints(Modifier.weight(1f)) {
+        val page = maxHeight
         Column(
             Modifier
-                .weight(1f)
+                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
+                .heightIn(min = page)
                 .padding(horizontal = 20.dp),
+            verticalArrangement = if (step == 2) Arrangement.Top else Arrangement.Center,
         ) {
             when (step) {
                 1 -> {
-                    Spacer(Modifier.height(110.dp))
                     Question("Which apps do you want to limit?")
                     Gap(22)
                     TargetsCard(form, apps, websites)
@@ -151,22 +166,27 @@ fun NewBlockScreen(
                 2 -> {
                     Gap(8)
                     Question("What unlocks it?")
-                    Gap(4)
-                    Text("Tap as many as you like", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Gap(8)
+                    Text("Tap as many as you like", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     UnlockSections(form, apps, store)
                 }
                 else -> {
-                    Gap(8)
                     Question("When is this block active?")
-                    Gap(18)
+                    Gap(22)
                     WhenSection(form)
-                    if (form.mode == BlockMode.HABIT) UnlockLength(form, cap)
+                    if (form.mode == BlockMode.HABIT) {
+                        Gap(18)
+                        BlockAgainCard(form, cap)
+                    }
                 }
             }
             Gap(24)
         }
+        }
         BottomAction(
-            hint = hint,
+            // Step 1's empty card says it already.
+            hint = hint.takeUnless { step == 1 && form.apps.isEmpty() && form.sites.isEmpty() },
+            enabled = hint == null,
             label = if (step < 3) "Continue" else "Save block",
             onClick = { if (step < 3) step++ else save() },
         )
@@ -189,7 +209,7 @@ private fun WizardBar(step: Int, onClose: () -> Unit, onBack: () -> Unit) {
         if (step == 1) {
             RoundIconButton(Icons.Filled.Close, "Close", onClick = onClose)
         } else {
-            RoundIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
+            RoundIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Back", onClick = onBack)
         }
         WGap(14)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -215,7 +235,7 @@ private fun Question(text: String) {
 
 /** The green pill at the bottom, with what's still missing above it. */
 @Composable
-private fun BottomAction(hint: String?, label: String, onClick: () -> Unit) {
+private fun BottomAction(hint: String?, label: String, onClick: () -> Unit, enabled: Boolean = hint == null) {
     Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp)) {
         if (hint != null) {
             Text(
@@ -226,7 +246,7 @@ private fun BottomAction(hint: String?, label: String, onClick: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
             )
         }
-        PillButton(label, onClick = onClick, enabled = hint == null)
+        PillButton(label, onClick = onClick, enabled = enabled)
     }
 }
 
@@ -277,11 +297,21 @@ fun EditBlockScreen(
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
+        // Habits First's bar: Cancel, the title in the middle, Save.
         Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onDone) { Text("Cancel", color = MaterialTheme.colorScheme.onSurface) }
-            Text("Edit block", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
+            TextButton(onClick = onDone) { Text("Cancel", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface) }
+            Text(
+                "Edit block",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal, fontSize = 18.sp),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
+            )
             TextButton(onClick = ::save, enabled = hint == null) {
-                Text("Save", color = if (hint == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Save",
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = if (hint == null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         Column(
@@ -293,66 +323,51 @@ fun EditBlockScreen(
             if (hint != null) {
                 Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
             }
-            FieldBox(form.name, onChange = { form.name = it }, placeholder = "Block name")
-            SectionLabel("Which apps do you want to limit?")
-            TargetsCard(form, apps, websites)
+            NameCard(form, apps)
+            FormSection(Icons.Filled.GridView, "Which apps do you want to limit?") {
+                TargetsCard(form, apps, websites, framed = false)
+            }
             when (existing.mode) {
-                BlockMode.HABIT, BlockMode.ALLOWANCE -> {
-                    SectionLabel(if (existing.mode == BlockMode.HABIT) "What unlocks it?" else "Daily limit")
-                    UnlockSections(form, apps, store)
+                BlockMode.HABIT -> FormSection(Icons.Outlined.VpnKey, "Select what unlocks your apps", hint = "(Tap as many as you like)") {
+                    UnlockSections(form, apps, store, headers = false)
+                }
+                BlockMode.ALLOWANCE -> FormSection(Icons.Outlined.HourglassBottom, "How long can it be open?") {
+                    UnlockSections(form, apps, store, headers = false)
                 }
                 else -> {
-                    Gap(16)
+                    Gap(12)
                     Note(
                         if (existing.mode == BlockMode.LOCKDOWN) "Nothing unlocks a lockdown: it blocks for its length, then stops until you start it again."
                         else "Nothing unlocks this block: it just blocks while it's on.",
                     )
                 }
             }
-            SectionLabel(if (existing.mode == BlockMode.LOCKDOWN) "How long" else "When is it active?")
-            WhenSection(form)
-            if (existing.mode == BlockMode.HABIT) UnlockLength(form, cap)
-
-            if (guard.isSupported()) {
-                SectionLabel("Enforcement")
-                GroupCard {
-                    SwitchRow(
-                        title = "Hardcore",
-                        subtitle = if (guard.hasPassword() || form.hardcore) {
-                            "Loosening it needs your password, and Settings and uninstalling are guarded while it's on."
-                        } else {
-                            "Set a hardcore password in Settings first."
-                        },
-                        icon = Icons.Outlined.Lock,
-                        checked = form.hardcore,
-                        onCheckedChange = { form.hardcore = it },
-                        first = true,
-                        enabled = guard.hasPassword() || form.hardcore,
-                    )
-                }
+            if (existing.mode == BlockMode.HABIT) {
+                Gap(14)
+                BlockAgainCard(form, cap)
+            }
+            if (existing.mode == BlockMode.LOCKDOWN) {
+                FormSection(Icons.Outlined.HourglassTop, "How long") { WhenSection(form) }
+            } else {
+                Gap(14)
+                ScheduleCard(form)
             }
 
-            Gap(20)
-            GroupCard {
-                GroupRow(
-                    title = "Delete block",
-                    icon = Icons.Outlined.DeleteOutline,
-                    iconTint = MaterialTheme.colorScheme.error,
-                    first = true,
-                    chevron = false,
-                    onClick = {
-                        if (BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
-                            loosen = LoosenRequest("Delete ${existing.name}?", "It stops blocking for good.", hardcore, listOf(existing.id)) {
-                                store.edit { it.deleteBlock(existing.id) }
-                                onDone()
-                            }
-                        } else {
-                            confirmDelete = true
+            Gap(24)
+            TextButton(
+                onClick = {
+                    if (BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
+                        loosen = LoosenRequest("Delete ${existing.name}?", "It stops blocking for good.", hardcore, listOf(existing.id)) {
+                            store.edit { it.deleteBlock(existing.id) }
+                            onDone()
                         }
-                    },
-                )
-            }
-            Gap(32)
+                    } else {
+                        confirmDelete = true
+                    }
+                },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) { Text("Delete block", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error) }
+            Gap(24)
         }
     }
 
@@ -377,41 +392,48 @@ fun EditBlockScreen(
 //  Sections shared by both
 // =====================================================================================
 
-/** Step 1: one row that opens the picker, showing what's picked. */
+/**
+ * Step 1: one row that opens the picker, as Habits First's: "Choose apps to block", or a badge
+ * and "2 apps selected" with the picked icons under it. [framed]: in its own card (the steps);
+ * the edit page puts it in a titled one.
+ */
 @Composable
-private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites: WebsiteMonitor) {
+private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites: WebsiteMonitor, framed: Boolean = true) {
     var picking by remember { mutableStateOf(false) }
     val labels = remember(apps) { apps.associate { it.packageName to it.label } }
-    HFCard(padding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
+    val content: @Composable ColumnScope.() -> Unit = {
+        val empty = form.apps.isEmpty() && form.sites.isEmpty()
         Row(
             Modifier
                 .fillMaxWidth()
                 .clip(RowShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .clickable { picking = true }
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                .padding(horizontal = 16.dp, vertical = 15.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (form.apps.isEmpty() && form.sites.isEmpty()) {
-                Icon(Icons.Filled.AddCircleOutline, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                WGap(12)
-                Text("Choose apps to block", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
-                    val apps = form.apps.sortedBy { labels[it]?.lowercase() }.take(4)
-                    apps.forEach { AppIcon(it, size = 30.dp) }
-                    form.sites.sorted().take(4 - apps.size).forEach { SiteIcon(it, size = 30.dp) }
-                }
-                WGap(12)
-                Text(
-                    pickedSummary(form.apps.size, form.sites.size),
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            Icon(
+                if (empty) Icons.Filled.AddCircle else Icons.Filled.Verified,
+                contentDescription = null,
+                tint = if (empty) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(24.dp),
+            )
+            WGap(12)
+            Text(
+                if (empty) "Choose apps to block" else pickedSummary(form.apps.size, Sites.shown(form.sites).size),
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+        if (!empty) {
+            Gap(12)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                form.apps.sortedBy { labels[it]?.lowercase() ?: it }.forEach { AppIcon(it, size = 26.dp) }
+                Sites.shown(form.sites.sorted()).forEach { SiteIcon(it, size = 26.dp) }
             }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         val laptop = form.existing?.targetDesktopApps?.size ?: 0
         if (laptop > 0) {
@@ -419,13 +441,14 @@ private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites
                 "Also $laptop laptop app${if (laptop == 1) "" else "s"}, chosen on the laptop.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 6.dp, top = 8.dp),
+                modifier = Modifier.padding(start = 2.dp, top = 10.dp),
             )
         }
     }
+    if (framed) HFCard(content = content) else Column(content = content)
     if (picking) {
         AppPickerSheet(
-            title = "Block",
+            title = form.name.ifBlank { "Block" },
             apps = apps,
             initial = PickedTargets(form.apps, form.sites, form.exceptSites),
             websites = websites,
@@ -440,6 +463,53 @@ private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites
     }
 }
 
+/** The edit page's first card: the block's icon and its name, which you can type over. */
+@Composable
+private fun NameCard(form: BlockFormState, apps: List<InstalledApp>) {
+    val labels = remember(apps) { apps.associate { it.packageName to it.label } }
+    HFCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AppTile(
+                packages = form.apps.sortedBy { labels[it]?.lowercase() ?: it },
+                fallback = Icons.Filled.Shield,
+                sites = form.sites.sorted(),
+            )
+            WGap(16)
+            val style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp, fontWeight = FontWeight.Black)
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (form.name.isEmpty()) Text("Block name", style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                BasicTextField(
+                    value = form.name,
+                    onValueChange = { form.name = it },
+                    singleLine = true,
+                    textStyle = style.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+/** One of the edit page's cards: an icon and a question in grey bold over its content. */
+@Composable
+private fun FormSection(icon: ImageVector, title: String, hint: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    Gap(14)
+    HFCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            WGap(12)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (hint != null) {
+            Gap(12)
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Gap(14)
+        content()
+    }
+}
+
 private fun pickedSummary(apps: Int, sites: Int): String = listOfNotNull(
     when (apps) { 0 -> null; 1 -> "1 app"; else -> "$apps apps" },
     when (sites) { 0 -> null; 1 -> "1 site"; else -> "$sites sites" },
@@ -447,7 +517,7 @@ private fun pickedSummary(apps: Int, sites: Int): String = listOfNotNull(
 
 /** Step 2: the kinds of unlock, grouped like the form says them, each opening its own settings. */
 @Composable
-private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store: WorldStore) {
+private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store: WorldStore, headers: Boolean = true) {
     val kinds = LocalKinds.current
     val mode = form.existing?.mode
     val labels = remember(apps) { apps.associate { it.packageName to it.label } }
@@ -458,7 +528,7 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
     var makingHabit by remember { mutableStateOf<Boolean?>(null) }
 
     if (mode == null || mode == BlockMode.HABIT) {
-        SectionLabel("From your phone")
+        if (headers) SectionLabel("From your phone", top = 14.dp)
         KindCard(
             icon = Icons.Outlined.Timer,
             title = "App time",
@@ -477,7 +547,6 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             KindNote("Counts minutes in these apps while the block's timer runs. Start it from the block's card.")
         }
 
-        Gap(10)
         KindCard(
             icon = Icons.Outlined.HourglassTop,
             title = "Wait timer",
@@ -490,7 +559,7 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             KindNote("Runs while you wait on the block screen, once you start it.")
         }
 
-        SectionLabel("You track it")
+        if (headers) SectionLabel("You track it", top = 6.dp)
         KindCard(
             icon = Icons.Outlined.TaskAlt,
             title = "Manual habit",
@@ -528,7 +597,6 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             DashedButton("New habit", kinds.habit) { makingHabit = false }
             KindNote("Tick it or count it on the block's card or its block screen. Your laptop counts too.")
         }
-        Gap(10)
         KindCard(
             icon = Icons.Outlined.Timer,
             title = "Manual timer",
@@ -546,7 +614,7 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             KindNote("Run it with the focus timer: the ▶ on the block's card opens it.")
         }
 
-        SectionLabel("Yesterday's or a weekly goal")
+        if (headers) SectionLabel("Yesterday's or a weekly goal", top = 6.dp)
         KindCard(
             icon = Icons.Outlined.Link,
             title = "Tracked habit",
@@ -568,7 +636,7 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
     }
 
     if (mode == null || mode == BlockMode.ALLOWANCE) {
-        if (mode == null) SectionLabel("Or just limit it")
+        if (mode == null) SectionLabel("Or just limit it", top = 6.dp)
         KindCard(
             icon = Icons.Outlined.HourglassBottom,
             title = "Daily limit",
@@ -746,6 +814,7 @@ private fun WhenSection(form: BlockFormState) {
                     },
                     selected = form.whenMode == option,
                     modifier = Modifier.weight(1f),
+                    centred = options.size > 2,
                 ) { form.whenMode = option }
             }
         }
@@ -764,39 +833,11 @@ private fun WhenSection(form: BlockFormState) {
             Text(
                 "Blocks " + describeDays(form.scheduleDays).replaceFirstChar { it.lowercase() } +
                     if (form.scheduleDays.size == 7 && form.existing == null) " (recommended)" else "",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Gap(10)
-            DayCircles(form.scheduleDays) { form.scheduleDays = it }
-            Gap(12)
-            if (form.timeOn) {
-                TimeRange(form.startMinute, form.endMinute, onStart = { form.startMinute = it }, onEnd = { form.endMinute = it })
-                TextButton(onClick = { form.timeOn = false }) { Text("All day instead") }
-            } else {
-                PickRow("Specify time", emptyList(), null) { form.timeOn = true }
-            }
-            form.moreWindows.forEachIndexed { i, w ->
-                fun update(new: com.xern.xrnrule.domain.DayWindow) {
-                    form.moreWindows = form.moreWindows.toMutableList().also { it[i] = new }
-                }
-                Gap(12)
-                Hairline()
-                Gap(12)
-                DayCircles(w.days) { update(w.copy(days = it)) }
-                Gap(10)
-                TimeRange(
-                    w.window.startMinuteOfDay,
-                    w.window.endMinuteOfDay,
-                    onStart = { update(w.copy(window = w.window.copy(startMinuteOfDay = it))) },
-                    onEnd = { update(w.copy(window = w.window.copy(endMinuteOfDay = it))) },
-                )
-                TextButton(onClick = { form.moreWindows = form.moreWindows.toMutableList().also { it.removeAt(i) } }) {
-                    Text("Remove these times")
-                }
-            }
-            Gap(8)
-            DashedButton("More times", null) { form.moreWindows = form.moreWindows + newDayWindow() }
+            ScheduleEditor(form)
         }
         WhenMode.FOR_A_WHILE -> {
             MinuteChips(listOf(30, 60, 120, 240), form.lockdownMinutes, kinds.strict, format = ::shortMinutes) { form.lockdownMinutes = it }
@@ -808,18 +849,163 @@ private fun WhenSection(form: BlockFormState) {
     }
 }
 
-/** HABIT blocks: how long one unlock lasts, up to the daily unlock limit (I9). */
+/**
+ * HABIT blocks: how long one unlock lasts, up to the daily unlock limit (I9), as Habits First's
+ * "Block again after" card with its value as a menu.
+ */
 @Composable
-private fun UnlockLength(form: BlockFormState, capMinutes: Long) {
-    SectionLabel("Each unlock lasts")
-    MinuteChips(
-        listOf(5L, 10L, 15L, 30L, 60L).filter { it <= capMinutes },
-        form.unlockMinutes,
-        LocalKinds.current.habit,
-        format = ::shortMinutes,
-        max = capMinutes,
-    ) { form.unlockMinutes = it }
-    Note("Then it blocks again. All unlocks together give at most ${formatDuration(capMinutes * 60_000)} a day (Settings).")
+private fun BlockAgainCard(form: BlockFormState, capMinutes: Long) {
+    val red = LocalKinds.current.timer
+    var menu by remember { mutableStateOf(false) }
+    var custom by remember { mutableStateOf(false) }
+    HFCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(red.fill),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Filled.Autorenew, contentDescription = null, tint = red.color, modifier = Modifier.size(22.dp)) }
+            WGap(14)
+            Text("Block again after", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp), modifier = Modifier.weight(1f))
+            Box {
+                Text(
+                    shortMinutes(form.unlockMinutes),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Bold),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { menu = true }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                )
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    listOf(2L, 5L, 10L, 15L, 30L, 60L).filter { it <= capMinutes }.forEach { m ->
+                        DropdownMenuItem(
+                            text = { Text("$m min", fontWeight = if (m == form.unlockMinutes) FontWeight.Bold else null) },
+                            onClick = { form.unlockMinutes = m; menu = false },
+                        )
+                    }
+                    DropdownMenuItem(text = { Text("Other…") }, onClick = { menu = false; custom = true })
+                }
+            }
+        }
+        Gap(12)
+        Text(
+            "A ${form.unlockMinutes} minute timer starts, and blocks again at the end of it. All unlocks together give " +
+                "at most ${formatDuration(capMinutes * 60_000)} a day (Settings).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (custom) {
+        MinutesDialog(initial = form.unlockMinutes, max = capMinutes, onDismiss = { custom = false }, onConfirm = { form.unlockMinutes = it; custom = false })
+    }
+}
+
+/**
+ * When it blocks, as Habits First's folding card: "Blocks every day (recommended)", and open, the
+ * days and "Specify time". Every day with no times is "always"; a strict schedule block keeps its
+ * schedule whatever it says.
+ */
+@Composable
+private fun ScheduleCard(form: BlockFormState) {
+    val strict = form.mode == BlockMode.SCHEDULE
+    var open by remember { mutableStateOf(form.whenMode == WhenMode.SCHEDULE) }
+    fun settle() {
+        if (!strict) {
+            val always = form.scheduleDays.size == 7 && !form.timeOn && form.moreWindows.isEmpty()
+            form.whenMode = if (always) WhenMode.ALWAYS else WhenMode.SCHEDULE
+        }
+    }
+    val summary = if (form.whenMode == WhenMode.ALWAYS) {
+        "Blocks every day (recommended)"
+    } else {
+        "Blocks " + describeSchedule(
+            Schedule(form.scheduleDays, if (form.timeOn) TimeWindow(form.startMinute, form.endMinute) else null, form.moreWindows),
+        ).replaceFirstChar { it.lowercase() }
+    }
+    HFCard(padding = PaddingValues(0.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { open = !open }
+                .padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            WGap(12)
+            Text(summary, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Icon(
+                if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (open) "Fold" else "Change",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        AnimatedVisibility(open) {
+            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 20.dp)) {
+                ScheduleEditor(form, onChange = ::settle)
+                if (form.mode == BlockMode.ALLOWANCE && form.whenMode == WhenMode.ALWAYS) {
+                    Gap(4)
+                    Note("The limit counts all day, every day.")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The days a schedule blocks on, "Specify time" or its hours, and more times with their own
+ * days. [onChange] after a change to which days or whether there are times.
+ */
+@Composable
+private fun ScheduleEditor(form: BlockFormState, onChange: () -> Unit = {}) {
+    DayCircles(form.scheduleDays) { form.scheduleDays = it; onChange() }
+    Gap(12)
+    if (form.timeOn) {
+        TimeRange(form.startMinute, form.endMinute, onStart = { form.startMinute = it }, onEnd = { form.endMinute = it })
+        TextButton(onClick = { form.timeOn = false; onChange() }) { Text("All day instead") }
+    } else {
+        GreyButton("Specify time", Icons.Filled.AddCircle) { form.timeOn = true; onChange() }
+    }
+    form.moreWindows.forEachIndexed { i, w ->
+        fun update(new: com.xern.xrnrule.domain.DayWindow) {
+            form.moreWindows = form.moreWindows.toMutableList().also { it[i] = new }
+        }
+        Gap(12)
+        Hairline()
+        Gap(12)
+        DayCircles(w.days) { update(w.copy(days = it)) }
+        Gap(10)
+        TimeRange(
+            w.window.startMinuteOfDay,
+            w.window.endMinuteOfDay,
+            onStart = { update(w.copy(window = w.window.copy(startMinuteOfDay = it))) },
+            onEnd = { update(w.copy(window = w.window.copy(endMinuteOfDay = it))) },
+        )
+        TextButton(onClick = { form.moreWindows = form.moreWindows.toMutableList().also { it.removeAt(i) }; onChange() }) {
+            Text("Remove these times")
+        }
+    }
+    if (form.timeOn) {
+        Gap(8)
+        DashedButton("More times", null) { form.moreWindows = form.moreWindows + newDayWindow(); onChange() }
+    }
+}
+
+/** A wide grey button with its icon and label in the middle: "⊕ Specify time". */
+@Composable
+private fun GreyButton(label: String, icon: ImageVector, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RowShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(22.dp))
+        WGap(10)
+        Text(label, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp))
+    }
 }
 
 // =====================================================================================
@@ -851,20 +1037,21 @@ private fun KindCard(
             Modifier
                 .fillMaxWidth()
                 .then(if (onToggle != null) Modifier.clickable { onToggle(!selected) } else Modifier)
-                .padding(horizontal = 16.dp, vertical = if (selected) 14.dp else 16.dp),
+                .padding(start = if (selected) 14.dp else 17.dp, end = 12.dp, top = if (selected) 12.dp else 13.dp, bottom = if (selected) 12.dp else 13.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (selected) {
                 Box(
-                    Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(Color.Black.copy(alpha = 0.18f)),
+                    Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.18f)),
                     contentAlignment = Alignment.Center,
-                ) { Icon(icon, contentDescription = null, tint = kind.color, modifier = Modifier.size(22.dp)) }
+                ) { Icon(icon, contentDescription = null, tint = kind.color, modifier = Modifier.size(18.dp)) }
+                WGap(14)
             } else {
-                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                WGap(17)
             }
-            WGap(14)
             Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp))
                 if (selected && summary.isNotEmpty()) {
                     Text(summary, style = MaterialTheme.typography.bodySmall, color = kind.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -874,7 +1061,7 @@ private fun KindCard(
                     if (selected) Icons.Filled.CheckCircle else Icons.Filled.AddCircleOutline,
                     contentDescription = if (selected) "Remove $title" else "Add $title",
                     tint = if (selected) kind.color else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(26.dp),
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
@@ -882,7 +1069,7 @@ private fun KindCard(
             Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp), content = content)
         }
     }
-    Gap(10)
+    Gap(12)
 }
 
 @Composable
@@ -947,9 +1134,9 @@ fun DashedButton(label: String, kind: KindColors?, onClick: () -> Unit) {
             .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Add, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-        WGap(10)
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = color)
+        Icon(Icons.Filled.AddCircleOutline, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
+        WGap(12)
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = color)
     }
 }
 
@@ -989,20 +1176,29 @@ fun FieldBox(
 
 /** A big choice tile for step 3. */
 @Composable
-private fun OptionButton(icon: ImageVector, label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun OptionButton(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    centred: Boolean = false,
+    onClick: () -> Unit,
+) {
     val green = LocalKinds.current.habit
-    Column(
+    Row(
         modifier
-            .clip(RowShape)
+            .heightIn(min = 46.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(if (selected) green.fill else MaterialTheme.colorScheme.surfaceVariant)
-            .then(if (selected) Modifier.border(1.5.dp, green.border, RowShape) else Modifier)
+            .then(if (selected) Modifier.border(1.5.dp, green.border, RoundedCornerShape(12.dp)) else Modifier)
             .clickable(onClick = onClick)
-            .padding(vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = if (centred) 8.dp else 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (centred) Arrangement.Center else Arrangement.Start,
     ) {
-        Icon(icon, contentDescription = null, tint = if (selected) green.color else MaterialTheme.colorScheme.onSurfaceVariant)
-        Gap(6)
-        Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        Icon(icon, contentDescription = null, tint = if (selected) green.color else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        WGap(if (centred) 8 else 12)
+        Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1083,9 +1279,9 @@ private fun DayCircles(days: Set<Int>, onChange: (Set<Int>) -> Unit) {
             val name = java.time.DayOfWeek.of(day).getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
             Box(
                 Modifier
-                    .size(40.dp)
+                    .size(42.dp)
                     .clip(CircleShape)
-                    .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                    .background(if (on) DayBlue else MaterialTheme.colorScheme.surfaceVariant)
                     .clickable(role = Role.Checkbox) { onChange(if (on) days - day else days + day) }
                     .semantics { contentDescription = name },
                 contentAlignment = Alignment.Center,
@@ -1093,12 +1289,15 @@ private fun DayCircles(days: Set<Int>, onChange: (Set<Int>) -> Unit) {
                 Text(
                     name.take(1),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (on) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
 }
+
+/** Habits First's blue for the days a schedule blocks. */
+private val DayBlue = Color(0xFF3B82F6)
 
 @Composable
 private fun TimeRange(start: Int, end: Int, onStart: (Int) -> Unit, onEnd: (Int) -> Unit) {

@@ -159,12 +159,12 @@ fun formatMs(ms: Long): String {
 
 /** A small caps heading over a group: "FROM YOUR PHONE". */
 @Composable
-fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+fun SectionLabel(text: String, modifier: Modifier = Modifier, top: Dp = 20.dp) {
     Text(
         text = text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold, fontSize = 11.sp, letterSpacing = 0.9.sp),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(start = 4.dp, top = 20.dp, bottom = 8.dp),
+        modifier = modifier.padding(start = 4.dp, top = top, bottom = 10.dp),
     )
 }
 
