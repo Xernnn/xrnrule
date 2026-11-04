@@ -196,6 +196,18 @@ function how(b) {
 
 // ---- views ---------------------------------------------------------------------------------
 
+/**
+ * The block's picture, as the phone's card has one: its site's icon, up to four of them, or the
+ * first letter of its laptop app (the page has no app icons).
+ */
+function blockTile(b) {
+  const icons = b.shownSites.slice(0, 4).map(siteIcon).filter(Boolean);
+  if (icons.length === 1) return h("div", { class: "tile one" }, icons[0]);
+  if (icons.length > 1) return h("div", { class: "tile many" }, icons);
+  const first = (b.desktopApps.length ? appName(b.desktopApps[0]) : b.name).trim();
+  return h("div", { class: "tile" }, h("span", { class: "glyph" }, (first[0] ?? "x").toUpperCase()));
+}
+
 function blockCard(b) {
   const [cls, text] = status(b);
   const hasTimer = b.mode === "HABIT" && (b.trigger === "TIMER" || b.trigger === "COMBINED") && b.state === "ARMED";
@@ -209,14 +221,16 @@ function blockCard(b) {
   if (b.mode === "LOCKDOWN" && b.lockdownRemainingMs === 0 && b.enabled) {
     actions.push(h("button", { class: "btn", onclick: () => act({ type: "lockdown", blockId: b.id }) }, `Start lockdown (${min(b.lockdownMs)} min)`));
   }
-  if (!onBlockPage && form?.blockId !== b.id) {
-    actions.push(h("button", { class: "btn ghost", onclick: () => openForm(b) }, "Edit"));
-  }
+  const edit = !onBlockPage && form?.blockId !== b.id && h("button", { class: "btn edit", onclick: () => openForm(b) }, "Edit");
   return h("section", { class: "card block" },
-    h("div", { class: "top" },
-      h("h3", {}, b.name),
-      h("span", { class: "chip" }, KIND[b.mode] ?? b.mode.toLowerCase()),
-      b.hardcore && h("span", { class: "chip" }, "hardcore")),
+    h("div", { class: "head" },
+      blockTile(b),
+      h("div", { class: "name" },
+        h("h3", {}, b.name),
+        h("div", { class: "chips" },
+          h("span", { class: "chip" }, KIND[b.mode] ?? b.mode.toLowerCase()),
+          b.hardcore && h("span", { class: "chip strict" }, "hardcore"))),
+      edit),
     h("div", { class: `status ${cls}` }, text),
     hasTimer && h("div", {},
       h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (b.timerMs / Math.max(1, b.requiredMs)) * 100)}%` })),
@@ -628,11 +642,11 @@ function render() {
   const app = document.getElementById("app");
   const scrollY = window.scrollY;
   const header = h("header", { class: "bar" }, h("div", { class: "wrap" },
-    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), "xrnrule", h("small", {}, "laptop"))),
+    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), h("span", { class: "wordmark" }, "xrnrule"), h("small", {}, "laptop"))),
     h("span", { class: "spacer" }),
     state && h("span", { class: "dot" + (!state.syncConfigured ? " idle" : state.sync?.ok === false ? " off" : "") },
       !state.syncConfigured ? "Local only" : state.sync?.ok === false ? "Offline" : "Synced"),
-    state?.habitsUrl && h("a", { href: state.habitsUrl, target: "_blank" }, "Habits")));
+    state?.habitsUrl && h("a", { class: "link", href: state.habitsUrl, target: "_blank" }, "Habits")));
 
   if (!state) {
     app.replaceChildren(header, h("main", { class: "wrap" }, alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d))));
