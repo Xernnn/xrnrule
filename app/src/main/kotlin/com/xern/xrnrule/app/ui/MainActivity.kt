@@ -39,8 +39,8 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavController
 import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -51,6 +51,7 @@ import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.block.BlockerForegroundService
 import com.xern.xrnrule.app.data.AppContainer
 import com.xern.xrnrule.app.data.AppLock
+import com.xern.xrnrule.app.loop.LinksContract
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 import com.xern.xrnrule.domain.BlockEvent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -219,6 +220,17 @@ private fun XrnruleScreens(container: AppContainer) {
             nav.navigate("focus/$id") { launchSingleTop = true }
         }
     }
+    // A link to a block: the Blocks tab, which scrolls to it once past the lock.
+    val blockLink by AppLinks.block.collectAsStateWithLifecycle()
+    LaunchedEffect(blockLink) {
+        // Not when the Blocks tab is up already: going there again would remake it mid-scroll.
+        if (blockLink != null && nav.currentDestination?.route != Tab.Blocks.route) {
+            nav.navigate(Tab.Blocks.route) {
+                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+            }
+        }
+    }
     val openFocus: (String, Boolean) -> Unit = { id, start ->
         if (start) store.dispatch(BlockEvent.StartFocus(id))
         nav.navigate("focus/$id") { launchSingleTop = true }
@@ -335,8 +347,16 @@ object AppLinks {
             .putExtra(EXTRA_FOCUS, habitId)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
+    /** A block to show on the Blocks tab, until it scrolls there. */
+    val block = MutableStateFlow<String?>(null)
+
     fun handle(intent: Intent?) {
         intent?.getStringExtra(EXTRA_FOCUS)?.let { focus.value = it }
+        // xrnrule://open?block=<id>: xrnloops' lock line and earned banner (LinksContract.OPEN_*).
+        val data = intent?.data
+        if (data?.scheme == LinksContract.OPEN_SCHEME && data.host == LinksContract.OPEN_HOST) {
+            data.getQueryParameter(LinksContract.OPEN_PARAM_BLOCK)?.takeIf { it.isNotBlank() }?.let { block.value = it }
+        }
     }
 }
 

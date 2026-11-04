@@ -68,6 +68,11 @@ object LinksContract {
     const val STATE_READY = "ready"
     const val STATE_OPEN = "open"
 
+    /** `xrnrule://open?block=<block_id>` opens xrnrule on that block's card (an unknown id: the Blocks tab). */
+    const val OPEN_SCHEME = "xrnrule"
+    const val OPEN_HOST = "open"
+    const val OPEN_PARAM_BLOCK = "block"
+
     val COLUMNS = arrayOf(
         COLUMN_HABIT_UUID, COLUMN_BLOCK_ID, COLUMN_BLOCK_NAME, COLUMN_TARGETS,
         COLUMN_UNLOCK_MINUTES, COLUMN_STATE, COLUMN_OPEN_UNTIL, COLUMN_HABIT_DONE,

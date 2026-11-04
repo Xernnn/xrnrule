@@ -4,6 +4,7 @@ package com.xern.xrnrule.app.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -39,10 +41,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -55,6 +59,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.InstalledApps
@@ -77,6 +82,8 @@ import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.appliesHere
 import com.xern.xrnrule.domain.deleteBlock
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /**
  * The Blocks tab: a card per block that shows what it asks for and lets you do it right there
@@ -106,6 +113,30 @@ fun BlocksScreen(
 
     fun guarded(block: Block, request: LoosenRequest) {
         if (BlockEdits.guardNeeded(store.engine, world, block, store.clock)) loosen = request else request.apply()
+    }
+
+    // A link to one block (xrnrule://open?block=…): scroll to its card and outline it a moment.
+    val list = rememberLazyListState()
+    val linked by AppLinks.block.collectAsStateWithLifecycle()
+    var outlined by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(linked) {
+        val id = linked ?: return@LaunchedEffect
+        val index = world.blocks.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            val at = index + (if (missing.isNotEmpty()) 1 else 0) + (if (pauseLeft > 0) 1 else 0)
+            // Just opened, the list hasn't been laid out yet, and a scroll then goes nowhere.
+            snapshotFlow { list.layoutInfo.totalItemsCount }.first { it > at }
+            list.animateScrollToItem(at)
+            outlined = id
+        }
+        // Taken only once shown: if this screen goes meanwhile, the next one shows it.
+        AppLinks.block.value = null
+    }
+    LaunchedEffect(outlined) {
+        if (outlined != null) {
+            delay(2_500)
+            outlined = null
+        }
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -139,6 +170,7 @@ fun BlocksScreen(
 
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = list,
             contentPadding = ScreenPadding,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -183,6 +215,7 @@ fun BlocksScreen(
                         }
                     },
                     guard = guard,
+                    outlined = outlined == block.id,
                     onUnhardcore = {
                         guarded(
                             block,
@@ -296,6 +329,8 @@ private fun BlockCard(
     onDelete: () -> Unit,
     guard: HardcoreGuard,
     onUnhardcore: () -> Unit,
+    /** Shown from a link: outlined for a moment. */
+    outlined: Boolean = false,
 ) {
     if (block.mode != BlockMode.HABIT || block.state == BlockState.UNLOCKED) rememberTicker() // countdowns move with time
     var menu by remember { mutableStateOf(false) }
@@ -307,6 +342,7 @@ private fun BlockCard(
         HFCard(
             Modifier
                 .clip(CardShape)
+                .then(if (outlined) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CardShape) else Modifier)
                 .combinedClickable(onClick = onOpen, onLongClick = { menu = true }),
         ) {
             // Habits First's header: the icon, the name, and the switch with the lock under it.
