@@ -157,8 +157,8 @@ a newer one, and needs `~/.config/xrnrule/release.json`:
 
 ## Build
 
-Requirements: **JDK 17** (Gradle 8.11.1 doesn't run on newer JDKs) and the Android SDK
-(platform 35). Point Gradle at the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`.
+Requirements: **JDK 17 or newer** (Gradle 9.8 runs on 17 through 27; everything is built
+for Java 17 whatever the JDK) and the Android SDK (platform 35, build tools 36). Point Gradle at the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`.
 
 ```sh
 ./gradlew :domain:test                 # engine unit tests (pure JVM)

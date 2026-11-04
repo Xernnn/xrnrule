@@ -2,7 +2,7 @@
 # Installs xrnrule on this laptop (KDE Plasma 6 on Linux): the daemon, its KWin script, and a
 # systemd user service that keeps it running. Run it again to update. See desktop/README.md.
 #
-#   desktop/install.sh            build (needs JDK 17 in JAVA_HOME) and install
+#   desktop/install.sh            build (JDK 17 or newer) and install
 #   desktop/install.sh --no-build install what desktop/build/install already has
 set -euo pipefail
 

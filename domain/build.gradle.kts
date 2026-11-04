@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
@@ -8,8 +10,12 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// Java 17 bytecode and API, built by whatever JDK runs Gradle (17 or newer): no toolchain to find.
 kotlin {
-    jvmToolchain(17)
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+        freeCompilerArgs.add("-Xjdk-release=17")
+    }
 }
 
 dependencies {

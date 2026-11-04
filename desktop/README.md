@@ -19,7 +19,7 @@ bought minutes, the daily unlock limit, the 15-minute break and lockdowns are sh
 
 ## Install
 
-Needs JDK 17 to build (the same toolchain as the Android app), plus KDE Plasma 6 with
+Needs JDK 17 or newer to build (it targets Java 17, like the Android app), plus KDE Plasma 6 with
 `qdbus6`, `kwriteconfig6`, `notify-send` and `xdg-open`.
 
 ```sh

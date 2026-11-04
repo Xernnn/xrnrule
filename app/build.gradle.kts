@@ -1,8 +1,9 @@
 import java.util.Properties
+import javax.inject.Inject
 
 plugins {
+    // Kotlin is built into AGP 9: no kotlin-android plugin.
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -64,26 +65,47 @@ android {
         }
     }
 
+    // Kotlin's jvmTarget follows targetCompatibility.
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
 }
 
 // The phone's block page is the extension's (extension/block.*), served by the app itself at
 // http://127.0.0.1:47321/block (see ExtensionServer); copied in at build time so there's one copy.
-val blockPage = tasks.register<Sync>("blockPage") {
-    from(rootProject.file("extension")) {
-        // manifest.json only for its version: the extension this build was made with (not served).
-        include("block.html", "block.js", "shared.js", "page.css", "icons/icon-48.png", "manifest.json")
+abstract class BlockPage : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val page: ConfigurableFileCollection
+
+    /** The assets folder AGP adds (see onVariants below); the page goes under web/. */
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @get:Inject
+    abstract val files: FileSystemOperations
+
+    @TaskAction
+    fun copy() {
+        files.sync {
+            from(page)
+            into(outputDir.dir("web"))
+        }
     }
-    into(layout.buildDirectory.dir("generated/blockPage/web"))
 }
-android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/blockPage"))
-tasks.named("preBuild") { dependsOn(blockPage) }
+
+val blockPage = tasks.register<BlockPage>("blockPage") {
+    page.from(
+        rootProject.fileTree("extension") {
+            // manifest.json only for its version: the extension this build was made with (not served).
+            include("block.html", "block.js", "shared.js", "page.css", "icons/icon-48.png", "manifest.json")
+        },
+    )
+}
+androidComponents {
+    onVariants { variant -> variant.sources.assets?.addGeneratedSourceDirectory(blockPage, BlockPage::outputDir) }
+}
 
 dependencies {
     implementation(project(":domain"))

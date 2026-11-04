@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 // The laptop half of xrnrule: the same engine (:domain) enforcing the same shared blocks on
 // websites (through desktop/extension) and desktop apps (through the KWin script in desktop/kwin).
 plugins {
@@ -11,8 +13,12 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// Java 17 bytecode and API, built by whatever JDK runs Gradle (17 or newer): no toolchain to find.
 kotlin {
-    jvmToolchain(17)
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+        freeCompilerArgs.add("-Xjdk-release=17")
+    }
 }
 
 application {
