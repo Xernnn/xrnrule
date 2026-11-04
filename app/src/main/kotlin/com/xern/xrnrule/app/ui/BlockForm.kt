@@ -106,10 +106,15 @@ import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.CombineMode
 import com.xern.xrnrule.domain.EnforcementTier
+import com.xern.xrnrule.domain.FormKind
 import com.xern.xrnrule.domain.HabitKind
+import com.xern.xrnrule.domain.LinkDraft
 import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TimeWindow
+import com.xern.xrnrule.domain.WhenMode
+import com.xern.xrnrule.domain.deleteBlock
+import com.xern.xrnrule.domain.withBlock
 import com.xern.xrnrule.domain.withHabit
 import java.util.UUID
 
@@ -291,7 +296,7 @@ fun EditBlockScreen(
             store.edit { w -> w.withBlock(updated, form.toItems(existing.id, w.items(existing.id))) }
             onDone()
         }
-        val loosens = BlockEdits.loosens(existing, updated) || itemsLoosen(oldItems, newItems)
+        val loosens = form.saveLoosens(oldItems)
         if (loosens && BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
             loosen = LoosenRequest("Save these changes?", "They make ${existing.name} easier to get past.", hardcore, listOf(existing.id)) { apply() }
         } else {
@@ -660,7 +665,7 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
         Note("You could also choose nothing, which just keeps it blocked.")
     }
 
-    if (form.hasTimer && form.hasChecklist) {
+    if (form.draft().let { it.hasTimer && it.hasChecklist }) {
         Gap(16)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("To unlock", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))

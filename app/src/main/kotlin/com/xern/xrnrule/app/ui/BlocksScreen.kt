@@ -74,6 +74,7 @@ import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.deleteBlock
 
 /**
  * The Blocks tab: a card per block that shows what it asks for and lets you do it right there

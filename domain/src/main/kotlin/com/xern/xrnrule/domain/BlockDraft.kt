@@ -1,0 +1,372 @@
+package com.xern.xrnrule.domain
+
+import java.util.UUID
+
+/** Step 3 of a new block: always on, on a schedule, or (with nothing to unlock it) for a while. */
+enum class WhenMode { ALWAYS, SCHEDULE, FOR_A_WHILE }
+
+/** The ways to unlock (or limit) a block that the phone's form offers. */
+enum class FormKind { APP_TIME, TIMER, MANUAL, FOCUS, LOOP, LIMIT }
+
+/** A task row being edited; [id] is the checklist item it was, null for a new one. */
+data class TaskDraft(val key: String, val id: String?, val text: String)
+
+/**
+ * A habit item with a day rule being edited (contract I23: yesterday's entry, or days its goal is
+ * met); [itemId] is null for a new one.
+ */
+data class LinkDraft(
+    val itemId: String?,
+    val uuid: String,
+    val name: String,
+    val yesterday: Boolean,
+    val goal: Boolean,
+    /** Every-day habits have no "goal days" choice: ticked and goal met are the same day. */
+    val daily: Boolean,
+)
+
+/**
+ * Everything the phone's new-block wizard and edit page let you set, in the form's words ("app
+ * time", "manual timer", "nothing, just block it"), and the [Block] and checklist it makes. Plain
+ * data, so what decides whether a save loosens a block (§2.3) is tested here rather than only by
+ * hand. A block's kind can't change once made (an edit keeps HABIT a HABIT); within a HABIT block
+ * anything can.
+ */
+data class BlockDraft(
+    /** The block being edited, null for a new one. */
+    val existing: Block? = null,
+    /** Every habit there is: a picked habit's kind and name are looked up here. */
+    val habits: List<Habit> = emptyList(),
+
+    val name: String = "",
+    val apps: Set<String> = emptySet(),
+    val sites: Set<String> = emptySet(),
+    val exceptSites: Set<String> = emptySet(),
+
+    // ---- what unlocks it ----
+    val appTimeOn: Boolean = false,
+    val appTimeApps: Set<String> = emptySet(),
+    val appTimeMinutes: Long = 15,
+    val timerOn: Boolean = false,
+    val timerMinutes: Long = 30,
+    /** Tasks typed into a block before habits were shared ones; kept until removed. */
+    val tasks: List<TaskDraft> = emptyList(),
+    /** The habits the block asks for with no day rule (contract I36), in order. */
+    val habitIds: List<String> = emptyList(),
+    val manualOn: Boolean = false,
+    val focusOn: Boolean = false,
+    /** Habit items with a day rule (yesterday's, or goal days): the "Tracked habit" card. */
+    val links: List<LinkDraft> = emptyList(),
+    val loopOn: Boolean = false,
+    val combineMode: CombineMode = CombineMode.AND,
+
+    // ---- daily limit ----
+    val limitOn: Boolean = false,
+    val dailyOn: Boolean = true,
+    val dailyMinutes: Long = 30,
+    val rowOn: Boolean = false,
+    val rowMinutes: Long = 15,
+    val rowBreakMinutes: Long = 15,
+    val perDevice: Boolean = false,
+
+    // ---- when ----
+    val whenMode: WhenMode = WhenMode.ALWAYS,
+    val scheduleDays: Set<Int> = (1..7).toSet(),
+    val timeOn: Boolean = false,
+    val startMinute: Int = 9 * 60,
+    val endMinute: Int = 17 * 60,
+    val moreWindows: List<DayWindow> = emptyList(),
+    val lockdownMinutes: Long = 60,
+
+    // ---- the unlock ----
+    val unlockMinutes: Long = 15,
+    /** I41: an unlock is so many minutes of use over the day rather than a timer. */
+    val selfPaced: Boolean = false,
+    val hardcore: Boolean = false,
+) {
+    private fun isTimer(habitId: String) = habits.firstOrNull { it.id == habitId }?.kind == HabitKind.TIMER
+
+    /** Picked habits you tick or count ("Manual habit"), and timer habits ("Manual timer"). */
+    val doHabits: List<String> get() = habitIds.filterNot(::isTimer)
+    val timerHabits: List<String> get() = habitIds.filter(::isTimer)
+
+    val habitChosen: Boolean get() = appTimeOn || timerOn || manualOn || focusOn || loopOn
+    val hasTimer: Boolean get() = appTimeOn || timerOn
+    val hasChecklist: Boolean
+        get() = (manualOn && (tasks.any { it.text.isNotBlank() } || doHabits.isNotEmpty())) ||
+            (focusOn && timerHabits.isNotEmpty()) || (loopOn && links.isNotEmpty())
+
+    /** The block's kind, from what's picked: a limit, habits, or nothing (a schedule or a lockdown). */
+    val mode: BlockMode
+        get() = existing?.mode ?: when {
+            limitOn -> BlockMode.ALLOWANCE
+            habitChosen -> BlockMode.HABIT
+            whenMode == WhenMode.FOR_A_WHILE -> BlockMode.LOCKDOWN
+            else -> BlockMode.SCHEDULE
+        }
+
+    /**
+     * One way to unlock turned on or off. Picking a habit drops the limit and the other way round;
+     * a block has one timer, so app time and the wait timer exclude each other; with something to
+     * unlock it or a limit, "for a while" (a lockdown) goes back to always.
+     */
+    fun withKind(kind: FormKind, on: Boolean): BlockDraft {
+        var d = when (kind) {
+            FormKind.APP_TIME -> copy(appTimeOn = on, timerOn = if (on) false else timerOn)
+            FormKind.TIMER -> copy(timerOn = on, appTimeOn = if (on) false else appTimeOn)
+            FormKind.MANUAL -> copy(manualOn = on)
+            FormKind.FOCUS -> copy(focusOn = on)
+            FormKind.LOOP -> copy(loopOn = on)
+            FormKind.LIMIT -> copy(limitOn = on)
+        }
+        if (on && kind == FormKind.LIMIT) d = d.copy(appTimeOn = false, timerOn = false, manualOn = false, focusOn = false, loopOn = false)
+        if (on && kind != FormKind.LIMIT) d = d.copy(limitOn = false)
+        if ((d.habitChosen || d.limitOn) && d.whenMode == WhenMode.FOR_A_WHILE) d = d.copy(whenMode = WhenMode.ALWAYS)
+        return d
+    }
+
+    /** One habit added to the block, unless it's there. */
+    fun withHabit(id: String): BlockDraft = if (id in habitIds) this else copy(habitIds = habitIds + id)
+
+    /** The habits of one card after its picker: the other card's stay as they are. */
+    fun withHabits(timers: Boolean, ids: Set<String>): BlockDraft {
+        val keep = habitIds.filter { isTimer(it) != timers || it in ids }
+        return copy(habitIds = keep + ids.filter { it !in keep })
+    }
+
+    /** The "Tracked habit" card after its picker: kept ones keep their choices, new ones count today's tick. */
+    fun withLinks(ids: Set<String>): BlockDraft {
+        val kept = links.filter { it.uuid in ids }
+        val added = ids.filter { id -> kept.none { it.uuid == id } }.mapNotNull { id ->
+            habits.firstOrNull { it.id == id }?.let { LinkDraft(null, it.id, it.name, yesterday = false, goal = false, daily = isDaily(it)) }
+        }
+        return copy(links = kept + added)
+    }
+
+    val hasTargets: Boolean get() = apps.isNotEmpty() || sites.isNotEmpty() || existing?.targetDesktopApps?.isNotEmpty() == true
+
+    /** Why step 1 (what to block) can't go on yet. */
+    fun targetsHint(): String? = if (!hasTargets) "Pick an app or a website to block" else null
+
+    /** Why step 2 (what unlocks it) can't go on yet. */
+    fun unlockHint(): String? = when {
+        appTimeOn && appTimeApps.isEmpty() -> "Pick the apps whose time counts"
+        manualOn && tasks.none { it.text.isNotBlank() } && doHabits.isEmpty() -> "Pick or make a habit"
+        focusOn && timerHabits.isEmpty() -> "Pick or make a timer"
+        loopOn && links.isEmpty() -> "Pick at least one habit"
+        limitOn && !dailyOn && !rowOn -> "Set minutes a day, minutes in a row, or both"
+        existing?.mode == BlockMode.HABIT && !habitChosen -> "Pick at least one way to unlock it"
+        else -> null
+    }
+
+    /** Why step 3 (when) can't be saved yet. [capMinutes] is the daily unlock limit (I9). */
+    fun whenHint(capMinutes: Long): String? = when {
+        whenMode == WhenMode.SCHEDULE && scheduleDays.isEmpty() -> "Pick at least one day"
+        whenMode == WhenMode.SCHEDULE && timeOn && startMinute == endMinute -> "Start and end can't be the same time"
+        whenMode == WhenMode.SCHEDULE && moreWindows.any { it.days.isEmpty() } -> "Pick at least one day for each time"
+        whenMode == WhenMode.SCHEDULE && moreWindows.any { it.window.startMinuteOfDay == it.window.endMinuteOfDay } ->
+            "Start and end can't be the same time"
+        mode == BlockMode.LOCKDOWN && lockdownMinutes <= 0 -> "Set how long to block"
+        mode == BlockMode.HABIT && unlockMinutes <= 0 -> "Set how long an unlock lasts"
+        mode == BlockMode.HABIT && unlockMinutes > capMinutes ->
+            "An unlock can't be longer than your daily unlock limit ($capMinutes min, in Settings)"
+        else -> null
+    }
+
+    /** The first thing stopping a save, or null. */
+    fun hint(capMinutes: Long): String? =
+        targetsHint() ?: unlockHint() ?: whenHint(capMinutes) ?: if (existing != null && name.isBlank()) "Give the block a name" else null
+
+    private fun builtSchedule(): Schedule = when {
+        mode == BlockMode.LOCKDOWN || whenMode != WhenMode.SCHEDULE -> Schedule.ALWAYS
+        else -> Schedule(scheduleDays, if (timeOn) TimeWindow(startMinute, endMinute) else null, moreWindows)
+    }
+
+    private fun builtTrigger(): Trigger {
+        if (mode != BlockMode.HABIT) return existing?.trigger ?: Trigger(TriggerType.CHECKLIST, Defaults.ALL_ITEMS, TriggerUnit.ITEMS)
+        val timerMs = (if (appTimeOn) appTimeMinutes else timerMinutes) * 60_000
+        val pkgs = if (appTimeOn) appTimeApps else emptySet()
+        return when {
+            hasTimer && hasChecklist -> Trigger(TriggerType.COMBINED, timerMs, TriggerUnit.MS, combineMode, pkgs)
+            hasTimer -> Trigger(TriggerType.TIMER, timerMs, TriggerUnit.MS, habitPackages = pkgs)
+            else -> Trigger(
+                TriggerType.CHECKLIST,
+                // An old "any N of them" block keeps its N while it stays a checklist.
+                existing?.trigger?.takeIf { it.type == TriggerType.CHECKLIST }?.requiredAmount ?: Defaults.ALL_ITEMS,
+                TriggerUnit.ITEMS,
+            )
+        }
+    }
+
+    /** The block this form describes: a new one with [id], or [existing] with its settings replaced. */
+    fun toBlock(id: String, autoName: String): Block {
+        val mode = mode
+        val base = existing ?: Block(id = id, name = "", trigger = builtTrigger(), state = BlockState.ARMED)
+        return base.copy(
+            name = name.trim().ifEmpty { autoName },
+            targetPackages = apps,
+            targetSites = sites,
+            exceptSites = exceptSites.filterTo(mutableSetOf()) { e -> sites.any { Sites.matches(e, it) } },
+            trigger = builtTrigger(),
+            reward = (existing?.reward ?: Reward()).copy(unlockDurationMs = unlockMinutes * 60_000),
+            schedule = builtSchedule(),
+            mode = mode,
+            dailyAllowanceMs = if (mode == BlockMode.ALLOWANCE) (if (dailyOn) dailyMinutes * 60_000 else 0) else base.dailyAllowanceMs,
+            sessionMs = if (mode == BlockMode.ALLOWANCE) (if (rowOn) rowMinutes * 60_000 else 0) else base.sessionMs,
+            sessionBreakMs = if (mode == BlockMode.ALLOWANCE) (if (rowOn) rowBreakMinutes * 60_000 else 0) else base.sessionBreakMs,
+            perDevice = if (mode == BlockMode.ALLOWANCE) perDevice else base.perDevice,
+            lockdownMs = if (mode == BlockMode.LOCKDOWN) lockdownMinutes * 60_000 else base.lockdownMs,
+            selfPaced = mode == BlockMode.HABIT && selfPaced,
+            enforcementTier = if (hardcore) EnforcementTier.HARDCORE else EnforcementTier.SOFT,
+        )
+    }
+
+    /**
+     * The block's checklist after this form: kept items keep their ticks and what they spent, new
+     * ones start unticked with an id from [newId].
+     */
+    fun toItems(blockId: String, old: List<ChecklistItem>, newId: () -> String = { UUID.randomUUID().toString() }): List<ChecklistItem> {
+        if (mode != BlockMode.HABIT) return old
+        val byId = old.associateBy { it.id }
+        val taskItems = if (manualOn) tasks.filter { it.text.isNotBlank() } else emptyList()
+        val linkItems = if (loopOn) links else emptyList()
+        val linkedIds = linkItems.mapNotNull { it.itemId }.toSet()
+        val byHabit = old.filter { it.habitId != null && it.id !in linkedIds }.associateBy { it.habitId }
+        val picked = (if (manualOn) doHabits else emptyList()) + (if (focusOn) timerHabits else emptyList())
+        val habitItems = picked.mapIndexed { i, id ->
+            val name = habits.firstOrNull { it.id == id }?.name ?: ""
+            // A kept habit keeps what this block spent of it today (I36).
+            byHabit[id]?.copy(text = name, order = i)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = name, order = i, habitId = id)
+        }
+        val plain = habitItems + taskItems.mapIndexed { i, t ->
+            byId[t.id]?.copy(text = t.text.trim(), order = habitItems.size + i)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = t.text.trim(), order = habitItems.size + i)
+        }
+        val linked = linkItems.mapIndexed { i, l ->
+            val day = if (l.yesterday) LinkedDay.YESTERDAY else LinkedDay.TODAY
+            // Unticking both choices keeps the item: it then counts today's tick, like a plain one.
+            byId[l.itemId]?.copy(order = plain.size + i, habitId = l.uuid, externalHabitId = null, linkedDay = day, countsGoal = l.goal)
+                ?: ChecklistItem(
+                    id = "$blockId-${newId()}",
+                    blockId = blockId,
+                    text = l.name,
+                    order = plain.size + i,
+                    habitId = l.uuid,
+                    linkedDay = day,
+                    countsGoal = l.goal,
+                )
+        }
+        return plain + linked
+    }
+
+    /**
+     * Whether saving this form over [existing] and its [oldItems] makes the block easier to get
+     * past (§2.3): the block's own settings ([BlockEdits.loosens]) or its checklist ([itemsLoosen]).
+     */
+    fun saveLoosens(oldItems: List<ChecklistItem>): Boolean {
+        val old = existing ?: return false
+        return BlockEdits.loosens(old, toBlock(old.id, old.name)) || itemsLoosen(oldItems, toItems(old.id, oldItems))
+    }
+
+    companion object {
+        /** The form for [existing] (null: a new block) and its checklist [items]. */
+        fun of(existing: Block?, items: List<ChecklistItem>, habits: List<Habit>): BlockDraft {
+            if (existing == null) return BlockDraft(habits = habits)
+            val trigger = existing.trigger
+            val hadTimer = existing.mode == BlockMode.HABIT && (trigger.type == TriggerType.TIMER || trigger.type == TriggerType.COMBINED)
+            val timerMinutes = trigger.requiredAmount / 60_000
+            val appTimeOn = hadTimer && trigger.habitPackages.isNotEmpty()
+            val timerOn = hadTimer && trigger.habitPackages.isEmpty()
+            val tasks = items.filter { !it.derived }.sortedBy { it.order }.map { TaskDraft(it.id, it.id, it.text) }
+            fun hasDayRule(item: ChecklistItem) = item.linkedDay == LinkedDay.YESTERDAY || item.countsGoal
+            val habitIds = items.filter { it.derived && !hasDayRule(it) }.sortedBy { it.order }.map { it.habitId ?: it.externalHabitId!! }
+            val links = items.filter { it.derived && hasDayRule(it) }.sortedBy { it.order }.map {
+                val id = it.habitId ?: it.externalHabitId!!
+                val habit = habits.firstOrNull { h -> h.id == id }
+                LinkDraft(it.id, id, habit?.name ?: it.text, it.linkedDay == LinkedDay.YESTERDAY, it.countsGoal, daily = habit?.let(::isDaily) ?: !it.countsGoal)
+            }
+            val limit = existing.takeIf { it.mode == BlockMode.ALLOWANCE }
+            val schedule = existing.schedule
+            val whenMode = when {
+                existing.mode == BlockMode.LOCKDOWN -> WhenMode.FOR_A_WHILE
+                schedule != Schedule.ALWAYS -> WhenMode.SCHEDULE
+                else -> WhenMode.ALWAYS
+            }
+            val draft = BlockDraft(
+                existing = existing,
+                habits = habits,
+                name = existing.name,
+                apps = existing.targetPackages,
+                sites = existing.targetSites,
+                exceptSites = existing.exceptSites,
+                appTimeOn = appTimeOn,
+                appTimeApps = trigger.habitPackages,
+                appTimeMinutes = if (appTimeOn) timerMinutes else 15,
+                timerOn = timerOn,
+                timerMinutes = if (timerOn) timerMinutes else 30,
+                tasks = tasks,
+                habitIds = habitIds,
+                links = links,
+                loopOn = links.isNotEmpty(),
+                combineMode = trigger.combineMode,
+                limitOn = limit != null,
+                dailyOn = limit == null || limit.dailyAllowanceMs > 0,
+                dailyMinutes = limit?.dailyAllowanceMs?.takeIf { it > 0 }?.div(60_000) ?: 30,
+                rowOn = limit?.hasRowRule == true,
+                rowMinutes = limit?.takeIf { it.hasRowRule }?.sessionMs?.div(60_000) ?: 15,
+                rowBreakMinutes = limit?.takeIf { it.hasRowRule }?.sessionBreakMs?.div(60_000) ?: 15,
+                perDevice = limit?.perDevice == true,
+                whenMode = whenMode,
+                scheduleDays = schedule.activeDays.takeIf { whenMode == WhenMode.SCHEDULE } ?: (1..7).toSet(),
+                timeOn = schedule.activeWindow != null,
+                startMinute = schedule.activeWindow?.startMinuteOfDay ?: (9 * 60),
+                endMinute = schedule.activeWindow?.endMinuteOfDay ?: (17 * 60),
+                moreWindows = schedule.moreWindows,
+                lockdownMinutes = existing.lockdownMs.takeIf { it > 0 }?.div(60_000) ?: 60,
+                unlockMinutes = existing.reward.unlockDurationMs / 60_000,
+                selfPaced = existing.selfPaced,
+                hardcore = existing.enforcementTier == EnforcementTier.HARDCORE,
+            )
+            return draft.copy(manualOn = tasks.isNotEmpty() || draft.doHabits.isNotEmpty(), focusOn = draft.timerHabits.isNotEmpty())
+        }
+    }
+}
+
+/**
+ * Whether going from [old] to [new] items makes the checklist easier: an item gone, or a habit
+ * item counting a different day or goal days (contract §2.3). Adding items only tightens it.
+ */
+fun itemsLoosen(old: List<ChecklistItem>, new: List<ChecklistItem>): Boolean {
+    val newById = new.associateBy { it.id }
+    return old.any { o ->
+        val n = newById[o.id] ?: return@any true
+        o.derived && (n.linkedDay != o.linkedDay || (n.countsGoal && !o.countsGoal))
+    }
+}
+
+/** A habit whose ticked days and goal days are the same: every day, or an amount. */
+fun isDaily(habit: Habit): Boolean = habit.numerical || habit.freqNum == habit.freqDen
+
+/** [block] and its checklist [items], added or replacing the block of that id. */
+fun World.withBlock(block: Block, items: List<ChecklistItem>): World {
+    val exists = blocks.any { it.id == block.id }
+    return copy(
+        // An edit keeps the block's state: it moves on through events only.
+        // Nor does it touch the lock (I39), which only its own dialog sets.
+        blocks = if (exists) blocks.map { if (it.id == block.id) block.copy(state = it.state, lock = it.lock) else it } else blocks + block,
+        checklist = if (items.isEmpty()) checklist - block.id else checklist + (block.id to items),
+    )
+}
+
+/** The world without the block [blockId] and everything that hangs off it. */
+fun World.deleteBlock(blockId: String): World = copy(
+    blocks = blocks.filterNot { it.id == blockId },
+    progress = progress - blockId,
+    credits = credits - blockId,
+    sessions = sessions - blockId,
+    lockdowns = lockdowns - blockId,
+    checklist = checklist - blockId,
+    runs = runs - blockId,
+    overrides = overrides - blockId,
+)
