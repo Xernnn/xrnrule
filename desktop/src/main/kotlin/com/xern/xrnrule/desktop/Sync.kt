@@ -40,8 +40,14 @@ class AuthException : IOException("the server refused the user name or password"
 
 /** Basic-auth JSON over HTTPS to the two sync services. Blocking: call on [Dispatchers.IO]. */
 class Http(user: String, password: String) {
-    private val client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build()
-    private val auth = "Basic " + Base64.getEncoder().encodeToString("$user:$password".toByteArray())
+    // HTTP/1.1, not the client's default HTTP/2, which shares one connection and keeps reusing it
+    // after a request times out: a VPN dropping or a new Wi-Fi left sync dead until the daemon
+    // restarted. Here a request that times out takes its connection with it.
+    private val client = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1)
+        .connectTimeout(Duration.ofSeconds(15))
+        .build()
+    private val auth ="Basic " + Base64.getEncoder().encodeToString("$user:$password".toByteArray())
 
     fun send(url: String, method: String = "GET", body: String? = null, headers: Map<String, String> = emptyMap(), timeoutS: Long = 20): HttpResponse<String> {
         val builder = HttpRequest.newBuilder(URI(url))
