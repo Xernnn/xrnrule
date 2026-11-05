@@ -2,6 +2,11 @@
 
 package com.xern.xrnrule.app.ui
 
+import android.Manifest
+import android.content.Context
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,7 +27,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shield
@@ -77,6 +84,8 @@ import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.BlockTexts
+import com.xern.xrnrule.domain.Companions
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
@@ -108,6 +117,8 @@ fun BlocksScreen(
     val missing = remember(resume) {
         listOf(AppPermission.USAGE_ACCESS, AppPermission.OVERLAY).filterNot { it.isGranted(context) }
     }
+    // With nothing to block yet, the first-run page lists these calmly instead.
+    val bannerShown = missing.isNotEmpty() && world.blocks.isNotEmpty()
     var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
     var confirmDelete by remember { mutableStateOf<Block?>(null) }
     var breakUsed by remember { mutableStateOf(false) }
@@ -126,7 +137,7 @@ fun BlocksScreen(
         val id = linked ?: return@LaunchedEffect
         val index = world.blocks.indexOfFirst { it.id == id }
         if (index >= 0) {
-            val at = index + (if (missing.isNotEmpty()) 1 else 0) + (if (pauseLeft > 0) 1 else 0)
+            val at = index + 1 + (if (bannerShown) 1 else 0) + (if (pauseLeft > 0) 1 else 0)
             // Just opened, the list hasn't been laid out yet, and a scroll then goes nowhere.
             snapshotFlow { list.layoutInfo.totalItemsCount }.first { it > at }
             list.animateScrollToItem(at)
@@ -177,7 +188,12 @@ fun BlocksScreen(
             contentPadding = ScreenPadding,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            if (missing.isNotEmpty()) {
+            item {
+                BlockTexts.summary(store.engine, world, store.clock)?.let { summary ->
+                    Text(summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (bannerShown) {
                 item {
                     PermissionBanner(missing) {
                         runCatching { context.startActivity(missing.first().settingsIntent(context)) }
@@ -188,7 +204,7 @@ fun BlocksScreen(
                 item { PauseBanner(leftMs = pauseLeft, onEnd = { store.dispatch(BlockEvent.EndPause) }) }
             }
             if (world.blocks.isEmpty()) {
-                item { FirstBlock(onCreateBlock) }
+                item { FirstRun(onCreateBlock) }
             }
             items(world.blocks, key = { it.id }) { block ->
                 val hardcore = block.enforcementTier == EnforcementTier.HARDCORE
@@ -310,13 +326,64 @@ private fun PauseBanner(leftMs: Long, onEnd: () -> Unit) {
     }
 }
 
-/** No blocks yet: one big "+" in the middle, the way in. */
+/** No blocks yet: what this is, and what it'll need, with nothing to alarm anyone. */
 @Composable
-private fun FirstBlock(onCreate: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(top = 96.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        RoundIconButton(Icons.Filled.Add, "New block", onClick = onCreate, size = 72.dp)
-        Gap(16)
-        Text("create your first block!", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun FirstRun(onCreate: () -> Unit) {
+    val context = LocalContext.current
+    val resume = rememberResumeSignal()
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val needs = remember(resume) {
+        listOf(
+            Triple(AppPermission.USAGE_ACCESS, "See which app is open", "So a blocked app can be caught. Nothing leaves your phone."),
+            Triple(AppPermission.OVERLAY, "Show the block screen", "It goes on top of a blocked app or site."),
+            Triple(AppPermission.NOTIFICATIONS, "Notifications", "For time running out, and if blocking ever stops working."),
+        )
+    }
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    Column(Modifier.fillMaxWidth().padding(top = 28.dp)) {
+        Text("Do the thing first.", style = MaterialTheme.typography.displaySmall)
+        Gap(10)
+        Text(
+            "Pick the apps and sites that eat your time. xrnrule keeps them closed until you've done what you " +
+                "set: a habit, a timer, or just waiting for the right hour.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = muted,
+        )
+        Gap(24)
+        HFCard {
+            Text("It needs", style = MaterialTheme.typography.titleSmall, color = muted)
+            needs.forEach { (permission, title, why) ->
+                val granted = remember(resume) { permission.isGranted(context) }
+                Gap(12)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = !granted) {
+                            if (permission == AppPermission.NOTIFICATIONS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                runCatching { context.startActivity(permission.settingsIntent(context)) }
+                            }
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (granted) Icons.Filled.CheckCircle else Icons.Filled.AddCircleOutline,
+                        contentDescription = if (granted) "Allowed" else "Not allowed yet",
+                        tint = if (granted) LocalKinds.current.habit.color else muted,
+                        modifier = Modifier.size(24.dp),
+                    )
+                    WGap(12)
+                    Column(Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.bodyLarge)
+                        Text(why, style = MaterialTheme.typography.bodySmall, color = muted)
+                    }
+                }
+            }
+        }
+        Gap(20)
+        PillButton("Make your first block", onClick = onCreate)
     }
 }
 
@@ -348,19 +415,22 @@ private fun BlockCard(
                 .then(if (outlined) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CardShape) else Modifier)
                 .combinedClickable(onClick = onOpen, onLongClick = { menu = true }),
         ) {
-            // Habits First's header: the icon, the name, and the switch with the lock under it.
+            // How it stands comes first: that's what the card is looked at for.
             val now = store.clock.nowWallMs()
             val locked = BlockEdits.locked(block, now)
-            Row(verticalAlignment = Alignment.Top) {
+            val headline = BlockTexts.headline(store.engine, world, block, store.clock)
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 AppTile(
                     packages = block.targetPackages.sortedBy { appLabels[it]?.lowercase() ?: it },
                     fallback = Icons.Filled.Shield,
-                    sites = block.targetSites.sorted(),
+                    sites = Companions.withoutPaired(block.targetSites.sorted(), block.targetPackages),
+                    size = 46.dp,
                     modifier = Modifier.alpha(if (block.enabled) 1f else 0.5f),
                 )
-                WGap(14)
-                Column(Modifier.weight(1f).heightIn(min = 52.dp), verticalArrangement = Arrangement.Center) {
+                WGap(12)
+                Column(Modifier.weight(1f)) {
                     Text(block.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    HeadlineText(headline)
                     // I42: a block that holds on one device says which.
                     val where = when (block.devices) {
                         Devices.BOTH -> null
@@ -378,22 +448,12 @@ private fun BlockCard(
                     }
                 }
                 WGap(8)
-                Column(horizontalAlignment = Alignment.End) {
-                    XSwitch(checked = block.enabled, onCheckedChange = onEnabledChange)
-                    Gap(10)
-                    LockPill(block.name, active = locked || hardcore, onClick = { locking = true })
-                }
+                LockPill(block.name, active = locked || hardcore, onClick = { locking = true })
+                WGap(8)
+                XSwitch(checked = block.enabled, onCheckedChange = onEnabledChange)
             }
-            if (!block.enabled) {
-                Gap(12)
-                Text(
-                    "Off · turn it on to block again",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                return@HFCard
-            }
-            Gap(10)
+            if (!block.enabled) return@HFCard
+            Gap(8)
             when (block.mode) {
                 BlockMode.HABIT -> {
                     RuleRows(block, world, store)
@@ -401,6 +461,7 @@ private fun BlockCard(
                 }
                 else -> StrictBody(block, world, store)
             }
+            MissingCompanion(block, appLabels, store)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Edit") }, onClick = { menu = false; onOpen() })
@@ -447,46 +508,30 @@ private fun HabitBody(
             dayLabel = if (goal.yesterday) "yesterday" else "today",
         )
     }
-    val reason = store.engine.blockReason(world, block, store.clock)
-    if (block.state == BlockState.UNLOCKED) {
-        val left = sessionLeftMs(world, block.id, store.clock)
-        val held = reason != null // I44: hours or a forced break came down over the unlock
-        StatusPill(
-            when {
-                held -> "blocked for now · the unlock is still running"
-                world.sessions[block.id]?.selfPaced == true -> "open · use left today" // I41: runs only while in use
-                else -> "open until ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}"
-            },
-            container = if (held) MaterialTheme.colorScheme.surfaceVariant else kinds.habit.fill,
-            content = if (held) MaterialTheme.colorScheme.onSurfaceVariant else kinds.habit.color,
-            trailing = compactDuration(left),
-        )
-        return
-    }
+    if (block.state == BlockState.UNLOCKED) return // the headline says how long
 
     val habitApps = block.trigger.habitPackages.takeIf { it.isNotEmpty() }?.joinToString(" or ") { appLabels[it] ?: it }
     val parts = world.habitParts(block, habitApps, store.engine, store.clock)
     val armed = block.state == BlockState.ARMED
-    val rejection = store.engine.redeemRejection(world, block.id, store.clock)
-    when {
-        block.state != BlockState.EARNED && reason == null && block.limitComesFirst -> StatusPill( // I44
-            "open · the habit comes in after the limit",
-            container = kinds.habit.fill,
-            content = kinds.habit.color,
-        )
-        block.state != BlockState.EARNED -> StatusPill("no unlocks available")
-        rejection == RejectReason.HELD -> StatusPill("done · it can open once it's no longer blocked")
-        rejection == RejectReason.CAP_REACHED -> StatusPill(
-            capReachedText(store.engine.unlockCommittedMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs, world.sessions.isNotEmpty()),
-        )
-        else -> StatusPill(
-            "Open for ${formatDuration(block.reward.unlockDurationMs)}",
-            container = MaterialTheme.colorScheme.primary,
-            content = MaterialTheme.colorScheme.onPrimary,
-            onClick = { store.dispatch(BlockEvent.Redeem(block.id)) },
-        )
+    if (block.state == BlockState.EARNED) {
+        when (store.engine.redeemRejection(world, block.id, store.clock)) {
+            RejectReason.HELD -> StatusPill("Done · it can open once it's no longer blocked")
+            RejectReason.CAP_REACHED -> StatusPill(
+                capReachedText(store.engine.unlockCommittedMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs),
+            )
+            else -> {
+                // The same moment to change your mind as on the block screen.
+                val settle = rememberSettleLeft(block.id)
+                StatusPill(
+                    if (settle > 0) "Steady… ${settle / 1000 + 1}" else "Open for ${formatDuration(block.reward.unlockDurationMs)}",
+                    container = if (settle > 0) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                    content = if (settle > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimary,
+                    onClick = if (settle > 0) null else ({ store.dispatch(BlockEvent.Redeem(block.id)) }),
+                )
+            }
+        }
+        Gap(6)
     }
-    Gap(6)
     joinTag(block, parts)?.let { Tag(it); Gap(6) }
     if (parts.isEmpty()) {
         Text("Nothing unlocks it yet. Tap to add a habit.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -505,14 +550,17 @@ private fun HabitBody(
                 kind = kinds.habit,
                 label = part.item.text.ifBlank { "Task" },
                 dim = part.done,
+                note = if (!part.done && armed) "Hold the circle to tick" else null,
                 action = {
-                    RowAction(
-                        Icons.Filled.Check,
-                        if (part.done) "Untick ${part.item.text}" else "Tick ${part.item.text}",
-                        kinds.habit.color,
-                        filled = part.done,
-                        onClick = { if (armed) store.dispatch(BlockEvent.ToggleChecklistItem(part.item.id, !part.done)) },
-                    )
+                    if (part.done || !armed) {
+                        RowAction(Icons.Filled.Check, "Untick ${part.item.text}", kinds.habit.color, filled = part.done) {
+                            if (armed) store.dispatch(BlockEvent.ToggleChecklistItem(part.item.id, false))
+                        }
+                    } else {
+                        HoldRowAction(Icons.Filled.Check, "Hold to tick ${part.item.text}", kinds.habit.color, onHeld = {
+                            store.dispatch(BlockEvent.ToggleChecklistItem(part.item.id, true))
+                        })
+                    }
                 },
             )
             is HabitPart.Tag -> HabitRow(
@@ -602,7 +650,7 @@ private fun RuleRows(block: Block, world: World, store: WorldStore) {
             HabitRow(
                 icon = Icons.Outlined.HourglassBottom,
                 kind = kinds.limit,
-                label = if (block.perDevice) "A day, on this phone" else "A day",
+                label = if (block.perDevice) "Daily limit, this phone" else "Daily limit",
                 value = "${formatDuration(used)} / ${formatDuration(block.dailyAllowanceMs)}",
                 fraction = used.toFloat() / block.dailyAllowanceMs,
             )
@@ -611,37 +659,23 @@ private fun RuleRows(block: Block, world: World, store: WorldStore) {
             HabitRow(
                 icon = Icons.Outlined.Timer,
                 kind = kinds.limit,
-                label = "In a row",
+                label = "Time in a row",
                 value = "${formatDuration(engine.rowUsedMs(world, block, clock))} / ${formatDuration(block.sessionMs)}",
                 fraction = engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs,
             )
-        }
-        val reason = engine.blockReason(world, block, clock)
-        if (reason == BlockReason.LIMIT || reason == BlockReason.BREAK || engine.overrideRemainingMs(world, block.id, clock) > 0) {
-            StatusLine(blockStatus(block, world, engine, clock).line, reason != null)
         }
     }
     block.blockedHours?.let { HoursRow(block, it, world, store) }
 }
 
-/** The hours a block blocks outright: what it's doing now is the line; the times, which can be long, wrap under it. */
+/** The hours a block blocks outright; whether it's in them now is the headline's to say. */
 @Composable
 private fun HoursRow(block: Block, hours: Schedule, world: World, store: WorldStore) {
-    val engine = store.engine
-    val clock = store.clock
-    val blocking = engine.blockReason(world, block, clock) == BlockReason.HOURS
-    val bought = engine.overrideRemainingMs(world, block.id, clock).takeIf { engine.inBlockedHours(block, clock) } ?: 0
     HabitRow(
         icon = Icons.Outlined.CalendarMonth,
         kind = LocalKinds.current.strict,
-        label = when {
-            bought > 0 -> "Bought time · ${formatRemaining(bought)} left"
-            blocking -> freeAtWall(block, world, engine, clock)
-                ?.let { "Blocking until ${formatClockTime(it, clock.zone())}" } ?: "Blocking now"
-            block.mode == BlockMode.SCHEDULE -> "Off now"
-            else -> "Blocked hours"
-        },
-        dim = !blocking && bought <= 0,
+        label = "Blocked hours",
+        dim = store.engine.blockReason(world, block, store.clock) != BlockReason.HOURS,
         note = describeSchedule(hours),
     )
 }
@@ -654,7 +688,7 @@ private fun StrictBody(block: Block, world: World, store: WorldStore) {
     val clock = store.clock
     when (block.mode) {
         BlockMode.ALLOWANCE -> RuleRows(block, world, store)
-        BlockMode.SCHEDULE -> HoursRow(block, block.schedule, world, store)
+        BlockMode.SCHEDULE -> if (block.schedule != Schedule.ALWAYS) HoursRow(block, block.schedule, world, store)
         BlockMode.LOCKDOWN -> {
             val left = engine.lockdownRemainingMs(world, block.id, clock)
             if (left > 0) {
@@ -680,13 +714,51 @@ private fun StrictBody(block: Block, world: World, store: WorldStore) {
     }
 }
 
+/** A block's state in its colour: red holding, green open. */
 @Composable
-private fun StatusLine(text: String, alarm: Boolean) {
-    Gap(4)
+private fun HeadlineText(headline: BlockTexts.Headline) {
+    val color = when (headline.tone) {
+        BlockTexts.Tone.BLOCKED -> MaterialTheme.colorScheme.error
+        BlockTexts.Tone.READY -> MaterialTheme.colorScheme.primary
+        BlockTexts.Tone.OPEN -> LocalKinds.current.habit.color
+        BlockTexts.Tone.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Text(
-        text,
-        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-        color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Start,
+        headline.text,
+        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
     )
 }
+
+/**
+ * A block on a site whose app is on this phone and isn't in the block: the usual way around one,
+ * usually without meaning to. "Not now" stays, per block and app.
+ */
+@Composable
+private fun MissingCompanion(block: Block, appLabels: Map<String, String>, store: WorldStore) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("hints", Context.MODE_PRIVATE) }
+    var dismissed by remember { mutableStateOf(prefs.getStringSet(KEY_NOT_NOW, null).orEmpty()) }
+    val missing = Companions.appsFor(block.targetSites, block.targetPackages, appLabels.keys)
+        .firstOrNull { "${block.id}:$it" !in dismissed } ?: return
+    Gap(8)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "The ${appLabels[missing] ?: missing} app isn't in this block",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = {
+            dismissed = dismissed + "${block.id}:$missing"
+            prefs.edit().putStringSet(KEY_NOT_NOW, dismissed).apply()
+        }) { Text("Not now") }
+        TextButton(onClick = {
+            store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == block.id) it.copy(targetPackages = it.targetPackages + missing) else it }) }
+        }) { Text("Add") }
+    }
+}
+
+private const val KEY_NOT_NOW = "companionNotNow"

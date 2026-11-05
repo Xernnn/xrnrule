@@ -54,8 +54,7 @@ Then `systemctl --user restart xrnrule-desktop`. The phone uses the same server 
 `/xrnrule` on the end (xrnrule → Settings → Sync with laptop), and xrnloops uses `/xrnloops`
 (xrnloops → Settings → Sync with home server).
 
-Without a server it blocks on the laptop only, which is of little use: blocks are created on
-the phone.
+Without a server it blocks on the laptop only, and nothing it does reaches the phone.
 
 ## Using it
 

@@ -33,8 +33,8 @@ import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.BlockOverlayContent
 import com.xern.xrnrule.app.ui.GoalInfo
-import com.xern.xrnrule.app.ui.goalInfo
 import com.xern.xrnrule.app.ui.freeAtWall
+import com.xern.xrnrule.app.ui.goalInfo
 import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
@@ -49,6 +49,7 @@ import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
+import java.time.LocalDate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,6 +68,30 @@ import kotlinx.coroutines.flow.asStateFlow
  * ViewModelStoreOwner / SavedStateRegistryOwner, so [OverlayWindowOwner] provides a minimal one
  * scoped to the lifetime of the window itself.
  */
+/** How often each blocked thing was tried today, by phone-local day. Stays on this phone. */
+private class TriesToday(context: Context) {
+    private val prefs = context.getSharedPreferences("tries", Context.MODE_PRIVATE)
+    private var last: Pair<String, Long>? = null
+
+    /** The count, with this try in it. Called on every redraw, so one visit counts once. */
+    fun count(subject: String): Int {
+        val now = SystemClock.elapsedRealtime()
+        val same = last?.takeIf { (who, at) -> who == subject && now - at < VISIT_MS } != null
+        last = subject to now
+        val day = LocalDate.now().toString()
+        if (prefs.getString(KEY_DAY, null) != day) prefs.edit().clear().putString(KEY_DAY, day).apply()
+        val seen = prefs.getInt(subject, 0)
+        if (same) return seen
+        prefs.edit().putInt(subject, seen + 1).apply()
+        return seen + 1
+    }
+
+    private companion object {
+        const val KEY_DAY = " day"
+        const val VISIT_MS = 60_000L
+    }
+}
+
 class OverlayShieldPort(
     private val context: Context,
     private val store: WorldStore,
@@ -84,6 +109,7 @@ class OverlayShieldPort(
     private var view: View? = null
     private var layout: WindowManager.LayoutParams? = null
     private var audioFocus: AudioFocusRequest? = null
+    private val tries = TriesToday(context)
 
     private val _visible = MutableStateFlow(false)
 
@@ -123,8 +149,10 @@ class OverlayShieldPort(
         val block = blockers.firstOrNull { engine.blockReason(world, it, clock).let { why -> why != null && why != BlockReason.HABIT } }
             ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
         val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
+        val subject = if (appBlocked) appLabel(foregroundPkg!!) else Sites.hostOf(foregroundSite!!)
         uiState.value = OverlayUi(
-            subject = if (appBlocked) appLabel(foregroundPkg!!) else Sites.hostOf(foregroundSite!!),
+            subject = subject,
+            triesToday = tries.count(subject),
             pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,
@@ -319,6 +347,8 @@ class OverlayShieldPort(
     data class OverlayUi(
         /** The blocked app's name, or the blocked site's host. */
         val subject: String,
+        /** How many times today this has been tried, this time included. */
+        val triesToday: Int = 0,
         /** [subject] is a browser without the extension (I49): use this one. */
         val useBrowser: UseBrowser? = null,
         /** The blocked app, for its icon; null for a site. */

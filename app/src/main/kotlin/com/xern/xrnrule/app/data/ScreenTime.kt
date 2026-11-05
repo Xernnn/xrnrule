@@ -5,12 +5,15 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 data class AppUsage(val packageName: String, val label: String, val foregroundMs: Long)
 
-data class DayUsage(val date: LocalDate, val totalMs: Long, val apps: List<AppUsage>)
+/** [hourlyMs]: foreground time in each of the day's 24 local hours. */
+data class DayUsage(val date: LocalDate, val totalMs: Long, val apps: List<AppUsage>, val hourlyMs: List<Long> = emptyList())
 
 /**
  * Per-app foreground time, the same thing Digital Wellbeing reports, rebuilt from raw
@@ -38,12 +41,24 @@ object ScreenTime {
         val excluded = ALWAYS_EXCLUDED + homePackages(context)
 
         val perDay = List(days) { HashMap<String, Long>() }
+        val perHour = List(days) { LongArray(24) }
+        fun creditHours(from: Long, to: Long) {
+            var t = maxOf(from, bounds.first())
+            while (t < to) {
+                val at = Instant.ofEpochMilli(t).atZone(zone)
+                val next = minOf(to, at.truncatedTo(ChronoUnit.HOURS).plusHours(1).toInstant().toEpochMilli())
+                val d = dates.indexOf(at.toLocalDate())
+                if (d >= 0) perHour[d][at.hour] += next - t
+                t = next
+            }
+        }
         fun credit(pkg: String, from: Long, to: Long) {
             if (pkg in excluded || to <= from) return
             for (d in 0 until days) {
                 val overlap = minOf(to, bounds[d + 1]) - maxOf(from, bounds[d])
                 if (overlap > 0) perDay[d].merge(pkg, overlap, Long::plus)
             }
+            creditHours(from, to)
         }
 
         // A package is foreground while at least one of its activities is resumed; tracking the
@@ -96,7 +111,7 @@ object ScreenTime {
             val apps = perDay[d].entries
                 .map { (pkg, ms) -> AppUsage(pkg, labels.getOrPut(pkg) { InstalledApps.labelFor(context, pkg) }, ms) }
                 .sortedByDescending { it.foregroundMs }
-            DayUsage(date, apps.sumOf { it.foregroundMs }, apps)
+            DayUsage(date, apps.sumOf { it.foregroundMs }, apps, perHour[d].toList())
         }
     }
 

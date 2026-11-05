@@ -75,7 +75,15 @@ Websites are blocked by the extension in `extension/`, not by reading the screen
 xrnrule uses Accessibility, which banking apps refuse to run next to. The extension asks
 xrnrule on the same device (`127.0.0.1:47321`) what to do and decides nothing itself. It sends
 a blocked site to the block page before it loads, moves open tabs off a site the moment it's
-blocked, and while xrnrule doesn't answer it keeps blocking what it last heard was blocked.
+blocked, and while xrnrule doesn't answer it keeps blocking what it last heard was blocked. After
+a minute without xrnrule it blocks every site that has a rule, so stopping the app or the laptop
+daemon isn't a way past a limit; opening it again brings everything back.
+
+A rule can cover one part of a site: `youtube.com/shorts` blocks Shorts and leaves the rest of
+YouTube alone, and a page moving there without loading anew is caught too. A page playing sound
+behind another one, or with the screen off, counts against its limit. **Block other browsers**
+(on by default) keeps browsers without the extension closed while a block has websites. Turning
+that off takes the usual wait.
 
 On the phone, a blocked tab turns into a small page the app serves itself, and the app's block
 screen covers the browser only while that tab is the one in front. **Leave this site** (or
@@ -92,8 +100,10 @@ it has nothing to go back to, so the rest of the browser stays yours.
   each one gets a new extension ID, so remove it before installing the `.crx`.
 
 The extension's settings page shows its version and where it updates from, with **Check now**.
-The phone app warns when a browser is in front and the extension says nothing, so a browser
-without it (Chrome on Android has no extensions) doesn't quietly let sites through.
+The phone app warns when the browser the extension lives in goes quiet, without ever blocking
+that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
+off is closed after two minutes in front. Browsers can't be seen inside other apps: a page opened
+in an app's own in-app browser isn't blocked.
 
 ## Updates
 

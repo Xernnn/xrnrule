@@ -65,6 +65,7 @@ import com.xern.xrnrule.app.data.LocalTelemetry
 import com.xern.xrnrule.app.data.ScreenTime
 import com.xern.xrnrule.app.data.SiteUsageLog
 import com.xern.xrnrule.app.data.TelemetryEvent
+import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.web.WebsiteMonitor
@@ -73,6 +74,7 @@ import com.xern.xrnrule.app.web.tracking
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.appliesHere
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -88,7 +90,7 @@ private val PlotHeight = 132.dp
 private val PlotTopPad = 8.dp
 
 @Composable
-fun InsightsScreen(world: World, websites: WebsiteMonitor, siteUsage: SiteUsageLog, telemetry: LocalTelemetry) {
+fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, siteUsage: SiteUsageLog, telemetry: LocalTelemetry) {
     val context = LocalContext.current
     val resume = rememberResumeSignal()
     val hasAccess = remember(resume) { AppPermission.USAGE_ACCESS.isGranted(context) }
@@ -125,7 +127,7 @@ fun InsightsScreen(world: World, websites: WebsiteMonitor, siteUsage: SiteUsageL
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // Habits First's header: the page's name, and whether it shows a day or the week.
-        PageTitle("insights") {
+        PageTitle("Insights") {
             RangeSwitch(
                 week = week,
                 onDay = { week = false; selected = DAYS - 1 },
@@ -186,7 +188,7 @@ fun InsightsScreen(world: World, websites: WebsiteMonitor, siteUsage: SiteUsageL
                     MeterBar(if (capMin == 0L) 0f else usedMin.toFloat() / capMin)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    BigStat(world.blocks.count { it.state == BlockState.ARMED }.toString(), "Locked", Modifier.weight(1f))
+                    BigStat(world.blocks.count { it.enabled && world.appliesHere(it) && store.engine.isBlocking(world, it, store.clock) }.toString(), "Blocking now", Modifier.weight(1f))
                     BigStat(world.blocks.count { it.state == BlockState.EARNED }.toString(), "Ready", Modifier.weight(1f))
                     BigStat(world.blocks.count { it.state == BlockState.UNLOCKED }.toString(), "Open", Modifier.weight(1f))
                 }
@@ -335,7 +337,12 @@ private fun ScreenTimeCard(days: List<DayUsage>, selected: Int?, blocked: Set<St
             )
         }
         Gap(16)
-        WeekChart(days, selected ?: -1, avgMs, onSelect)
+        // The week shows days, and tapping one shows its hours: that's what a day has to say.
+        if (selected != null) {
+            HourChart(days[selected].hourlyMs)
+            return@HFCard
+        }
+        WeekChart(days, -1, avgMs, onSelect)
         if (avgMs != null) {
             Gap(10)
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -347,6 +354,38 @@ private fun ScreenTimeCard(days: List<DayUsage>, selected: Int?, blocked: Set<St
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+    }
+}
+
+/** A day by the hour, midnight to midnight: when the time went. */
+@Composable
+private fun HourChart(hours: List<Long>) {
+    val series = chartSeriesColor()
+    val peak = (hours.maxOrNull() ?: 0L).coerceAtLeast(1L)
+    Row(Modifier.fillMaxWidth().height(PlotHeight), verticalAlignment = Alignment.Bottom) {
+        hours.forEachIndexed { hour, ms ->
+            Box(
+                Modifier.weight(1f).fillMaxHeight().semantics { contentDescription = "$hour:00, ${formatDuration(ms)}" },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                if (ms > 0) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.72f)
+                            .heightIn(min = 2.dp)
+                            .fillMaxHeight(ms.toFloat() / peak)
+                            .background(series, RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp)),
+                    )
+                }
+            }
+        }
+    }
+    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outline))
+    Gap(6)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        listOf("00", "06", "12", "18", "24").forEach {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

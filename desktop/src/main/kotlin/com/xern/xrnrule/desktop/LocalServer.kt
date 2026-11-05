@@ -7,14 +7,16 @@ import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.BlockTexts
+import com.xern.xrnrule.domain.startOfLocalDayMs
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.HabitEntry
 import com.xern.xrnrule.domain.LinkedDay
-import com.xern.xrnrule.domain.Settings
 import com.xern.xrnrule.domain.Schedule
+import com.xern.xrnrule.domain.Settings
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
@@ -63,6 +65,7 @@ class LocalServer(
     private val shared: SharedSyncClient,
     private val habitClient: HabitClient,
     private val siteIcons: SiteIconCache,
+    private val telemetry: FileTelemetry,
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
 
@@ -441,6 +444,7 @@ class LocalServer(
         val moreWindows: List<UiWindow>,
         /** I44: what's keeping it blocked (a [BlockReason]'s name), null when it isn't blocking. */
         val reason: String?,
+        val headline: UiHeadline,
         val hasLimit: Boolean,
         val limitFirst: Boolean,
         val habitFirst: Boolean,
@@ -474,6 +478,12 @@ class LocalServer(
     )
 
     @Serializable
+    data class UiHeadline(val text: String, val tone: String)
+
+    @Serializable
+    data class UiDay(val habitsDone: Int, val timesBlocked: Int, val unlockMs: Long)
+
+    @Serializable
     data class UiState(
         val nowWall: Long,
         val blocks: List<UiBlock>,
@@ -488,6 +498,10 @@ class LocalServer(
         val kwinSeenAgoMs: Long?,
         val extensionMissing: Boolean,
         /** The extension's version, and the one this daemon was built with when it's older. */
+        val summary: String? = null,
+        val today: UiDay,
+        /** When the home server last answered, 304s and long polls included. */
+        val lastContactWall: Long? = null,
         val extensionVersion: String?,
         val extensionNoIncognito: Boolean = false,
         val extensionLatest: String?,
@@ -518,6 +532,9 @@ class LocalServer(
             habitsUrl = if (config.syncConfigured) "${config.loopUrl}/" else null,
             kwinSeenAgoMs = enforcer.kwinSeenAtMs.takeIf { it > 0 }?.let { System.currentTimeMillis() - it },
             extensionMissing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() },
+            summary = BlockTexts.summary(engine, world, clock),
+            today = today(world),
+            lastContactWall = shared.lastContactWall,
             extensionVersion = foreground.extensionVersion,
             extensionNoIncognito = foreground.incognitoAllowed == false,
             extensionLatest = BUILT_WITH_EXTENSION?.takeIf { latest -> foreground.extensionVersion?.let { ExtensionApi.isOlder(it, latest) } == true },
@@ -626,6 +643,7 @@ class LocalServer(
             scheduleEnd = w?.endMinuteOfDay,
             moreWindows = b.schedule.moreWindows.map { UiWindow(it.days.sorted(), it.window.startMinuteOfDay, it.window.endMinuteOfDay) },
             reason = engine.blockReason(world, b, clock)?.name,
+            headline = BlockTexts.headline(engine, world, b, clock).let { UiHeadline(it.text, it.tone.name) },
             hasLimit = b.hasLimit,
             limitFirst = b.limitComesFirst,
             habitFirst = b.habitFirst,
@@ -638,23 +656,24 @@ class LocalServer(
     }
 
     /** A schedule in words; null when it's simply always. */
-    private fun scheduleText(s: Schedule): String? {
-        fun windowText(days: Set<Int>, start: Int, end: Int) = "%02d:%02d–%02d:%02d%s".format(
-            start / 60, start % 60, end / 60, end % 60,
-            if (days.size == 7) "" else ", ${dayNames(days)}",
-        )
-        val w = s.activeWindow
-        val more = s.moreWindows.map { windowText(it.days, it.window.startMinuteOfDay, it.window.endMinuteOfDay) }
-        val first = when {
-            w != null -> windowText(s.activeDays, w.startMinuteOfDay, w.endMinuteOfDay)
-            s.activeDays.size < 7 -> "On ${dayNames(s.activeDays)}"
-            more.isNotEmpty() -> "All day"
-            else -> null
-        }
-        return (listOfNotNull(first) + more).joinToString("; ").ifEmpty { null }
-    }
+    private fun scheduleText(s: Schedule): String? = BlockTexts.schedule(s).takeUnless { s == Schedule.ALWAYS }
 
-    private fun dayNames(days: Set<Int>) = days.sorted().joinToString(" ") { listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[it - 1] }
+    /** Today on this laptop, from its own log; read at most every 30 s, since the page asks every second. */
+    private var todayRead: Pair<Long, UiDay>? = null
+
+    private fun today(world: World): UiDay {
+        val now = store.clock.nowMonotonicMs()
+        todayRead?.takeIf { now - it.first < 30_000 }?.let { return it.second }
+        val events = telemetry.eventsAfter(store.clock.startOfLocalDayMs())
+        fun kind(t: String) = events.filter { it["t"]?.jsonPrimitive?.contentOrNull == t }
+        val day = UiDay(
+            habitsDone = kind("habit").size,
+            timesBlocked = kind("blocked").size,
+            unlockMs = kind("unlock").sumOf { it["ms"]?.jsonPrimitive?.longOrNull ?: 0 },
+        )
+        todayRead = now to day
+        return day
+    }
 
     // ---- plumbing ------------------------------------------------------------------------
 

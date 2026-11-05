@@ -118,6 +118,13 @@ a:hover { text-decoration: underline; }
 
 /* A block's card: its icons, its name, then what it is doing as a pill (BlocksScreen's card). */
 .block { display: grid; gap: 12px; }
+.headline { font-weight: 600; font-size: 14px; }
+.headline.blocked { color: var(--blocked); }
+.headline.open { color: var(--open); }
+.headline.earned { color: var(--earned); }
+.headline.idle { color: var(--muted); }
+.chips:empty { display: none; }
+.blocks .card { margin-top: 14px; }
 .block .head { display: flex; gap: 14px; align-items: center; }
 .block .head .name { flex: 1; min-width: 0; }
 .block h3 { font-size: 17px; font-weight: 400; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -233,3 +240,12 @@ a:hover { text-decoration: underline; }
 .settings .top { display: flex; align-items: center; gap: 10px; }
 .settings h3 { margin: 0; font-size: 17px; font-weight: 700; }
 .settings .note { margin-top: 6px; }
+
+/* A laptop screen has room: two columns of cards, the rest across them. A card being edited takes
+   the full width, since the form is wide. */
+@media (min-width: 1040px) {
+  .wrap { max-width: 1140px; }
+  .blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; margin-top: 14px; }
+  .blocks .card { margin-top: 0; }
+  .blocks .card.editing { grid-column: 1 / -1; }
+}

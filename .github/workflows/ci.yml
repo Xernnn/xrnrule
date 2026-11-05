@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  jvm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      # The end-to-end test needs python3 + bcrypt and the sibling xrnloops repo; without them it
+      # skips itself. Nothing here needs the Android SDK beyond what the runner ships.
+      - run: pip install bcrypt
+      - run: ./gradlew :domain:test :desktop:test :app:testSideloadDebugUnitTest --console=plain
+
+  server-and-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install bcrypt
+      - run: python3 -m unittest server/test_xrnrule_sync.py
+      - run: for f in extension/*.js; do node --check "$f"; done
+      - run: node --test extension/test

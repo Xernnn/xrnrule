@@ -132,7 +132,8 @@ class MainActivity : FragmentActivity() {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // With no blocks yet, the first-run page explains it and asks.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && container.store.world.value.blocks.isNotEmpty()) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
@@ -314,7 +315,7 @@ private fun XrnruleScreens(container: AppContainer) {
                 FocusScreen(store, entry.arguments?.getString("habitId").orEmpty(), onClose = { nav.leave(entry) })
             }
             composable(Tab.Insights.route) {
-                InsightsScreen(world, container.websites, container.siteUsage, container.telemetry)
+                InsightsScreen(world, container.store, container.websites, container.siteUsage, container.telemetry)
             }
             composable(Tab.Settings.route) {
                 SettingsScreen(world, settingsDeps, onOpen = { nav.navigate("settings/${it.name}") })

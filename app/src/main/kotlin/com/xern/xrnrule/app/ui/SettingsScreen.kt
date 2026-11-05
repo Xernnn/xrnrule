@@ -105,7 +105,6 @@ import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.HabitKind
 import com.xern.xrnrule.domain.World
-import com.xern.xrnrule.domain.epochDay
 import com.xern.xrnrule.domain.withHabit
 import com.xern.xrnrule.domain.withoutHabit
 import java.time.LocalDate
@@ -151,7 +150,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState()),
     ) {
-        PageTitle("settings")
+        PageTitle("Settings")
         Column(Modifier.padding(ScreenPadding)) { SettingsList(world, deps, onOpen) }
     }
 }
@@ -159,6 +158,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
 @Composable
 private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
     val context = LocalContext.current
+    val appearance by Appearance.themeMode.collectAsState()
     val resume = rememberResumeSignal()
     val granted = remember(resume) { AppPermission.entries.associateWith { it.isGranted(context) } }
     val automaticTime = remember(resume) { deps.clockGuard.automaticTime() }
@@ -229,7 +229,28 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
 
         Gap(20)
         GroupCard {
-            GroupRow(title = "Advanced", icon = Icons.Outlined.Tune, first = true, onClick = { onOpen(SettingsPage.ADVANCED) })
+            GroupRow(
+                title = "Appearance",
+                icon = Icons.Outlined.DarkMode,
+                subtitle = appearance.label,
+                first = true,
+                onClick = { onOpen(SettingsPage.APPEARANCE) },
+            )
+            if (deps.updates.isSupported) {
+                GroupRow(
+                    title = "Updates",
+                    icon = Icons.Outlined.SystemUpdate,
+                    subtitle = "Version ${deps.updates.installedVersion}",
+                    onClick = { onOpen(SettingsPage.UPDATES) },
+                )
+            }
+            GroupRow(
+                title = "Backup",
+                icon = Icons.Outlined.SaveAlt,
+                subtitle = "Export or import your blocks",
+                onClick = { onOpen(SettingsPage.BACKUP) },
+            )
+            GroupRow(title = "Advanced", icon = Icons.Outlined.Tune, onClick = { onOpen(SettingsPage.ADVANCED) })
         }
         Gap(36)
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -337,7 +358,6 @@ private fun PermissionRow(title: String, icon: ImageVector, granted: Boolean?, f
 /** What Habits First keeps under Advanced: habits, unlocks, security, look, updates, backup. */
 @Composable
 private fun AdvancedPage(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
-    val theme by Appearance.themeMode.collectAsState()
     val lockOn by deps.appLock.enabled.collectAsStateWithLifecycle()
     Gap(8)
     GroupCard {
@@ -367,26 +387,6 @@ private fun AdvancedPage(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                 if (deps.guard.isSupported() && deps.guard.hasPassword()) "hardcore password set" else null,
             ).joinToString(" · "),
             onClick = { onOpen(SettingsPage.SECURITY) },
-        )
-        GroupRow(
-            title = "Appearance",
-            icon = Icons.Outlined.DarkMode,
-            subtitle = theme.label,
-            onClick = { onOpen(SettingsPage.APPEARANCE) },
-        )
-        if (deps.updates.isSupported) {
-            GroupRow(
-                title = "Updates",
-                icon = Icons.Outlined.SystemUpdate,
-                subtitle = "Version ${deps.updates.installedVersion}",
-                onClick = { onOpen(SettingsPage.UPDATES) },
-            )
-        }
-        GroupRow(
-            title = "Backup",
-            icon = Icons.Outlined.SaveAlt,
-            subtitle = "Export or import your blocks",
-            onClick = { onOpen(SettingsPage.BACKUP) },
         )
     }
 }

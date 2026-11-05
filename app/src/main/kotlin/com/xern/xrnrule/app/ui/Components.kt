@@ -3,12 +3,15 @@
 package com.xern.xrnrule.app.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,9 +50,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,8 +65,11 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -595,6 +604,61 @@ fun RowAction(
         }
     }
 }
+
+/**
+ * [RowAction] that only fires after a sustained press, with a ring filling as it goes: the same
+ * speed bump against "tap tap tap, done" as the block screen has.
+ */
+@Composable
+fun HoldRowAction(
+    icon: ImageVector,
+    contentDescription: String,
+    color: Color,
+    onHeld: () -> Unit,
+) {
+    var holding by remember { mutableStateOf(false) }
+    val progress by animateFloatAsState(
+        targetValue = if (holding) 1f else 0f,
+        animationSpec = if (holding) tween(HOLD_TICK_MS, easing = LinearEasing) else tween(160),
+        label = "hold",
+    )
+    LaunchedEffect(progress, holding) {
+        if (holding && progress >= 0.999f) {
+            holding = false
+            onHeld()
+        }
+    }
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .semantics(mergeDescendants = true) { onClick(label = "Tick") { onHeld(); true } }
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    holding = true
+                    tryAwaitRelease()
+                    holding = false
+                })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            progress = { progress },
+            modifier = Modifier.size(30.dp),
+            color = color,
+            trackColor = Color.Transparent,
+            strokeWidth = 3.dp,
+        )
+        Box(
+            Modifier.size(22.dp).clip(CircleShape).border(1.5.dp, color, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = contentDescription, tint = color, modifier = Modifier.size(15.dp))
+        }
+    }
+}
+
+private const val HOLD_TICK_MS = 700
 
 // ---- app icons ----------------------------------------------------------------------
 

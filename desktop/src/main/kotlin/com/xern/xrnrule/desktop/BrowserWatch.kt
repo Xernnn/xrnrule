@@ -15,9 +15,11 @@ class BrowserWatch(known: Set<String> = emptySet(), startedAtMs: Long = 0) {
     private var frontSince = 0L
     private var lastHeard = startedAtMs
 
-    val known: Set<String> get() = browsers
+    val known: Set<String>
+        @Synchronized get() = browsers.toSet()
 
     /** [app] came in front; null, or not a browser, ends the watch. */
+    @Synchronized
     fun front(app: String?, browser: Boolean, nowMs: Long) {
         val next = app.takeIf { browser }
         if (next != front) frontSince = nowMs
@@ -25,6 +27,7 @@ class BrowserWatch(known: Set<String> = emptySet(), startedAtMs: Long = 0) {
     }
 
     /** Anything from the extension or a block page: it's alive. */
+    @Synchronized
     fun heard(nowMs: Long) {
         lastHeard = nowMs
     }
@@ -34,14 +37,17 @@ class BrowserWatch(known: Set<String> = emptySet(), startedAtMs: Long = 0) {
      * A beat in the first moments after switching can still be the last window's, and a browser
      * wrongly marked as having the extension would stay open for good.
      */
+    @Synchronized
     fun spoke(nowMs: Long): Boolean {
         heard(nowMs)
         return nowMs - frontSince >= SETTLE_MS && front?.let(browsers::add) == true
     }
 
+    @Synchronized
     fun silentFor(nowMs: Long): Long = nowMs - maxOf(lastHeard, frontSince)
 
     /** The browser to close now, if any. */
+    @Synchronized
     fun toClose(nowMs: Long): String? {
         val app = front ?: return null
         if (browsers.isEmpty()) return null

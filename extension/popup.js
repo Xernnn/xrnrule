@@ -22,7 +22,7 @@
   const v = await ask({ type: "check", host });
   $("engine").textContent = v?.reachable
     ? `Connected to xrnrule on this ${android ? "phone" : "laptop"}.`
-    : `xrnrule isn't answering at ${engine}. What it last blocked stays blocked.`;
+    : "xrnrule isn't running. Open it to get your blocks back: in a minute, everything with a rule is blocked.";
   $("engine").classList.toggle("bad", !v?.reachable);
   if (!host) return;
   if (v?.blocked) $("state").textContent = "Blocked.";

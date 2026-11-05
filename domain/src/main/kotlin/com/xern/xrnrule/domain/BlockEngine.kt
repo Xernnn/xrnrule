@@ -7,7 +7,7 @@ import java.time.Instant
  * the current [World], one [BlockEvent] and a [Clock], and returns an [Outcome]. It performs
  * no I/O and never mutates its inputs.
  *
- * Every invariant I1..I38 in the contract has a matching test in
+ * Every invariant I1..I49 in the contract has a matching test in
  * `domain/src/test/.../InvariantTests.kt` (`i01_*` .. `i38_*`).
  */
 class BlockEngine {

@@ -17,6 +17,7 @@ import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.BlockTexts
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.World
@@ -138,37 +139,9 @@ private fun limitStatus(block: Block, world: World, engine: BlockEngine, clock: 
     )
 }
 
-/** For a block held by time alone: when the last of what holds it lets go, as wall-clock ms. Null if a habit could or it isn't blocking (I44). */
-fun freeAtWall(block: Block, world: World, engine: BlockEngine, clock: Clock): Long? {
-    val zone = clock.zone()
-    val now = Instant.ofEpochMilli(clock.nowWallMs()).atZone(zone)
-    when (engine.blockReason(world, block, clock)) {
-        null, BlockReason.HABIT -> return null
-        BlockReason.LOCKDOWN -> return clock.nowWallMs() + engine.lockdownRemainingMs(world, block.id, clock)
-        else -> Unit
-    }
-    val hoursEnd = if (engine.inBlockedHours(block, clock)) {
-        // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
-        val start = now.withSecond(0).withNano(0)
-        (1..7 * 24 * 60).asSequence()
-            .map { start.plusMinutes(it.toLong()) }
-            .firstOrNull { t -> !engine.inBlockedHours(block, AtClock(t.toInstant().toEpochMilli(), zone)) }
-            ?.toInstant()?.toEpochMilli()
-    } else {
-        null
-    }
-    val breakEnd = engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
-    val limitEnd = now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        .takeIf { engine.limitHolds(world, block, clock) && engine.overrideRemainingMs(world, block.id, clock) == 0L }
-    return listOfNotNull(hoursEnd, breakEnd, limitEnd).maxOrNull()
-}
-
-/** A clock stopped at [wall], to ask the engine about another moment. */
-private class AtClock(private val wall: Long, private val zone: ZoneId) : Clock {
-    override fun nowMonotonicMs() = 0L
-    override fun nowWallMs() = wall
-    override fun zone() = zone
-}
+/** When the last of what holds a block lets go, if only time holds it. */
+fun freeAtWall(block: Block, world: World, engine: BlockEngine, clock: Clock): Long? =
+    BlockTexts.freeAtWall(engine, world, block, clock)
 
 /** Why an earned unlock can't be opened: it would go past today's unlock limit (I9). */
 /** [usedMs] counts open unlocks at their full length (I9); [othersOpen] says so when there are some. */
@@ -182,20 +155,8 @@ fun capReachedText(usedMs: Long, capMs: Long, unlockMs: Long, othersOpen: Boolea
     }
 }
 
-/** "Weekdays · 09:00–17:00", "Every day · All day", "Mon, Wed · 22:00–06:00". */
-fun describeSchedule(schedule: Schedule): String {
-    val days = schedule.activeDays
-    val dayText = when (days) {
-        (1..7).toSet() -> "Every day"
-        (1..5).toSet() -> "Weekdays"
-        setOf(6, 7) -> "Weekends"
-        else -> days.sorted().joinToString(", ") { shortDayName(it) }
-    }
-    val window = schedule.activeWindow
-    val timeText = if (window == null) "All day" else "${minuteText(window.startMinuteOfDay)}–${minuteText(window.endMinuteOfDay)}"
-    val more = schedule.moreWindows.map { w -> describeSchedule(Schedule(w.days, w.window)) }
-    return (listOf("$dayText · $timeText") + more).joinToString("; ")
-}
+/** "Weekdays 09:00–17:00 · Sat 10:00–12:00", "Every day 21:00–22:30". */
+fun describeSchedule(schedule: Schedule): String = BlockTexts.schedule(schedule)
 
 fun shortDayName(isoDay: Int): String = DayOfWeek.of(isoDay).getDisplayName(TextStyle.SHORT, Locale.getDefault())
 

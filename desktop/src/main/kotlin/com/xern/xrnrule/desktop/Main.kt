@@ -49,7 +49,7 @@ fun main() = runBlocking {
     val habits = HabitClient(config, store, scope)
 
     if (KWin.export(enforcer)) KWin.reloadScript() // our script lists the open windows again
-    LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope)).start()
+    LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope), telemetry).start()
     store.dispatch(BlockEvent.BootOrColdStart) // I8, and the first shield plan
     shared.start()
     habits.start()

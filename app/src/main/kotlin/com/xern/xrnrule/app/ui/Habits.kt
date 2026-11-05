@@ -606,6 +606,7 @@ fun GoalRow(
             !part.done && part.spent > 0 && !habit.numerical -> if (part.yesterday) "Done yesterday · that already opened this block" else "Done today · that already opened this block"
             !part.done && part.spent > 0 -> "Counting toward the next unlock"
             part.yesterday -> "Yesterday's"
+            !part.done && habit.kind == HabitKind.CHECK -> "Hold the circle to tick"
             else -> null
         },
         onClick = when (habit?.kind) {
@@ -618,13 +619,17 @@ fun GoalRow(
                 when (h.kind) {
                     HabitKind.CHECK -> {
                         val ticked = part.dayValue == HabitEntry.YES_MANUAL
-                        RowAction(
-                            Icons.Filled.Check,
-                            if (ticked) "Untick ${h.name}" else "Tick ${h.name}",
-                            colors.color,
-                            filled = ticked || part.dayValue == HabitEntry.YES_AUTO,
-                            onClick = { onSetEntry(h.id, part.day, if (ticked) HabitEntry.NO else HabitEntry.YES_MANUAL) },
-                        )
+                        val filled = ticked || part.dayValue == HabitEntry.YES_AUTO
+                        // Ticking takes a held press, here as on the block screen; unticking doesn't.
+                        if (filled) {
+                            RowAction(Icons.Filled.Check, "Untick ${h.name}", colors.color, filled = true) {
+                                if (ticked) onSetEntry(h.id, part.day, HabitEntry.NO)
+                            }
+                        } else {
+                            HoldRowAction(Icons.Filled.Check, "Hold to tick ${h.name}", colors.color, onHeld = {
+                                onSetEntry(h.id, part.day, HabitEntry.YES_MANUAL)
+                            })
+                        }
                     }
                     // A "yesterday" item counts yesterday's amount, so "+" adds to that day (I23).
                     HabitKind.COUNT -> RowAction(Icons.Filled.Add, "Add one to ${h.name}", colors.color, filled = false) {

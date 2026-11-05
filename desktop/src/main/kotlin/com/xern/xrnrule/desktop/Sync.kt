@@ -82,6 +82,11 @@ class SharedSyncClient(
     private val _status = MutableStateFlow<SyncStatus?>(null)
     val status: StateFlow<SyncStatus?> = _status.asStateFlow()
 
+    /** When the server last answered, a 304 to a long poll included; "synced" alone would stand still. */
+    @Volatile
+    var lastContactWall: Long? = null
+        private set
+
     @Serializable
     private data class Base(val etag: String, val state: SharedState)
 
@@ -123,6 +128,7 @@ class SharedSyncClient(
                         continue
                     }
                     val r = http.send("${config.ruleUrl}/state?wait=50", headers = mapOf("If-None-Match" to etag), timeoutS = 65)
+                    lastContactWall = System.currentTimeMillis()
                     if (r.statusCode() == 200) {
                         request()
                         delay(1_000) // let the round store the new base before asking again
@@ -148,6 +154,7 @@ class SharedSyncClient(
             val cheap = base != null && base.state == local
             val headers = if (cheap) mapOf("If-None-Match" to base!!.etag) else emptyMap()
             val got = withContext(Dispatchers.IO) { http.send("${config.ruleUrl}/state", headers = headers) }
+            lastContactWall = System.currentTimeMillis()
             if (got.statusCode() == 304) return "Up to date"
             check(got.statusCode() == 200) { "server answered ${got.statusCode()}" }
             val etag = got.headers().firstValue("ETag").orElse("")

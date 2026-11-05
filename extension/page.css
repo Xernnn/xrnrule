@@ -1,25 +1,25 @@
 /* The extension's own pages: the block page, the popup, the options. Light and dark. */
 :root {
-  --bg: #f5f6f8;
+  --bg: #f2f2f4;
   --card: #fff;
-  --text: #1c2130;
-  --muted: #5d6578;
-  --line: #dde1e8;
-  --accent: #3d63c9;
+  --text: #1b1b1e;
+  --muted: #6b6b73;
+  --line: #e3e3e8;
+  --accent: #16a34a;
   --accent-text: #fff;
-  --bad: #c62828;
+  --bad: #dc2626;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121620;
-    --card: #1b2130;
-    --text: #e8ebf2;
-    --muted: #9aa3b5;
-    --line: #2c3446;
-    --accent: #6f9bf0;
-    --accent-text: #0d1220;
-    --bad: #ef7d73;
+    --bg: #1f1f23;
+    --card: #2b2b30;
+    --text: #f4f4f5;
+    --muted: #aaaaac;
+    --line: #37373c;
+    --accent: #22c55e;
+    --accent-text: #fff;
+    --bad: #f04242;
   }
 }
 * { box-sizing: border-box; }

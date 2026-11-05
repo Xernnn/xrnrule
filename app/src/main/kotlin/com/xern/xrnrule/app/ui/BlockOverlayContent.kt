@@ -23,14 +23,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Language
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Nfc
 import androidx.compose.material.icons.outlined.Schedule
@@ -66,7 +64,6 @@ import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
-import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.SiteIcons
@@ -156,6 +153,15 @@ fun BlockOverlayContent(
                         Text(
                             sentence,
                             style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                    if (ui != null && ui.triesToday >= 2) {
+                        Gap(10)
+                        Text(
+                            "${ordinal(ui.triesToday)} try today",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
                         )
@@ -326,7 +332,7 @@ private fun OverrideSection(
         null -> Unit
         OverrideRejection.NONE_LEFT -> {
             Text(
-                "Today's bought minutes for this are used up.",
+                "You've taken today's extra minutes for this.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -338,7 +344,7 @@ private fun OverrideSection(
     }
     val readyAt = ui.overrideReadyAtElapsed
     if (readyAt == null) {
-        OutlinePill("Buy $minutes", onClick = { onBegin(ui.blockerIds) })
+        OutlinePill("Take $minutes more", onClick = { onBegin(ui.blockerIds) })
         Gap(6)
         Text(
             "Wait ${ui.overrideWaitMs / 1000} s, then type a sentence.",
@@ -392,16 +398,7 @@ private fun EarnedActions(blockId: String, unlockMs: Long, ui: OverlayShieldPort
         )
         return
     }
-    var shownAt by remember(blockId) { mutableLongStateOf(System.currentTimeMillis()) }
-    var now by remember(blockId) { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(blockId) {
-        shownAt = System.currentTimeMillis()
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(200)
-        }
-    }
-    val remainMs = (SETTLE_MS - (now - shownAt)).coerceAtLeast(0L)
+    val remainMs = rememberSettleLeft(blockId)
     val ready = remainMs <= 0L
     PillButton(
         if (ready) "Open for ${formatDuration(unlockMs)}" else "Steady… ${remainMs / 1000 + 1}",
@@ -409,6 +406,21 @@ private fun EarnedActions(blockId: String, unlockMs: Long, ui: OverlayShieldPort
         enabled = ready,
         icon = Icons.Filled.LockOpen,
     )
+}
+
+/** How much of the pause before an unlock opens is left, counted from when [key] came on screen. */
+@Composable
+fun rememberSettleLeft(key: String): Long {
+    var shownAt by remember(key) { mutableLongStateOf(System.currentTimeMillis()) }
+    var now by remember(key) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(key) {
+        shownAt = System.currentTimeMillis()
+        while (now - shownAt < SETTLE_MS) {
+            now = System.currentTimeMillis()
+            delay(200)
+        }
+    }
+    return (SETTLE_MS - (now - shownAt)).coerceAtLeast(0L)
 }
 
 /**
@@ -476,4 +488,13 @@ private fun HoldToCheck(
             if (done) Icon(Icons.Filled.Check, contentDescription = "Done", tint = kind.color, modifier = Modifier.size(18.dp))
         }
     }
+}
+
+/** "2nd", "3rd", "11th". */
+private fun ordinal(n: Int): String = "$n" + when {
+    n % 100 in 11..13 -> "th"
+    n % 10 == 1 -> "st"
+    n % 10 == 2 -> "nd"
+    n % 10 == 3 -> "rd"
+    else -> "th"
 }

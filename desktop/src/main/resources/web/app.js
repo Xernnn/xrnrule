@@ -127,40 +127,8 @@ const siteMatches = (location, target) => {
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
-const KIND = { HABIT: "habit", ALLOWANCE: "daily limit", SCHEDULE: "schedule", LOCKDOWN: "lockdown" };
-
-/** Where a block's limit stands (I19, I32, I44). */
-function limitStatus(b) {
-  if (b.rowBreakRemainingMs > 0) return ["blocked", `On a break: ${clock(b.rowBreakRemainingMs)} left (${min(b.rowMs)} min in a row is the most)`];
-  if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
-  const row = b.rowMs > 0 ? `${min(b.rowMs - b.rowUsedMs)} of ${min(b.rowMs)} min in a row left` : null;
-  if (b.allowanceMs <= 0) return ["open", row];
-  return b.reason === "LIMIT" ? ["blocked", `Used up: ${min(b.allowanceUsedMs)} of ${min(b.allowanceMs)} min today`] : ["open", [`${min(b.allowanceMs - b.allowanceUsedMs)} of ${min(b.allowanceMs)} min left today`, row].filter(Boolean).join(" · ")];
-}
-
-function status(b) {
-  if (!b.enabled) return ["idle", "Turned off"];
-  if (state.pauseRemainingMs > 0 && !b.hardcore && b.mode !== "LOCKDOWN") return ["open", `On a break for ${clock(state.pauseRemainingMs)}`];
-  if (b.reason === "HOURS" && b.mode !== "SCHEDULE") return ["blocked", `Blocked by its hours (${b.hoursText})`]; // I44
-  switch (b.mode) {
-    case "HABIT":
-      if (b.reason === "BREAK" || b.reason === "LIMIT") return limitStatus(b);
-      if (b.openUntilWall) return ["open", `Open until ${time.format(b.openUntilWall)} (${clock(b.openUntilWall - state.nowWall)} left)`];
-      if (b.useLeftMs != null) return ["open", `Open: ${clock(b.useLeftMs)} of use left today`];
-      if (!b.blocking && b.limitFirst) return limitStatus(b);
-      if (!b.blocking) return ["idle", "Not blocking now" + (b.scheduleText ? ` (${b.scheduleText})` : "")];
-      if (b.state === "EARNED") return ["earned", `Earned: ${min(b.unlockMs)} min ready until ${time.format(b.creditExpiresAtWall)}`];
-      return ["blocked", "Blocked until you do the habit"];
-    case "ALLOWANCE":
-      return limitStatus(b);
-    case "SCHEDULE":
-      if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
-      return b.blocking ? ["blocked", `Blocked by its schedule (${b.scheduleText ?? "all day"})`] : ["idle", `Not now (${b.scheduleText ?? "all day"})`];
-    case "LOCKDOWN":
-      return b.lockdownRemainingMs > 0 ? ["blocked", `Locked down for ${clock(b.lockdownRemainingMs)}`] : ["idle", `Not running (${min(b.lockdownMs)} min when started)`];
-  }
-  return ["idle", b.mode];
-}
+/** The engine's words for how a block stands: the same sentence as the phone's card. */
+const TONE = { BLOCKED: "blocked", READY: "earned", OPEN: "open", OFF: "idle" };
 
 /** Loop's entry values (contract §1). */
 const YES_MANUAL = 2, YES_AUTO = 1, NO = 0;
@@ -237,7 +205,7 @@ function blockTile(b) {
 }
 
 function blockCard(b) {
-  const [cls, text] = status(b);
+  const cls = TONE[b.headline.tone] ?? "idle";
   const hasTimer = b.mode === "HABIT" && (b.trigger === "TIMER" || b.trigger === "COMBINED") && b.state === "ARMED";
   const manualOpen = b.mode === "HABIT" && b.state === "ARMED";
   const actions = [];
@@ -252,20 +220,17 @@ function blockCard(b) {
     actions.push(h("button", { class: "btn", onclick: () => act({ type: "lockdown", blockId: b.id }) }, `Start lockdown (${min(b.lockdownMs)} min)`));
   }
   const edit = !onBlockPage && form?.blockId !== b.id && h("button", { class: "btn edit", onclick: () => openForm(b) }, "Edit");
-  return h("section", { class: "card block" },
+  return h("section", { class: "card block" + (form?.blockId === b.id ? " editing" : "") },
     h("div", { class: "head" },
       blockTile(b),
       h("div", { class: "name" },
         h("h3", {}, b.name),
+        h("div", { class: `headline ${cls}` }, b.headline.text),
         h("div", { class: "chips" },
-          h("span", { class: "chip" }, KIND[b.mode] ?? b.mode.toLowerCase()),
-          b.mode === "HABIT" && b.hasLimit && h("span", { class: "chip" }, KIND.ALLOWANCE),
-          b.mode !== "SCHEDULE" && b.hoursText && h("span", { class: "chip" }, "blocked hours"),
           b.devices === "PHONE" && h("span", { class: "chip" }, "phone only"),
           b.devices === "LAPTOP" && h("span", { class: "chip" }, "laptop only"),
           b.hardcore && h("span", { class: "chip strict" }, "hardcore"))),
       edit),
-    h("div", { class: `status ${cls}` }, text),
     hasTimer && h("div", {},
       h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (b.timerMs / Math.max(1, b.requiredMs)) * 100)}%` })),
       h("div", { class: "actions", style: "margin-top:8px" },
@@ -649,7 +614,7 @@ function buyView() {
   if (!s.overrideReadyAtWall) {
     buyNode = null;
     return h("div", { class: "buy" },
-      h("button", { class: "btn", onclick: () => buy("begin") }, `Buy ${minutes} minutes`),
+      h("button", { class: "btn", onclick: () => buy("begin") }, `Take ${minutes} more minutes`),
       h("span", { class: "note" }, `Wait ${Math.round(state.settings.waitMs / 1000)} s, then type a sentence.`));
   }
   if (!buyNode || buyKey !== s.overrideReadyAtWall) {
@@ -679,7 +644,7 @@ function settingsView() {
       h("div", { class: "top" }, h("h3", {}, "Settings"), h("span", { class: "spacer" }),
         h("button", { class: "btn ghost", onclick: () => { settingsForm = { phrase: s.phrase, waitSec: Math.round(s.waitMs / 1000), grantMin: min(s.grantMs), perDay: s.perDay, showClock: s.showClock, blockOtherBrowsers: s.blockOtherBrowsers }; render(); } }, "Edit")),
       h("div", { class: "note" },
-        s.perDay > 0 ? `Buying minutes: type “${s.phrase}” after ${Math.round(s.waitMs / 1000)} s for ${min(s.grantMs)} min, ${s.perDay} a day per block.` : "Buying minutes is off.",
+        s.perDay > 0 ? `Extra minutes: type “${s.phrase}” after ${Math.round(s.waitMs / 1000)} s for ${min(s.grantMs)} min, ${s.perDay} a day per block.` : "Buying minutes is off.",
         ` Corner clock on limited sites: ${s.showClock ? "on" : "off"}.`,
         ` Other browsers: ${s.blockOtherBrowsers ? "closed while a block has websites" : "allowed"}.`));
   }
@@ -696,7 +661,7 @@ function buildSettings() {
   return h("section", { class: "card settings" },
     h("h3", {}, "Settings"),
     h("div", { class: "editor form" },
-      field("Sentence to buy minutes", h("input", { type: "text", value: f.phrase, oninput: (e) => (f.phrase = e.target.value) }), "Accents, case and punctuation don't matter when you type it."),
+      field("Sentence for extra minutes", h("input", { type: "text", value: f.phrase, oninput: (e) => (f.phrase = e.target.value) }), "Accents, case and punctuation don't matter when you type it."),
       h("div", { class: "row" },
         field("Wait (seconds)", num("waitSec")),
         field("Minutes bought", num("grantMin", { min: 1 })),
@@ -711,7 +676,7 @@ function buildSettings() {
 async function saveSettings() {
   const result = await post("/api/settings", settingsForm);
   if (result.error) message = result.error;
-  else if (result.token) startGuard(result.token, result.waitMs, "Saving the settings (they make buying minutes easier)");
+  else if (result.token) startGuard(result.token, result.waitMs, "Saving the settings (they make blocks easier to get past)");
   settingsForm = null;
   settingsNode = null;
   refresh();
@@ -778,11 +743,11 @@ function render() {
       pause,
       !form && h("button", { class: "btn primary", onclick: () => openForm(null) }, "+ New block")),
     form && !form.blockId && !onBlockPage && h("section", { class: "card" }, formView(null)),
-    blocks.length ? blocks.map(blockCard) : !form && h("section", { class: "card note" }, onBlockPage ? "No block covers this any more." : "No blocks yet. Make one here, or in xrnrule on the phone."),
+    blocks.length ? h("div", { class: "blocks" }, blocks.map(blockCard)) : !form && h("section", { class: "card note" }, onBlockPage ? "No block covers this any more." : "No blocks yet. Make one here, or in xrnrule on the phone."),
     !onBlockPage && settingsView(),
     h("div", { class: "foot" },
       onBlockPage ? h("a", { href: "/" }, "All blocks") : h("span", {}, state.loop?.ok === false ? `Habits: ${state.loop.message}` : ""),
-      h("span", {}, state.sync ? `${state.sync.ok ? "Last sync" : "Last try"} ${time.format(state.sync.atWallMs)}` : ""))));
+      h("span", {}, state.lastContactWall ? `Home server last seen ${time.format(state.lastContactWall)}` : state.sync ? `Last try ${time.format(state.sync.atWallMs)}` : ""))));
   window.scrollTo(0, scrollY);
 }
 
