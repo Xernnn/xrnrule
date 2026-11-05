@@ -60,7 +60,7 @@ class AppContainer(context: Context) {
     val loop = LoopHabits(context, habits, appScope)
 
     /** New versions of the app from the same home server — real in `sideload`, a no-op in `play`. */
-    val updates: AppUpdates = createAppUpdates(context, shared.settings, appScope)
+    val updates: AppUpdates = createAppUpdates(context, shared.settings)
 
     /** The fingerprint step in front of the app's screens. */
     val appLock = AppLock(context)

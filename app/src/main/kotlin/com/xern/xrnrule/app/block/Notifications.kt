@@ -153,6 +153,14 @@ class Notifications(private val context: Context) {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
+    /** Opens Settings → Updates, once past the app lock. */
+    fun openUpdates(): PendingIntent = PendingIntent.getActivity(
+        context,
+        2,
+        AppLinks.updatesIntent(context),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     private fun openApp(): PendingIntent = PendingIntent.getActivity(
         context,
         0,

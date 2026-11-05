@@ -253,6 +253,16 @@ private fun XrnruleScreens(container: AppContainer) {
             }
         }
     }
+    val updatesLink by AppLinks.updates.collectAsStateWithLifecycle()
+    val updateReady by container.updates.ready.collectAsStateWithLifecycle()
+    val openUpdates = { nav.navigate("settings/${SettingsPage.UPDATES.name}") { launchSingleTop = true } }
+    // A link from the "update ready" notification.
+    LaunchedEffect(updatesLink) {
+        if (updatesLink) {
+            AppLinks.updates.value = false
+            openUpdates()
+        }
+    }
     val openFocus: (String, Boolean) -> Unit = { id, start ->
         if (start) store.dispatch(BlockEvent.StartFocus(id))
         nav.navigate("focus/$id") { launchSingleTop = true }
@@ -309,6 +319,8 @@ private fun XrnruleScreens(container: AppContainer) {
                     onOpenBlock = { nav.navigate("block/$it") },
                     onCreateBlock = { nav.navigate("createBlock") },
                     onFocus = openFocus,
+                    updateReady = updateReady,
+                    onOpenUpdates = openUpdates,
                 )
             }
             composable("focus/{habitId}") { entry ->
@@ -360,6 +372,7 @@ private fun NavController.leave(entry: NavBackStackEntry) {
 /** Links into a screen of the app from outside it: the block screen, the notification. */
 object AppLinks {
     private const val EXTRA_FOCUS = "com.xern.xrnrule.app.FOCUS"
+    private const val EXTRA_UPDATES = "com.xern.xrnrule.app.UPDATES"
 
     /** A habit whose focus timer should open, until the screens pick it up. */
     val focus = MutableStateFlow<String?>(null)
@@ -369,11 +382,20 @@ object AppLinks {
             .putExtra(EXTRA_FOCUS, habitId)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
+    /** Whether Settings → Updates should open, until the screens pick it up. */
+    val updates = MutableStateFlow(false)
+
+    fun updatesIntent(context: Context): Intent =
+        Intent(context, MainActivity::class.java)
+            .putExtra(EXTRA_UPDATES, true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
     /** A block to show on the Blocks tab, until it scrolls there. */
     val block = MutableStateFlow<String?>(null)
 
     fun handle(intent: Intent?) {
         intent?.getStringExtra(EXTRA_FOCUS)?.let { focus.value = it }
+        if (intent?.getBooleanExtra(EXTRA_UPDATES, false) == true) updates.value = true
         // xrnrule://open?block=<id>: xrnloops' lock line and earned banner (LinksContract.OPEN_*).
         val data = intent?.data
         if (data?.scheme == LinksContract.OPEN_SCHEME && data.host == LinksContract.OPEN_HOST) {

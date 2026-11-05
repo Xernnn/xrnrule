@@ -21,29 +21,33 @@ interface AppUpdates {
     /** The last check or install; null before the first. */
     val status: StateFlow<UpdateStatus?>
 
+    /** The version downloaded and waiting for a tap, e.g. "0.2.8 (8)"; null when there's none. */
+    val ready: StateFlow<String?>
+
     /** Whether Android lets xrnrule install apps ("Install unknown apps"), which an update needs. */
     fun canInstall(): Boolean
 
     /** The system screen that allows it. */
     fun installPermissionIntent(): Intent
 
-    /** Looks now and installs a newer version straight away (Settings → Check now). */
+    /** Looks now and gets a newer version [ready] (Settings → Check now). */
     suspend fun checkNow()
+
+    /** Installs what's [ready], or something newer if the server has it by now (Settings → Install). */
+    suspend fun installNow()
 
     /** Starts the background checks. Called once per process. */
     fun start()
-
-    /** The screen went off: the moment a waiting update installs. */
-    fun onScreenOff()
 }
 
 object NoopAppUpdates : AppUpdates {
     override val isSupported = false
     override val installedVersion = ""
     override val status: StateFlow<UpdateStatus?> = MutableStateFlow(null)
+    override val ready: StateFlow<String?> = MutableStateFlow(null)
     override fun canInstall() = false
     override fun installPermissionIntent() = Intent()
     override suspend fun checkNow() = Unit
+    override suspend fun installNow() = Unit
     override fun start() = Unit
-    override fun onScreenOff() = Unit
 }

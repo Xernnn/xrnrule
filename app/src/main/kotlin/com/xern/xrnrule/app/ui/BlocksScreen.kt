@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.GppBad
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Nfc
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
@@ -110,6 +111,8 @@ fun BlocksScreen(
     onOpenBlock: (String) -> Unit,
     onCreateBlock: () -> Unit,
     onFocus: (habitId: String, start: Boolean) -> Unit,
+    updateReady: String?,
+    onOpenUpdates: () -> Unit,
 ) {
     val context = LocalContext.current
     val appLabels = remember { InstalledApps.launchable(context).associate { it.packageName to it.label } }
@@ -137,7 +140,7 @@ fun BlocksScreen(
         val id = linked ?: return@LaunchedEffect
         val index = world.blocks.indexOfFirst { it.id == id }
         if (index >= 0) {
-            val at = index + 1 + (if (bannerShown) 1 else 0) + (if (pauseLeft > 0) 1 else 0)
+            val at = index + 1 + listOf(bannerShown, pauseLeft > 0, updateReady != null).count { it }
             // Just opened, the list hasn't been laid out yet, and a scroll then goes nowhere.
             snapshotFlow { list.layoutInfo.totalItemsCount }.first { it > at }
             list.animateScrollToItem(at)
@@ -203,6 +206,7 @@ fun BlocksScreen(
             if (pauseLeft > 0) {
                 item { PauseBanner(leftMs = pauseLeft, onEnd = { store.dispatch(BlockEvent.EndPause) }) }
             }
+            updateReady?.let { version -> item { UpdateBanner(version, onOpenUpdates) } }
             if (world.blocks.isEmpty()) {
                 item { FirstRun(onCreateBlock) }
             }
@@ -323,6 +327,32 @@ private fun PauseBanner(leftMs: Long, onEnd: () -> Unit) {
             )
         }
         TextButton(onClick = onEnd) { Text("End now") }
+    }
+}
+
+/** A new version waits for a tap. Calm on purpose: nothing's wrong, and it can wait. */
+@Composable
+private fun UpdateBanner(version: String, onClick: () -> Unit) {
+    val blue = LocalKinds.current.blue
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(blue.fill)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.SystemUpdate, contentDescription = null, tint = blue.color)
+        WGap(12)
+        Column {
+            Text("Update ready", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Version $version. Tap to install it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

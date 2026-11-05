@@ -237,10 +237,11 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                 onClick = { onOpen(SettingsPage.APPEARANCE) },
             )
             if (deps.updates.isSupported) {
+                val updateReady by deps.updates.ready.collectAsStateWithLifecycle()
                 GroupRow(
                     title = "Updates",
                     icon = Icons.Outlined.SystemUpdate,
-                    subtitle = "Version ${deps.updates.installedVersion}",
+                    subtitle = updateReady?.let { "Update ready: $it" } ?: "Version ${deps.updates.installedVersion}",
                     onClick = { onOpen(SettingsPage.UPDATES) },
                 )
             }
@@ -976,12 +977,13 @@ private fun UpdatesPage(updates: AppUpdates) {
     val resume = rememberResumeSignal()
     val canInstall = remember(resume) { updates.canInstall() }
     val status by updates.status.collectAsStateWithLifecycle()
+    val ready by updates.ready.collectAsStateWithLifecycle()
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     PageIntro(
-        "Version ${updates.installedVersion}. New versions come from your home server and install themselves " +
-            "the next time the screen goes off.",
+        "Version ${updates.installedVersion}. New versions come from your home server and download by themselves. " +
+            "A notification and a banner on the Blocks tab say when one is ready, and it installs only when you tap Install here.",
     )
     Gap(16)
     GroupCard {
@@ -994,7 +996,28 @@ private fun UpdatesPage(updates: AppUpdates) {
         StatusLine("${s.message} (${formatAgo(s.atWallMs)})", ok = s.ok)
     }
     Gap(12)
-    PillButton(if (busy) "Checking…" else "Check now", enabled = !busy, onClick = { busy = true; scope.launch { updates.checkNow(); busy = false } })
+    val version = ready
+    PillButton(
+        when {
+            version != null -> if (busy) "Installing…" else "Install $version"
+            busy -> "Checking…"
+            else -> "Check now"
+        },
+        enabled = !busy,
+        onClick = {
+            busy = true
+            scope.launch {
+                if (version != null) updates.installNow() else updates.checkNow()
+                busy = false
+            }
+        },
+    )
+    if (version != null) {
+        FootNote(
+            "xrnrule closes for a moment while it installs. Your phone may ask you to confirm, and some phones turn " +
+                "off drawing over other apps during an update: xrnrule tells you if that happens.",
+        )
+    }
 }
 
 @Composable

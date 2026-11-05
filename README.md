@@ -62,9 +62,10 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **App lock.** Opening the app, or coming back to it after 30 seconds away, asks for your
   fingerprint (or the phone's screen-lock PIN). The block screen isn't behind it: that's how you
   get through a block. Settings → App lock turns it off. Android 9 or later.
-- **Keeps itself up to date** (sideload build). New versions come from your server, at the sync
-  address and with its login, and install the next time the screen goes off; Settings → Updates
-  → Check now installs at once. See [Updates](#updates).
+- **Tells you about updates** (sideload build). New versions come from your server, at the sync
+  address and with its login. A new one downloads by itself, then a notification and a banner on
+  the Blocks tab say it's ready and take you to Settings → Updates, where it installs when you tap
+  Install. See [Updates](#updates).
 - **Backup.** Export your blocks to a file and import them on a new install.
 - **Insights.** Per-app screen time, time per site, habits done, times blocked and your streak.
 - Built to survive reboots, process death and OEM battery killers.
@@ -121,9 +122,9 @@ a newer one, and needs `~/.config/xrnrule/release.json`:
 - **The app** is the sideload release build, signed with the key it shares with xrnloops
   (`../xrn-signing.properties`; the release refuses to go without it, since the phone only takes
   an update signed like the app it has). On the phone, Settings → Updates → **Allow installing
-  updates** once; after that
-  Android 12 and later install updates without asking. Where Android still wants a tap, a
-  notification says the update is ready. The first build with the updater has to be installed
+  updates** once. A new build downloads by itself every few hours; a notification and a banner on
+  the Blocks tab then open Settings → Updates, and nothing installs until you tap **Install**
+  there. The first build with the updater has to be installed
   by hand: `./gradlew :app:installSideloadRelease`, or open
   `https://<your server>/xrnrule/update/xrnrule.apk` on the phone and sign in with the sync login.
 

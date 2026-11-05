@@ -83,8 +83,6 @@ class BlockerForegroundService : LifecycleService() {
                 Intent.ACTION_SCREEN_OFF -> {
                     awake.value = false
                     container.persist.flush()
-                    // A downloaded update waits for this: its restart can't land mid-use.
-                    container.updates.onScreenOff()
                 }
                 Intent.ACTION_USER_PRESENT -> {
                     awake.value = true

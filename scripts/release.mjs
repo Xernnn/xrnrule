@@ -155,7 +155,7 @@ async function releaseApp() {
   // Without the login it must say 401: proof the route is there and guarded.
   const res = await fetch(`${server}/update/app.json`, { cache: "no-store" });
   if (res.status !== 401) throw new Error(`${server}/update/app.json answered ${res.status} without the login, not 401: is the server's /update/ route deployed?`);
-  console.log(`published the app, build ${versionCode}. The phone installs it the next time its screen goes off after it looks
-(every few hours), or at once from Settings → Updates → Check now.
+  console.log(`published the app, build ${versionCode}. The phone downloads it when it next looks (every few hours, or from
+Settings → Updates → Check now), then says it's ready and installs it when you tap Install there.
 First install on a phone without it: ${server}/update/xrnrule.apk (with the sync login)`);
 }
