@@ -48,4 +48,26 @@ class SitesTest {
         assertEquals(listOf("x.com", "youtube.com"), Sites.shown(listOf("twitter.com", "x.com", "youtube.com")))
         assertEquals("an alias alone stays", listOf("redd.it"), Sites.shown(listOf("redd.it")))
     }
+
+    @Test
+    fun normalizeTargetKeepsThePath() {
+        assertEquals("youtube.com/shorts", Sites.normalizeTarget("https://www.YouTube.com/Shorts/?x=1#y"))
+        assertEquals("youtube.com/shorts", Sites.normalizeTarget("youtube.com/shorts"))
+        assertEquals("reddit.com", Sites.normalizeTarget("https://reddit.com/"))
+        assertEquals("reddit.com", Sites.normalizeTarget("reddit.com?x=1"))
+        assertEquals("m.youtube.com/watch", Sites.normalizeTarget("m.youtube.com/watch?v=1"))
+        assertEquals(null, Sites.normalizeTarget("not a site"))
+    }
+
+    @Test
+    fun aPathTargetCoversThatPartOfTheSiteOnly() {
+        assertTrue(Sites.matches("youtube.com/shorts", "youtube.com/shorts"))
+        assertTrue(Sites.matches("m.youtube.com/shorts/abc", "youtube.com/shorts"))
+        assertFalse(Sites.matches("youtube.com/shortsfoo", "youtube.com/shorts"))
+        assertFalse(Sites.matches("youtube.com/watch", "youtube.com/shorts"))
+        assertFalse(Sites.matches("youtube.com", "youtube.com/shorts"))
+        assertFalse(Sites.matches("notyoutube.com/shorts", "youtube.com/shorts"))
+        assertTrue("a host covers its paths", Sites.matches("youtube.com/watch", "youtube.com"))
+        assertEquals("youtube.com", Sites.hostOf("youtube.com/shorts"))
+    }
 }

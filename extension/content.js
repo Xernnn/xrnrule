@@ -39,9 +39,20 @@
     });
   }
 
+  /** Sound coming out of this page: muted previews and paused players don't count. */
+  const sounding = () => [...document.querySelectorAll("video, audio")]
+    .some((m) => !m.paused && !m.ended && !m.muted && m.volume > 0 && m.readyState > 2);
+
+  /**
+   * A page out of sight says nothing, unless it's playing: that's use like any other (I47), and
+   * if the site gets blocked this is what stops it. Sound also keeps its timers running.
+   */
   async function beat() {
-    if (stopped || document.visibilityState !== "visible") return;
-    handle(await send({ type: "beat", host: location.hostname, focused: inFront() }));
+    if (stopped) return;
+    const front = inFront();
+    const playing = !front && sounding();
+    if (document.visibilityState !== "visible" && !playing) return;
+    handle(await send({ type: "beat", host: X.locationOf(location.href), focused: front, playing }));
   }
 
   function handle(v) {
@@ -49,7 +60,7 @@
     if (v.blocked) {
       stopped = true;
       clearTimeout(deadline);
-      location.replace(X.blockUrl(v.page, OWN_PAGE, v.site || location.hostname, location.href));
+      location.replace(X.blockUrl(v.page, OWN_PAGE, v.site || X.locationOf(location.href), location.href));
       return;
     }
     base = v;

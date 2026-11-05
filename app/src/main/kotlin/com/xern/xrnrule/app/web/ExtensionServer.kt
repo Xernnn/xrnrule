@@ -48,7 +48,16 @@ class ExtensionServer(
     private val scope: CoroutineScope,
 ) {
     @Serializable
-    private data class Heartbeat(val host: String? = null, val focused: Boolean = false, val standIn: Boolean = false, val version: String? = null)
+    private data class Heartbeat(
+        val host: String? = null,
+        val focused: Boolean = false,
+        val standIn: Boolean = false,
+        val version: String? = null,
+        /** I47: playing sound without being in front. */
+        val playing: Boolean = false,
+        /** Whether the extension is allowed in incognito tabs, if the browser says. */
+        val incognito: Boolean? = null,
+    )
 
     private class Reply(val code: Int, val type: String, val body: ByteArray) {
         constructor(code: Int, text: String) :
@@ -168,8 +177,15 @@ class ExtensionServer(
             method == "POST" && path == "/ext/heartbeat" -> {
                 val beat = runCatching { json.decodeFromString(Heartbeat.serializer(), body) }.getOrNull()
                     ?: return Reply(400, "bad heartbeat")
-                val leave = SiteSightings.report(beat.host?.let(Sites::normalize), beat.standIn)
+                val location = beat.host?.let(Sites::normalizeTarget)
+                val leave = if (beat.playing && !beat.focused && location != null) {
+                    SiteSightings.reportPlaying(location)
+                    false
+                } else {
+                    SiteSightings.report(location, beat.standIn)
+                }
                 beat.version?.let(websites::onVersion)
+                beat.incognito?.let { websites.incognitoAllowed = it }
                 Reply(200, encode(verdict(beat.host).copy(leave = leave)))
             }
             method == "GET" && path == "/ext/check" -> Reply(200, encode(verdict(query["host"])))

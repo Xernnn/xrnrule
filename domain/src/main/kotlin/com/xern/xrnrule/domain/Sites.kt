@@ -46,9 +46,38 @@ object Sites {
         return sites.filter { ALIASES[it]?.let { main -> main !in all } ?: true }
     }
 
-    /** `youtube.com` covers `youtube.com` and `m.youtube.com`, but not `notyoutube.com`. */
-    fun matches(host: String, target: String): Boolean =
-        host == target || host.endsWith(".$target")
+    /**
+     * I46: a target or a page as this app keeps them: [normalize]'s host, plus the path under it
+     * if there is one ("https://www.YouTube.com/Shorts/" -> "youtube.com/shorts"). Null for
+     * anything [normalize] refuses.
+     */
+    fun normalizeTarget(input: String): String? {
+        val host = normalize(input) ?: return null
+        val rest = input.trim().substringAfter("://")
+        val at = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }
+        if (at < 0 || rest[at] != '/') return host
+        val path = rest.substring(at).takeWhile { it != '?' && it != '#' }.lowercase().trimEnd('/')
+        return host + path.take(MAX_PATH)
+    }
+
+    /** The host of a target or page ("youtube.com/shorts" -> "youtube.com"). */
+    fun hostOf(location: String): String = location.substringBefore('/')
+
+    /**
+     * `youtube.com` covers `youtube.com` and `m.youtube.com/anything`, but not `notyoutube.com`.
+     * I46: `youtube.com/shorts` covers that path and what's under it, on the same hosts.
+     */
+    fun matches(location: String, target: String): Boolean {
+        val host = hostOf(location)
+        val targetHost = hostOf(target)
+        if (host != targetHost && !host.endsWith(".$targetHost")) return false
+        val want = target.drop(targetHost.length)
+        if (want.isEmpty()) return true
+        val path = location.drop(host.length)
+        return path == want || path.startsWith("$want/")
+    }
+
+    private const val MAX_PATH = 200
 
     /**
      * The override phrase as compared (I34): no accents (a Vietnamese keyboard may add them), no

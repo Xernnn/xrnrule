@@ -40,7 +40,13 @@ interface DesktopBus : DBusInterface {
  * reports the app or site it is standing in for, so a TIMER that counts "waiting on the block
  * screen" (I4) runs while you wait there. A locked screen is "nothing in use", as on the phone.
  */
-class Foreground(private val store: Store) {
+class Foreground(private val store: Store, private val browsersFile: File? = null) {
+    /** I49. */
+    val browsers = BrowserWatch(
+        known = browsersFile?.takeIf { it.isFile }?.readLines()?.filter { it.isNotBlank() }?.toSet().orEmpty(),
+        startedAtMs = store.clock.nowMonotonicMs(),
+    )
+
     @Serializable
     /** [standIn]: the extension's own block page, standing in for the site it blocks (as our block page does). */
     data class Heartbeat(
@@ -51,6 +57,10 @@ class Foreground(private val store: Store) {
         val standIn: Boolean = false,
         /** The extension's version (versions up to 2.1.1 don't say). */
         val version: String? = null,
+        /** I47: playing sound without being in front. */
+        val playing: Boolean = false,
+        /** Whether the extension may run in incognito windows, if the browser says. */
+        val incognito: Boolean? = null,
     )
 
     @Volatile var active: AppWindow? = null
@@ -58,11 +68,18 @@ class Foreground(private val store: Store) {
             field = value
             // Focus went to an app that isn't a browser: whatever tab was in front no longer is.
             if (value != null && !isBrowser(value.appId) && heartbeat?.fromBlockPage != true) heartbeat = null
+            browsers.front(value?.appId, value != null && isBrowser(value.appId), store.clock.nowMonotonicMs())
         }
     @Volatile var locked = false
     @Volatile private var heartbeat: Heartbeat? = null
     @Volatile private var heartbeatAtMono = 0L
-    @Volatile var lastExtensionAtMono = Long.MIN_VALUE / 2
+    /** I47: pages playing sound out of sight, by when each last said so. */
+    private val playing = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private var playingSent: Set<String> = emptySet()
+
+    /** Whether the extension may run in incognito; null until a version that says has spoken. */
+    @Volatile var incognitoAllowed: Boolean? = null
+        private set
 
     /** The version the extension last said it is. */
     @Volatile var extensionVersion: String? = null
@@ -77,8 +94,13 @@ class Foreground(private val store: Store) {
      */
     fun onHeartbeat(beat: Heartbeat) {
         val now = store.clock.nowMonotonicMs()
-        if (!beat.fromBlockPage) lastExtensionAtMono = now
+        browsers.heard(now)
+        if (!beat.fromBlockPage && beat.focused && browsers.spoke(now)) {
+            runCatching { browsersFile?.writeText(browsers.known.joinToString("\n")) }
+        }
         if (!beat.fromBlockPage && beat.version != null && beat.version.length <= 20) extensionVersion = beat.version
+        if (!beat.fromBlockPage && beat.incognito != null) incognitoAllowed = beat.incognito
+        if (beat.playing && !beat.focused) beat.host?.let(Sites::normalizeTarget)?.let { playing[it] = now }
         val current = heartbeat
         if (beat.focused) {
             heartbeat = beat
@@ -89,14 +111,22 @@ class Foreground(private val store: Store) {
         update()
     }
 
+    /** The extension asked for its rules: alive, even on a page that doesn't beat. */
+    fun heardExtension() = browsers.heard(store.clock.nowMonotonicMs())
+
     @Synchronized
     fun update() {
         val now = store.clock.nowMonotonicMs()
+        playing.values.removeIf { now - it > FRESH_MS }
+        if (playing.keys != playingSent) {
+            playingSent = playing.keys.toSet()
+            store.dispatch(BlockEvent.BackgroundChanged(playingSent)) // I47
+        }
         val beat = heartbeat?.takeIf { it.focused && now - heartbeatAtMono <= FRESH_MS }
         val next: Pair<String?, String?> = when {
             locked -> null to null
             beat?.app != null -> beat.app to null
-            beat != null -> (active?.appId ?: "browser") to beat.host?.let(Sites::normalize)
+            beat != null -> (active?.appId ?: "browser") to beat.host?.let(Sites::normalizeTarget)
             else -> active?.appId to null
         }
         if (next != sent) {
@@ -108,13 +138,16 @@ class Foreground(private val store: Store) {
     /** A browser is in front but the extension has gone quiet: website blocking isn't working. */
     fun extensionMissing(): Boolean {
         val app = active?.appId ?: return false
-        return isBrowser(app) && store.clock.nowMonotonicMs() - lastExtensionAtMono > 15_000
+        return isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
     }
 
     private fun isBrowser(appId: String): Boolean = appId.lowercase().let { id -> BROWSERS.any { id.contains(it) } }
 
     companion object {
         const val FRESH_MS = 6_000L
+
+        /** The extension asks for its rules once a minute, even on a page where it can't run. */
+        const val EXTENSION_SILENCE_MS = 75_000L
         val BROWSERS = listOf("helium", "chrom", "brave", "vivaldi", "edge", "opera", "firefox", "zen", "librewolf", "floorp", "thorium")
     }
 }
@@ -134,7 +167,7 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
 
     fun isAppBlocked(appId: String): Boolean = appId in plan().blockedPackages
 
-    fun isSiteBlocked(host: String): Boolean = plan().siteBlocked(Sites.normalize(host) ?: host)
+    fun isSiteBlocked(host: String): Boolean = plan().siteBlocked(Sites.normalizeTarget(host) ?: host)
 
     /** Runs inside the store's lock (I7), so the slow part goes to [worker]. */
     override fun apply(plan: ShieldPlan) {

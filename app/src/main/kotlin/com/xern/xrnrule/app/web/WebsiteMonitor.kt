@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
 import com.xern.xrnrule.domain.ExtensionApi
+import com.xern.xrnrule.domain.Sites
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +22,19 @@ object SiteSightings {
 
     private val _current = MutableStateFlow<String?>(null)
     val current: StateFlow<String?> = _current.asStateFlow()
+
+    private val _playing = MutableStateFlow<Set<String>>(emptySet())
+
+    /** I47: pages playing sound without being in front, screen off included. */
+    val playing: StateFlow<Set<String>> = _playing.asStateFlow()
+    private val playingAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** A page playing out of sight; it says so again every few seconds while it does. */
+    fun reportPlaying(location: String) {
+        heard()
+        playingAt[location] = lastHeardElapsed
+        _playing.value = playingAt.keys.toSet()
+    }
 
     /**
      * `elapsedRealtime` of the extension's last call of any kind. Starts at process start, so a
@@ -72,7 +86,9 @@ object SiteSightings {
         heard()
         reportedAtElapsed = lastHeardElapsed
         lastReportWasSite = host != null
-        val left = leaving?.takeIf { (site, at) -> site == host && lastHeardElapsed - at < LEAVE_MS }
+        val left = leaving?.takeIf { (site, at) ->
+            host != null && Sites.hostOf(site) == Sites.hostOf(host) && lastHeardElapsed - at < LEAVE_MS
+        }
         if (left == null) {
             _current.value = host
             return false
@@ -100,7 +116,9 @@ object SiteSightings {
 
     /** Called every second by [ExtensionServer]. */
     fun expire() {
-        if (_current.value != null && SystemClock.elapsedRealtime() - reportedAtElapsed > FRESH_MS) _current.value = null
+        val now = SystemClock.elapsedRealtime()
+        if (_current.value != null && now - reportedAtElapsed > FRESH_MS) _current.value = null
+        if (playingAt.values.removeIf { now - it > FRESH_MS }) _playing.value = playingAt.keys.toSet()
     }
 }
 
@@ -157,8 +175,23 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
     var extensionBrowser: String?
         get() = prefs.getString(KEY_BROWSER, null)
         set(value) {
-            if (value != null && value != extensionBrowser) prefs.edit().putString(KEY_BROWSER, value).apply()
+            if (value == null) return
+            val all = extensionBrowsers
+            if (value != extensionBrowser || value !in all) {
+                prefs.edit().putString(KEY_BROWSER, value).putStringSet(KEY_BROWSERS, all + value).apply()
+            }
         }
+
+    /** I49: every browser the extension has spoken from: these are never blocked for lacking it. */
+    private val extensionBrowsers: Set<String>
+        get() = prefs.getStringSet(KEY_BROWSERS, null) ?: setOfNotNull(prefs.getString(KEY_BROWSER, null))
+
+    /** I49: a browser with no extension, once some browser is known to have one. */
+    fun lacksExtension(browser: String): Boolean = extensionBrowsers.let { it.isNotEmpty() && browser !in it }
+
+    /** Whether the extension may run in incognito tabs; null until a version that says has spoken. */
+    @Volatile
+    var incognitoAllowed: Boolean? = null
 
     /** Wall time the extension last called, saved at most once a minute. */
     val lastHeardWall: Long get() = prefs.getLong(KEY_HEARD, 0)
@@ -193,6 +226,7 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
 
     private companion object {
         const val KEY_BROWSER = "browser"
+        const val KEY_BROWSERS = "browsers"
         const val KEY_HEARD = "heardAt"
         const val KEY_VERSION = "version"
         const val QUETTA = "net.quetta.browser"
@@ -218,6 +252,27 @@ object Browsers {
     private var found: Set<String>? = null
 
     fun isBrowser(context: Context, pkg: String): Boolean = pkg in KNOWN || pkg in all(context)
+
+    @Volatile
+    private var full: Pair<Long, Set<String>>? = null
+
+    /**
+     * A real browser (I49), for blocking one: [isBrowser] also takes any app that claims every
+     * https link, and those can be anything. Looked up again every few minutes, since a browser
+     * installed just now is the likeliest one to be tried.
+     */
+    fun isFullBrowser(context: Context, pkg: String): Boolean {
+        if (pkg in KNOWN) return true
+        val now = SystemClock.elapsedRealtime()
+        val set = full?.takeIf { now - it.first < FULL_TTL_MS }?.second ?: runCatching {
+            val intent = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_BROWSER)
+            context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+                .mapTo(mutableSetOf()) { it.activityInfo.packageName }
+        }.getOrDefault(emptySet()).also { full = now to it }
+        return pkg in set
+    }
+
+    private const val FULL_TTL_MS = 5L * 60_000
 
     private fun all(context: Context): Set<String> = found ?: runCatching {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))

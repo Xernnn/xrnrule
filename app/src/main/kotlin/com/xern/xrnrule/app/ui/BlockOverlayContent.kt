@@ -93,6 +93,7 @@ fun BlockOverlayContent(
     onFocus: (String) -> Unit = {},
     onRedeem: (String) -> Unit,
     onLeave: () -> Unit,
+    onOpenApp: (String) -> Unit = {},
     /** Buying minutes (contract I34): start the wait for these blocks, type the sentence, or drop it. */
     onBeginOverride: (Set<String>) -> Unit = {},
     onClaimOverride: (String) -> Unit = {},
@@ -135,6 +136,7 @@ fun BlockOverlayContent(
                     Gap(24)
                     Text(
                         when {
+                            ui?.useBrowser != null -> "$subject can't block sites"
                             earned -> "Nice work!\n$subject is ready to open"
                             block == null || strict -> "$subject is blocked"
                             else -> "To unlock $subject,\nfinish your habits first!"
@@ -143,6 +145,7 @@ fun BlockOverlayContent(
                         textAlign = TextAlign.Center,
                     )
                     val sentence = when {
+                        ui?.useBrowser != null -> "Your site blocks only work in ${ui.useBrowser.label}, so $subject stays closed while you have any."
                         block == null -> null
                         strict -> strictStatus(block, ui!!)
                         earned -> null
@@ -183,6 +186,10 @@ fun BlockOverlayContent(
                 }
                 if (earned) {
                     EarnedActions(block!!.id, block.reward.unlockDurationMs, ui, onRedeem)
+                    Gap(10)
+                }
+                ui?.useBrowser?.let { use ->
+                    PillButton("Open ${use.label}", onClick = { onOpenApp(use.pkg) })
                     Gap(10)
                 }
                 PillButton(

@@ -86,6 +86,8 @@ class DesktopTest {
         fg.active = AppWindow("org.kde.kate", "kate", 5)
         assertFalse(fg.extensionMissing())
         fg.active = AppWindow("helium-browser", "helium", 10)
+        assertFalse("just came to the front", fg.extensionMissing())
+        clock.mono += Foreground.EXTENSION_SILENCE_MS + 1
         assertTrue(fg.extensionMissing())
         fg.onHeartbeat(Foreground.Heartbeat(host = "example.com", focused = true))
         assertFalse(fg.extensionMissing())

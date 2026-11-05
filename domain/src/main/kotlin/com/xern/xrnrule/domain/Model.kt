@@ -521,6 +521,8 @@ data class Settings(
     val overridesPerDay: Int = Defaults.OVERRIDES_PER_DAY,
     /** The browser extension's corner clock on limited sites. */
     val showClock: Boolean = true,
+    /** I49: browsers without the extension are blocked while any block has websites. */
+    val blockOtherBrowsers: Boolean = true,
 )
 
 /**
@@ -543,6 +545,8 @@ data class World(
     val foregroundPkg: String? = null,
     /** Host shown in [foregroundPkg] when that is a browser and its address bar could be read (I18). */
     val foregroundSite: String? = null,
+    /** I47: pages playing sound here without being in front. Never shared. */
+    val backgroundSites: Set<String> = emptySet(),
     val lockdowns: Map<String, Lockdown> = emptyMap(),
     /** The running break, if any (I25). */
     val pause: Pause? = null,

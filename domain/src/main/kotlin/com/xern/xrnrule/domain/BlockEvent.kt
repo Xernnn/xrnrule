@@ -9,6 +9,9 @@ sealed interface BlockEvent {
      */
     data class ForegroundChanged(val pkg: String?, val site: String? = null) : BlockEvent
 
+    /** I47: the pages playing sound on this device without being in front; empty when none are. */
+    data class BackgroundChanged(val sites: Set<String>) : BlockEvent
+
     /** Periodic wake (~1s) while any timer, session, or non-HABIT block is live. */
     data object Tick : BlockEvent
 

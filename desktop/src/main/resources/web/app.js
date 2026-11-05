@@ -100,7 +100,8 @@ function h(tag, attrs = {}, ...children) {
 // A website's own icon, served by the daemon (which asks the site once and keeps it). The page
 // redraws every second: one that isn't there yet is asked for again after 30 s, not every time.
 const iconMissing = new Map();
-function siteIcon(host) {
+function siteIcon(site) {
+  const host = site.split("/")[0]; // a target can carry a path
   const since = iconMissing.get(host);
   if (since && Date.now() - since < 30_000) return null;
   return h("img", {
@@ -115,7 +116,14 @@ const clock = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
-const siteMatches = (host, target) => host === target || host.endsWith("." + target);
+const siteMatches = (location, target) => {
+  const host = location.split("/")[0];
+  const targetHost = target.split("/")[0];
+  if (host !== targetHost && !host.endsWith("." + targetHost)) return false;
+  const want = target.slice(targetHost.length);
+  const path = location.slice(host.length);
+  return !want || path === want || path.startsWith(want + "/");
+};
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
@@ -669,10 +677,11 @@ function settingsView() {
   if (!settingsForm) {
     return h("section", { class: "card settings" },
       h("div", { class: "top" }, h("h3", {}, "Settings"), h("span", { class: "spacer" }),
-        h("button", { class: "btn ghost", onclick: () => { settingsForm = { phrase: s.phrase, waitSec: Math.round(s.waitMs / 1000), grantMin: min(s.grantMs), perDay: s.perDay, showClock: s.showClock }; render(); } }, "Edit")),
+        h("button", { class: "btn ghost", onclick: () => { settingsForm = { phrase: s.phrase, waitSec: Math.round(s.waitMs / 1000), grantMin: min(s.grantMs), perDay: s.perDay, showClock: s.showClock, blockOtherBrowsers: s.blockOtherBrowsers }; render(); } }, "Edit")),
       h("div", { class: "note" },
         s.perDay > 0 ? `Buying minutes: type “${s.phrase}” after ${Math.round(s.waitMs / 1000)} s for ${min(s.grantMs)} min, ${s.perDay} a day per block.` : "Buying minutes is off.",
-        ` Corner clock on limited sites: ${s.showClock ? "on" : "off"}.`));
+        ` Corner clock on limited sites: ${s.showClock ? "on" : "off"}.`,
+        ` Other browsers: ${s.blockOtherBrowsers ? "closed while a block has websites" : "allowed"}.`));
   }
   if (!settingsNode) settingsNode = buildSettings();
   return settingsNode;
@@ -693,6 +702,7 @@ function buildSettings() {
         field("Minutes bought", num("grantMin", { min: 1 })),
         field("Times a day per block", num("perDay"), "0 turns it off.")),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.showClock, onchange: (e) => (f.showClock = e.target.checked) }), "Show the corner clock on limited sites"),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.blockOtherBrowsers, onchange: (e) => (f.blockOtherBrowsers = e.target.checked) }), "Close browsers without the extension while a block has websites"),
       h("div", { class: "actions" },
         h("button", { class: "btn primary", onclick: saveSettings }, "Save"),
         h("button", { class: "btn ghost", onclick: () => { settingsForm = null; settingsNode = null; render(); } }, "Cancel"))));
@@ -713,7 +723,8 @@ function alerts() {
   if (!state) return out;
   if (state.kwinSeenAgoMs == null) out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
   if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering. Turn it on in the browser's extensions page."]);
-  else if (state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
+  if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow the xrnrule extension in incognito on the browser's extensions page."]);
+  if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
   if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnrule/desktop.properties to share blocks and unlocks with the phone.`]);
   return out;

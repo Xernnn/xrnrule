@@ -103,6 +103,7 @@ class LocalServer(
             ex.requestMethod == "GET" && path == "/api/apps" -> send(ex, 200, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(DesktopApps.App.serializer()), DesktopApps.all()))
             ex.requestMethod == "GET" && path == "/ext/check" -> send(ex, 200, siteVerdict(query["host"]))
             ex.requestMethod == "GET" && path == "/ext/rules" -> {
+                foreground.heardExtension()
                 send(ex, 200, json.encodeToString(ExtensionApi.SiteRules.serializer(), ExtensionApi.rules(store.world.value, blockPage)))
             }
             ex.requestMethod == "POST" && path == "/ext/heartbeat" -> {
@@ -182,6 +183,7 @@ class LocalServer(
             overrideGrantMs = body["grantMin"]?.jsonPrimitive?.longOrNull?.let { it.coerceIn(1, 120) * 60_000 } ?: old.overrideGrantMs,
             overridesPerDay = body["perDay"]?.jsonPrimitive?.intOrNull?.coerceIn(0, 20) ?: old.overridesPerDay,
             showClock = body["showClock"]?.jsonPrimitive?.booleanOrNull ?: old.showClock,
+            blockOtherBrowsers = body["blockOtherBrowsers"]?.jsonPrimitive?.booleanOrNull ?: old.blockOtherBrowsers,
         )
         val apply: suspend () -> Unit = { store.edit { w -> w.copy(settings = settingsFrom(w.settings, new)) } }
         if (!BlockEdits.settingsLoosen(old, new)) {
@@ -198,6 +200,7 @@ class LocalServer(
         overrideGrantMs = form.overrideGrantMs,
         overridesPerDay = form.overridesPerDay,
         showClock = form.showClock,
+        blockOtherBrowsers = form.blockOtherBrowsers,
     )
 
     // ---- actions -------------------------------------------------------------------------
@@ -233,7 +236,7 @@ class LocalServer(
     private fun laptopTargets(body: JsonObject): String {
         val id = body["blockId"]!!.jsonPrimitive.content
         val apps = body["desktopApps"]!!.jsonArray.map { it.jsonPrimitive.content }.filter { it.isNotBlank() }.toSet()
-        val sites = body["sites"]!!.jsonArray.mapNotNull { Sites.normalize(it.jsonPrimitive.content) }.toSet()
+        val sites = body["sites"]!!.jsonArray.mapNotNull { Sites.normalizeTarget(it.jsonPrimitive.content) }.toSet()
         val old = store.world.value.block(id) ?: return error("That block is gone.")
         val new = old.copy(targetDesktopApps = apps, targetSites = sites)
         return loosening(old, new) { store.edit { w -> w.copy(blocks = w.blocks.map { b -> if (b.id == id) b.copy(targetDesktopApps = apps, targetSites = sites) else b }) } }
@@ -461,7 +464,14 @@ class LocalServer(
     )
 
     @Serializable
-    data class UiSettings(val phrase: String, val waitMs: Long, val grantMs: Long, val perDay: Int, val showClock: Boolean)
+    data class UiSettings(
+        val phrase: String,
+        val waitMs: Long,
+        val grantMs: Long,
+        val perDay: Int,
+        val showClock: Boolean,
+        val blockOtherBrowsers: Boolean,
+    )
 
     @Serializable
     data class UiState(
@@ -479,6 +489,7 @@ class LocalServer(
         val extensionMissing: Boolean,
         /** The extension's version, and the one this daemon was built with when it's older. */
         val extensionVersion: String?,
+        val extensionNoIncognito: Boolean = false,
         val extensionLatest: String?,
         val blockedApps: List<String>,
         val blockedSites: List<String>,
@@ -508,13 +519,14 @@ class LocalServer(
             kwinSeenAgoMs = enforcer.kwinSeenAtMs.takeIf { it > 0 }?.let { System.currentTimeMillis() - it },
             extensionMissing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() },
             extensionVersion = foreground.extensionVersion,
+            extensionNoIncognito = foreground.incognitoAllowed == false,
             extensionLatest = BUILT_WITH_EXTENSION?.takeIf { latest -> foreground.extensionVersion?.let { ExtensionApi.isOlder(it, latest) } == true },
             blockedApps = world.appliedShield.blockedPackages.filter { it in appIds },
             blockedSites = world.appliedShield.blockedSites.toList(),
             siteExceptions = world.appliedShield.siteExceptions.mapValues { it.value.sorted() },
             appNames = appIds.associateWith(DesktopApps::name),
-            settings = world.settings.let { UiSettings(it.overridePhrase, it.overrideWaitMs, it.overrideGrantMs, it.overridesPerDay, it.showClock) },
-            subject = if (app == null && site == null) null else subject(world, app, site?.let(Sites::normalize)),
+            settings = world.settings.let { UiSettings(it.overridePhrase, it.overrideWaitMs, it.overrideGrantMs, it.overridesPerDay, it.showClock, it.blockOtherBrowsers) },
+            subject = if (app == null && site == null) null else subject(world, app, site?.let(Sites::normalizeTarget)),
         )
     }
 

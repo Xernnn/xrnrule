@@ -26,6 +26,47 @@ test("blockedBy honours exceptions and subdomains", () => {
   assert.equal(X.blockedBy(null, "reddit.com"), null);
 });
 
+test("locationOf keeps the path, without query, case or trailing slash", () => {
+  assert.equal(X.locationOf("https://www.YouTube.com/Shorts/?x=1#y"), "youtube.com/shorts");
+  assert.equal(X.locationOf("https://m.youtube.com/watch?v=1"), "m.youtube.com/watch");
+  assert.equal(X.locationOf("https://reddit.com/"), "reddit.com");
+  assert.equal(X.locationOf("chrome://extensions"), null);
+});
+
+test("a target with a path covers that part of the site and nothing else", () => {
+  assert.equal(X.matches("youtube.com/shorts", "youtube.com/shorts"), true);
+  assert.equal(X.matches("m.youtube.com/shorts/abc", "youtube.com/shorts"), true);
+  assert.equal(X.matches("youtube.com/shortsfoo", "youtube.com/shorts"), false);
+  assert.equal(X.matches("youtube.com/watch", "youtube.com/shorts"), false);
+  assert.equal(X.matches("youtube.com", "youtube.com/shorts"), false);
+  assert.equal(X.matches("youtube.com/watch", "youtube.com"), true, "a host covers its paths");
+  const rules = { blocked: [{ domain: "youtube.com", except: ["youtube.com/watch"] }] };
+  assert.equal(X.blockedBy(rules, "youtube.com/watch/x"), null);
+  assert.equal(X.blockedBy(rules, "youtube.com/feed").domain, "youtube.com");
+});
+
+test("redirectRules: a plain host, a path, and exceptions of both kinds", () => {
+  const rules = { blocked: [
+    { domain: "reddit.com", except: ["old.reddit.com"] },
+    { domain: "youtube.com/shorts" },
+    { domain: "x.com", except: ["x.com/messages"] },
+  ] };
+  const out = X.redirectRules(rules, null, "own.html", 1000);
+  assert.deepEqual([...out].map((r) => r.id), [1000, 1001, 1002, 1003]);
+  assert.equal(out[0].condition.regexFilter, "^https?://.*");
+  assert.deepEqual([...out[0].condition.excludedRequestDomains], ["old.reddit.com"]);
+  const path = new RegExp(out[1].condition.regexFilter);
+  assert.deepEqual([...out[1].condition.requestDomains], ["youtube.com"]);
+  assert.equal(path.test("https://www.youtube.com/shorts/abc?x=1"), true);
+  assert.equal(path.test("https://youtube.com/shorts"), true);
+  assert.equal(path.test("https://youtube.com/shortsfoo"), false);
+  assert.equal(path.test("https://notyoutube.com/shorts"), false);
+  assert.equal(out[1].action.redirect.regexSubstitution, "own.html?site=youtube.com%2Fshorts#\\0");
+  assert.equal(out[2].condition.excludedRequestDomains, undefined, "a path can't go in that list");
+  assert.equal(out[3].action.type, "allow");
+  assert.ok(out[3].priority > out[2].priority);
+});
+
 test("blockUrl prefers the engine's page and carries the way back in the hash", () => {
   assert.equal(X.blockUrl("http://127.0.0.1:47321/block", "chrome-extension://x/block.html", "reddit.com", "https://reddit.com/r/a?b=1"),
     "http://127.0.0.1:47321/block?site=reddit.com#https://reddit.com/r/a?b=1");

@@ -317,7 +317,7 @@ private fun WebsitesTab(
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
         Text("Choose websites to block", style = MaterialTheme.typography.titleMedium)
         Text(
-            "A site covers its subdomains too: youtube.com covers m.youtube.com.",
+            "A site covers its subdomains: youtube.com covers m.youtube.com. Add a path for just one part: youtube.com/shorts.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -348,7 +348,7 @@ private fun SiteEntry(sites: Set<String>, onAdd: (String) -> Unit, placeholder: 
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     fun submit() {
-        val host = Sites.normalize(text)
+        val host = Sites.normalizeTarget(text) // I46: a path is fine, "youtube.com/shorts"
         if (host == null) {
             error = text.isNotBlank()
         } else {

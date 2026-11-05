@@ -116,7 +116,8 @@ object BlockEdits {
             new.overrideWaitMs < old.overrideWaitMs ||
             new.overrideGrantMs > old.overrideGrantMs ||
             new.overridesPerDay > old.overridesPerDay ||
-            new.dailyCapMs > old.dailyCapMs
+            new.dailyCapMs > old.dailyCapMs ||
+            (old.blockOtherBrowsers && !new.blockOtherBrowsers) // I49
 
     /**
      * Whether loosening a block's own settings needs the guard right now. Only a lockdown that

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.LockOpen
@@ -92,6 +93,7 @@ import com.xern.xrnrule.app.ui.theme.Brand
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.ThemeMode
 import com.xern.xrnrule.app.update.AppUpdates
+import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.app.web.WebsiteMonitor
 import com.xern.xrnrule.app.web.WebsiteTracking
 import com.xern.xrnrule.app.web.outOfDate
@@ -426,7 +428,7 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
                 SettingsPage.UNLOCKS -> UnlocksPage(world, deps)
                 SettingsPage.SECURITY -> SecurityPage(deps)
                 SettingsPage.APPEARANCE -> AppearancePage()
-                SettingsPage.WEBSITES -> WebsitesPage(deps)
+                SettingsPage.WEBSITES -> WebsitesPage(world, deps)
                 SettingsPage.UPDATES -> UpdatesPage(deps.updates)
                 SettingsPage.BACKUP -> BackupPage(world, deps.store)
                 SettingsPage.ADVANCED -> AdvancedPage(world, deps, onOpen)
@@ -913,7 +915,7 @@ private fun AppearancePage() {
 }
 
 @Composable
-private fun WebsitesPage(deps: SettingsDeps) {
+private fun WebsitesPage(world: World, deps: SettingsDeps) {
     val context = LocalContext.current
     val url = deps.shared.settings.url.ifEmpty { "<your server>/xrnrule" }
     PageIntro(
@@ -928,10 +930,43 @@ private fun WebsitesPage(deps: SettingsDeps) {
             StatusLine("Version $version", ok = true)
         }
     }
+    if ((deps.websites as? ExtensionWebsiteMonitor)?.incognitoAllowed == false) {
+        Gap(8)
+        StatusLine("Not allowed in incognito tabs, so sites aren't blocked there. Turn it on in the extension's details.", ok = false)
+    }
     Gap(16)
     WebsiteTrackingWarning(deps.websites)
     Gap(8)
     PillButton("Open the browser", onClick = { runCatching { context.startActivity(deps.websites.settingsIntent()) } })
+    Gap(16)
+    OtherBrowsersSwitch(world, deps)
+}
+
+/** I49. Turning it off makes blocks easier to get past, so that way goes through the guard. */
+@Composable
+private fun OtherBrowsersSwitch(world: World, deps: SettingsDeps) {
+    var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
+    val on = world.settings.blockOtherBrowsers
+    fun set(value: Boolean) = deps.store.edit { it.copy(settings = it.settings.copy(blockOtherBrowsers = value)) }
+    GroupCard {
+        GroupRow(
+            title = "Block other browsers",
+            icon = Icons.Outlined.Language,
+            first = true,
+            subtitle = "Browsers without the extension stay closed while a block has websites.",
+            chevron = false,
+            trailing = {
+                XSwitch(checked = on, onCheckedChange = { want ->
+                    if (want) {
+                        set(true)
+                    } else {
+                        loosen = LoosenRequest("Allow other browsers?", "Sites won't be blocked in them.", hardcore = false) { set(false) }
+                    }
+                })
+            },
+        )
+    }
+    loosen?.let { request -> LoosenGuardDialog(request, deps.guard, deps.store, onDismiss = { loosen = null }) }
 }
 
 /** New versions of the app from the home server (sideload builds; see AppUpdates). */

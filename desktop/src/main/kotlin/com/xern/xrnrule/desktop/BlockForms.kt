@@ -95,8 +95,8 @@ object BlockForms {
     fun create(world: World, form: Form, clock: Clock): Result {
         val id = UUID.randomUUID().toString()
         val apps = form.desktopApps.filter { it.isNotBlank() }.toSet()
-        val sites = form.sites.mapNotNull(Sites::normalize).toSet()
-        val except = form.exceptSites.mapNotNull(Sites::normalize).toSet()
+        val sites = form.sites.mapNotNull(Sites::normalizeTarget).toSet()
+        val except = form.exceptSites.mapNotNull(Sites::normalizeTarget).toSet()
         val items = form.items.map { it.trim() }.filter { it.isNotEmpty() }
         problem(
             form,
@@ -142,8 +142,8 @@ object BlockForms {
     fun edit(world: World, form: Form): Result {
         val old = world.blocks.firstOrNull { it.id == form.id } ?: return Result.Invalid("That block is gone.")
         val apps = form.desktopApps.filter { it.isNotBlank() }.toSet()
-        val sites = form.sites.mapNotNull(Sites::normalize).toSet()
-        val except = form.exceptSites.mapNotNull(Sites::normalize).toSet()
+        val sites = form.sites.mapNotNull(Sites::normalizeTarget).toSet()
+        val except = form.exceptSites.mapNotNull(Sites::normalizeTarget).toSet()
         val hadTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
         val kept = form.copy(mode = old.mode, checklist = old.trigger.type != TriggerType.TIMER, timer = hadTimer)
         problem(

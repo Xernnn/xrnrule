@@ -6,6 +6,7 @@ import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.Effect
+import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.World
 import java.io.File
 import java.nio.file.Files
@@ -41,7 +42,7 @@ fun main() = runBlocking {
 
     val notifier = Notifier(config)
     val enforcer = Enforcer(store, notifier, config)
-    val foreground = Foreground(store)
+    val foreground = Foreground(store, File(config.dataDir, "browsers.txt"))
     enforcer.foreground = foreground
     store.shield = enforcer
     val shared = SharedSyncClient(config, store, telemetry, scope)
@@ -79,7 +80,10 @@ fun main() = runBlocking {
     var syncAlerted = false
     while (true) {
         val now = clock.nowMonotonicMs()
-        if (now - lastMono > 10_000) store.dispatch(BlockEvent.BootOrColdStart)
+        if (now - lastMono > 10_000) {
+            store.dispatch(BlockEvent.BootOrColdStart)
+            foreground.heardExtension() // a sleeping laptop isn't a silent extension (I49)
+        }
         lastMono = now
         if (seconds % 3 == 0) {
             val locked = withContext(Dispatchers.IO) { KWin.screenLocked() }
@@ -91,6 +95,13 @@ fun main() = runBlocking {
         foreground.update()
         val world = store.world.value
         if (needsTicking(world)) store.dispatch(BlockEvent.Tick)
+        if (seconds % 5 == 0 && ExtensionApi.otherBrowsersMatter(world)) {
+            foreground.browsers.toClose(now)?.let { app ->
+                // I49: a browser that can't block sites, or the extension turned off in this one.
+                withContext(Dispatchers.IO) { KWin.closeWindowsOf(setOf(app)) }
+                notifier.notify("${DesktopApps.name(app)} closed", "Your site blocks only work in a browser with the xrnrule extension.", urgent = true)
+            }
+        }
         if (seconds % 30 == 0) {
             val missing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() }
             if (missing && !extensionAlerted) {
@@ -123,6 +134,7 @@ private const val SYNC_ALERT_MS = 60 * 60 * 1000L
 private fun needsTicking(world: World): Boolean =
     world.sessions.isNotEmpty() ||
         world.pause != null ||
+        world.backgroundSites.isNotEmpty() ||
         world.blocks.any { it.state == BlockState.EARNED || it.mode != BlockMode.HABIT || it.hasLimit || it.blockedHours != null } ||
         world.progress.values.any { it.timerRunning } ||
         world.focus?.let { it.running || it.resumeAtWall != null } == true // I37

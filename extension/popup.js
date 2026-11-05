@@ -11,12 +11,12 @@
   $("open").href = android ? "intent://open#Intent;scheme=xrnrule;package=com.xern.xrnrule;end" : `${engine}/`;
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const host = X.hostOf(tab?.url || "");
+  const host = X.locationOf(tab?.url || "");
   if (!host) {
     $("site").textContent = "This page";
     $("state").textContent = "Not a website: nothing to block here.";
   } else {
-    $("site").textContent = host;
+    $("site").textContent = X.hostOf(tab.url);
   }
 
   const v = await ask({ type: "check", host });

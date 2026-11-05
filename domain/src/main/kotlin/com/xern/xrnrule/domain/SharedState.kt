@@ -184,6 +184,7 @@ data class SharedState(
                     overrideGrantMs = field(Settings::overrideGrantMs) { l, r -> minOf(l, r) },
                     overridesPerDay = field(Settings::overridesPerDay) { l, r -> minOf(l, r) },
                     showClock = field(Settings::showClock) { l, r -> l && r },
+                    blockOtherBrowsers = field(Settings::blockOtherBrowsers) { l, r -> l || r }, // I49
                 ),
                 unlockEpochDay = maxOf(local.unlockEpochDay, remote.unlockEpochDay),
                 unlockLog = when { // I28: entries only ever get added during a day

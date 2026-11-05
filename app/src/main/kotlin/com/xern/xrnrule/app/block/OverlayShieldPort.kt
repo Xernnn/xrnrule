@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.PixelFormat
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
@@ -32,6 +35,7 @@ import com.xern.xrnrule.app.ui.BlockOverlayContent
 import com.xern.xrnrule.app.ui.GoalInfo
 import com.xern.xrnrule.app.ui.goalInfo
 import com.xern.xrnrule.app.ui.freeAtWall
+import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEvent
@@ -43,6 +47,7 @@ import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
 import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
+import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +72,7 @@ class OverlayShieldPort(
     private val store: WorldStore,
     private val habits: HabitSync,
     private val shared: SharedSync,
+    private val websites: ExtensionWebsiteMonitor,
     private val onEvent: (BlockEvent) -> Unit,
 ) : ShieldPort {
 
@@ -77,6 +83,7 @@ class OverlayShieldPort(
 
     private var view: View? = null
     private var layout: WindowManager.LayoutParams? = null
+    private var audioFocus: AudioFocusRequest? = null
 
     private val _visible = MutableStateFlow(false)
 
@@ -92,12 +99,20 @@ class OverlayShieldPort(
         this.plan = plan
     }
 
-    fun render(world: World, foregroundPkg: String?, foregroundSite: String?) {
+    /** [otherBrowser]: a browser in front that can't block sites (I49). */
+    fun render(world: World, foregroundPkg: String?, foregroundSite: String?, otherBrowser: String? = null) {
         val current = plan
         val appBlocked = foregroundPkg != null && foregroundPkg in current.blockedPackages
         val siteBlocked = !appBlocked && current.covers(null, foregroundSite)
-        if (!appBlocked && !siteBlocked) {
+        val browser = otherBrowser?.takeIf { it == foregroundPkg && !appBlocked && !siteBlocked }
+        if (!appBlocked && !siteBlocked && browser == null) {
             hide()
+            return
+        }
+        if (browser != null) {
+            uiState.value = OverlayUi(subject = appLabel(browser), pkg = browser, isSite = false, block = null, items = emptyList(), useBrowser = homeBrowser())
+            show()
+            keepScreenOn(false)
             return
         }
         val engine = store.engine
@@ -109,7 +124,7 @@ class OverlayShieldPort(
             ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
         val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
         uiState.value = OverlayUi(
-            subject = if (appBlocked) appLabel(foregroundPkg!!) else foregroundSite!!,
+            subject = if (appBlocked) appLabel(foregroundPkg!!) else Sites.hostOf(foregroundSite!!),
             pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,
@@ -179,6 +194,12 @@ class OverlayShieldPort(
         )
     }
 
+    private fun openApp(pkg: String) {
+        context.packageManager.getLaunchIntentForPackage(pkg)?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+    }
+
+    private fun homeBrowser(): UseBrowser? = websites.extensionBrowser?.let { UseBrowser(it, appLabel(it)) }
+
     private fun show() {
         if (view != null) return
 
@@ -198,6 +219,7 @@ class OverlayShieldPort(
                     onSetTimer = { blockId, running -> onEvent(BlockEvent.TimerControl(blockId, running)) },
                     onRedeem = { blockId -> onEvent(BlockEvent.Redeem(blockId)) },
                     onLeave = ::leave,
+                    onOpenApp = ::openApp,
                     onBeginOverride = { ids -> onEvent(BlockEvent.BeginOverride(ids)) },
                     onClaimOverride = { phrase -> onEvent(BlockEvent.ClaimOverride(phrase)) },
                     onCancelOverride = { onEvent(BlockEvent.CancelOverride) },
@@ -247,12 +269,35 @@ class OverlayShieldPort(
         runCatching { wm.addView(host, params) }
         view = host
         layout = params
+        if (uiState.value?.pkg != null) takeAudio() // a blocked app's sound stops with it
         _visible.value = true
         windowOwner = owner
         owner.onStart()
     }
 
+    /**
+     * A window on top doesn't pause what's under it, so a blocked app would keep playing behind
+     * the block screen. Holding the audio focus tells a media app to stop, and it stays stopped
+     * when the focus is let go: a loss that isn't marked transient doesn't resume by itself.
+     */
+    private fun takeAudio() {
+        val manager = context.getSystemService(AudioManager::class.java) ?: return
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+            .setOnAudioFocusChangeListener { }
+            .build()
+        runCatching { manager.requestAudioFocus(request) }
+        audioFocus = request
+    }
+
+    private fun releaseAudio() {
+        val request = audioFocus ?: return
+        audioFocus = null
+        runCatching { context.getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(request) }
+    }
+
     private fun hide() {
+        releaseAudio()
         view?.let { v -> runCatching { wm.removeView(v) } }
         view = null
         layout = null
@@ -268,9 +313,14 @@ class OverlayShieldPort(
 
     private fun overlayType(): Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
+    /** The browser that has the extension, to go to instead (I49). */
+    data class UseBrowser(val pkg: String, val label: String)
+
     data class OverlayUi(
         /** The blocked app's name, or the blocked site's host. */
         val subject: String,
+        /** [subject] is a browser without the extension (I49): use this one. */
+        val useBrowser: UseBrowser? = null,
         /** The blocked app, for its icon; null for a site. */
         val pkg: String? = null,
         val isSite: Boolean,

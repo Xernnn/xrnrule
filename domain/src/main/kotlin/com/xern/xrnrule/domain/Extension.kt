@@ -36,7 +36,14 @@ object ExtensionApi {
      * the app's overlay); null means the extension's own. [v] changes whenever any of it does.
      */
     @Serializable
-    data class SiteRules(val v: String, val blocked: List<SiteRule>, val page: String? = null, val showClock: Boolean = true)
+    data class SiteRules(
+        val v: String,
+        val blocked: List<SiteRule>,
+        val page: String? = null,
+        val showClock: Boolean = true,
+        /** I48: every site with a rule here, which the extension blocks while xrnrule is gone. */
+        val watched: List<SiteRule> = emptyList(),
+    )
 
     @Serializable
     data class Left(val ms: Long, val kind: ClockKind)
@@ -62,12 +69,26 @@ object ExtensionApi {
     fun rules(world: World, page: String?): SiteRules {
         val plan = world.appliedShield
         val blocked = plan.blockedSites.sorted().map { SiteRule(it, plan.siteExceptions[it].orEmpty().sorted()) }
-        val v = listOf(blocked, page, world.settings.showClock).hashCode().toUInt().toString(16)
-        return SiteRules(v, blocked, page, world.settings.showClock)
+        val watched = watched(world)
+        val v = listOf(blocked, page, world.settings.showClock, watched).hashCode().toUInt().toString(16)
+        return SiteRules(v, blocked, page, world.settings.showClock, watched)
     }
 
+    /** I48: the blocks that could block something here, for when xrnrule can't be asked. */
+    private fun watched(world: World): List<SiteRule> {
+        val blocks = world.blocks.filter { it.enabled && world.appliesHere(it) && it.mode != BlockMode.LOCKDOWN }
+        return blocks.flatMap { it.targetSites }.toSortedSet().map { site ->
+            val covering = blocks.filter { site in it.targetSites }
+            SiteRule(site, covering.map { it.exceptSites }.reduce { a, b -> a intersect b }.sorted())
+        }
+    }
+
+    /** I49: whether a browser without the extension gets past anything here. */
+    fun otherBrowsersMatter(world: World): Boolean =
+        world.settings.blockOtherBrowsers && world.blocks.any { it.enabled && world.appliesHere(it) && it.targetSites.isNotEmpty() }
+
     fun verdict(engine: BlockEngine, world: World, host: String?, clock: Clock, page: String?): SiteVerdict {
-        val site = host?.let { Sites.normalize(it) }
+        val site = host?.let { Sites.normalizeTarget(it) }
         val rules = rules(world, page)
         if (site == null) return SiteVerdict(null, blocked = false, page = page, showClock = rules.showClock, rules = rules.v)
         val blocked = engine.shieldPlan(world, clock).siteBlocked(site)

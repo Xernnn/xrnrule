@@ -7,14 +7,18 @@
 //     block page, before anything loads;
 //   - tabs already open on a site that just got blocked are moved there too;
 //   - while xrnrule doesn't answer, what it last said was blocked stays blocked (on our own block
-//     page, since xrnrule's can't load then), and the toolbar icon shows "!".
+//     page, since xrnrule's can't load then), and the toolbar icon shows "!"; after a minute of
+//     that, everything with a rule is blocked, so stopping xrnrule isn't a way past a limit.
 
 importScripts("shared.js");
 
-const { DEFAULT_PORT, hostOf, blockedBy, enginePage, blockUrl } = self.Xrn;
+const { DEFAULT_PORT, FAIL_CLOSED_MS, locationOf, redirectRules, blockedBy, enginePage, blockUrl } = self.Xrn;
 const OWN_PAGE = chrome.runtime.getURL("block.html");
 /** Our redirect rules' ids. Each rewrite removes the whole range first. */
 const DNR_BASE = 1000;
+/** Whether we may run in incognito windows, for xrnrule to warn about; null if the browser won't say. */
+let incognito = null;
+chrome.extension?.isAllowedIncognitoAccess?.().then((allowed) => { incognito = allowed; }, () => {});
 
 async function engineUrl() {
   const { port } = await chrome.storage.local.get("port");
@@ -37,7 +41,33 @@ async function call(path, body) {
 }
 
 let reachable = null;
+/** When xrnrule stopped answering (kept, since the worker comes and goes), or null. */
+let offlineSince = null;
+
+/** I48: what counts as blocked now: after a minute without xrnrule, everything with a rule. */
+function inForce(rules) {
+  if (!rules || offlineSince == null || Date.now() - offlineSince < FAIL_CLOSED_MS) return rules;
+  return { ...rules, blocked: rules.watched?.length ? rules.watched : rules.blocked };
+}
+
+let offlineRead = false;
+async function noteReachable(ok) {
+  if (!offlineRead) {
+    offlineSince ??= (await chrome.storage.local.get("offlineSince")).offlineSince ?? null;
+    offlineRead = true;
+  }
+  if (ok && offlineSince != null) {
+    offlineSince = null;
+    await chrome.storage.local.remove("offlineSince");
+    refreshRules(); // back to what's blocked now, not everything with a rule
+  } else if (!ok && offlineSince == null) {
+    offlineSince = Date.now();
+    await chrome.storage.local.set({ offlineSince });
+  }
+}
+
 function badge(ok) {
+  noteReachable(ok).catch(() => {});
   if (ok === reachable) return;
   reachable = ok;
   chrome.action.setBadgeText({ text: ok ? "" : "!" });
@@ -70,6 +100,9 @@ function refreshRules() {
       badge(true);
     } catch {
       badge(false);
+      await noteReachable(false).catch(() => {});
+      const rules = await cachedRules();
+      if (rules) await applyRules(inForce(rules)); // a minute in, this is the wider list
     } finally {
       refreshing = null;
     }
@@ -97,20 +130,7 @@ async function writeRedirects(rules) {
     return;
   }
   const removeRuleIds = existing.map((r) => r.id).filter((id) => id >= DNR_BASE && id < DNR_BASE + 1000);
-  const addRules = (rules?.blocked ?? []).slice(0, 999).map((r, i) => ({
-    id: DNR_BASE + i,
-    priority: 1,
-    // \0 is the whole URL asked for: the block page goes back there once the site opens.
-    action: { type: "redirect", redirect: { regexSubstitution: blockUrl(pageOf(rules), OWN_PAGE, r.domain, "\\0") } },
-    condition: {
-      regexFilter: "^https?://.*",
-      requestDomains: [r.domain],
-      // An exception must hold here too, or the network layer would block music.youtube.com
-      // while every other part lets it through.
-      ...(r.except?.length ? { excludedRequestDomains: r.except } : {}),
-      resourceTypes: ["main_frame"],
-    },
-  }));
+  const addRules = redirectRules(rules, pageOf(rules), OWN_PAGE, DNR_BASE);
   try {
     await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds, addRules });
   } catch (e) {
@@ -127,10 +147,9 @@ async function moveBlockedTabs(rules) {
     return;
   }
   for (const tab of tabs) {
-    const host = hostOf(tab.url || "");
-    const hit = blockedBy(rules, host);
-    if (!hit) continue;
-    chrome.tabs.update(tab.id, { url: blockUrl(pageOf(rules), OWN_PAGE, host, tab.url) }).catch(() => {});
+    const location = locationOf(tab.url || "");
+    if (!blockedBy(rules, location)) continue;
+    chrome.tabs.update(tab.id, { url: blockUrl(pageOf(rules), OWN_PAGE, location, tab.url) }).catch(() => {});
   }
 }
 
@@ -141,18 +160,18 @@ async function moveBlockedTabs(rules) {
  * returns its answer: blocked or not, and what runs out first. [standIn]: our block page,
  * standing in for the site it blocks, so a timer habit counts while you wait there.
  */
-async function beat(host, focused, standIn = false) {
+async function beat(host, focused, standIn = false, playing = false) {
   try {
-    const verdict = await call("/ext/heartbeat", { host, focused, standIn, version: chrome.runtime.getManifest().version });
+    const verdict = await call("/ext/heartbeat", { host, focused, standIn, playing, incognito, version: chrome.runtime.getManifest().version });
     badge(true);
     const rules = await cachedRules();
     if (!rules || rules.v !== verdict.rules) refreshRules();
     return verdict;
   } catch {
     badge(false);
-    // Fail closed: what xrnrule last said was blocked stays blocked; nothing else is.
-    const rules = await cachedRules();
-    const site = host ? hostOf(`https://${host}/`) : null;
+    // Fail closed: what xrnrule last said was blocked stays blocked, and a minute in, all of it.
+    const rules = inForce(await cachedRules());
+    const site = host ? locationOf(`https://${host}`) : null;
     return { site, blocked: !!blockedBy(rules, site), page: null, showClock: false, offline: true };
   }
 }
@@ -169,7 +188,7 @@ async function beatActive() {
   }
   // xrnrule's own pages (its block page stands in for a site) speak for themselves.
   if (tab?.url?.startsWith(`${await engineUrl()}/`)) return;
-  const host = tab ? hostOf(tab.url || "") : null;
+  const host = tab ? locationOf(tab.url || "") : null;
   const verdict = await beat(host, focused);
   if (verdict.blocked && tab && host) {
     chrome.tabs.update(tab.id, { url: blockUrl(verdict.page, OWN_PAGE, verdict.site || host, tab.url) }).catch(() => {});
@@ -187,12 +206,12 @@ chrome.tabs.onUpdated.addListener((_id, info, tab) => {
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   switch (msg?.type) {
     case "beat":
-      beat(msg.host ?? null, !!msg.focused, !!msg.standIn).then(reply);
+      beat(msg.host ?? null, !!msg.focused, !!msg.standIn, !!msg.playing).then(reply);
       return true; // the reply comes later
     case "check": // the popup: about a host, without saying it's in front
       call(`/ext/check?host=${encodeURIComponent(msg.host ?? "")}`)
         .then((v) => reply({ ...v, reachable: true }))
-        .catch(async () => reply({ reachable: false, blocked: !!blockedBy(await cachedRules(), msg.host) }));
+        .catch(async () => reply({ reachable: false, blocked: !!blockedBy(inForce(await cachedRules()), msg.host) }));
       return true;
     case "engine":
       engineUrl().then(reply);
@@ -288,7 +307,7 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
     return;
   }
   for (const tab of tabs) {
-    if (!hostOf(tab.url || "") || /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tab.url)) continue;
+    if (!locationOf(tab.url || "") || /^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(tab.url)) continue;
     chrome.scripting?.executeScript({ target: { tabId: tab.id }, files: ["shared.js", "content.js"] }).catch(() => {});
   }
 });

@@ -53,7 +53,7 @@ class BlockFormsTest {
         val b = r.block
         assertEquals("Games", b.name)
         assertEquals(setOf("steam"), b.targetDesktopApps)
-        assertEquals(setOf("reddit.com"), b.targetSites)
+        assertEquals(setOf("reddit.com/r/x"), b.targetSites) // I46
         assertEquals(TriggerType.CHECKLIST, b.trigger.type)
         assertEquals(EnforcementTier.SOFT, b.enforcementTier)
         val items = r.world.items(b.id)

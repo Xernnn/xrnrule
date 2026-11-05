@@ -59,6 +59,14 @@ class UsageStatsDetector(
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
+    /**
+     * The app in front is a browser showing a Custom Tab: some other app's login or payment page.
+     * It has no address bar, so it's no way around a block, and it mustn't be taken for one (I49).
+     */
+    @Volatile
+    var customTab: Boolean = false
+        private set
+
     @Synchronized
     private fun poll(): String? {
         val now = System.currentTimeMillis()
@@ -72,6 +80,7 @@ class UsageStatsDetector(
                 event.eventType == @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_FOREGROUND
             ) {
                 current = event.packageName
+                customTab = event.className?.contains("customtabs", ignoreCase = true) == true
             }
         }
         cursor = now

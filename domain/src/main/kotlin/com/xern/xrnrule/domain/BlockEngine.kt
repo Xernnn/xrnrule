@@ -16,8 +16,10 @@ class BlockEngine {
         val effects = mutableListOf<Effect>()
 
         var w = when (event) {
-            is BlockEvent.BootOrColdStart -> rebuild(world, clock, effects)
+            // I47: a page that played before this start says so again if it still does.
+            is BlockEvent.BootOrColdStart -> rebuild(world, clock, effects).copy(backgroundSites = emptySet())
             is BlockEvent.ForegroundChanged -> onForegroundChanged(world, event, clock, effects)
+            is BlockEvent.BackgroundChanged -> accrueAndCheckTimers(world, clock, effects).copy(backgroundSites = event.sites) // I47
             is BlockEvent.Tick -> accrueAndCheckTimers(world, clock, effects)
             is BlockEvent.ToggleChecklistItem -> onToggleItem(world, event, clock, effects)
             is BlockEvent.TagScanned -> onTagScanned(world, event.tag, clock, effects)
@@ -464,13 +466,16 @@ class BlockEngine {
         }
         if (progress.isEmpty()) return world
 
-        val fgShielded = shieldPlan(world, clock).covers(fgPkg, fgSite)
+        val plan = shieldPlan(world, clock)
+        val fgShielded = plan.covers(fgPkg, fgSite)
+        val playing = world.backgroundSites.filterNot(plan::siteBlocked) // I47
         val runs = world.runs.toMutableMap()
         progress = progress.mapValues { (blockId, p) ->
             val block = world.block(blockId) ?: return@mapValues p
             val delta = (nowMono - p.lastUpdated).coerceAtLeast(0)
             var next = p.copy(lastUpdated = nowMono)
-            if (block.hasLimit && !fgShielded && world.appliesHere(block) && covers(block, fgPkg, fgSite)) { // I42
+            val inUse = (!fgShielded && covers(block, fgPkg, fgSite)) || playing.any(block::coversSite) // I47
+            if (block.hasLimit && world.appliesHere(block) && inUse) { // I42
                 if (block.hasRowRule) runs[blockId] = advanceRun(world, block, runs[blockId], delta, nowWall)
                 val used = p.limitUsed(block) + delta
                 next = next.withLimitUsed(block, if (block.dailyAllowanceMs > 0) used.coerceAtMost(block.dailyAllowanceMs) else used)
@@ -502,12 +507,14 @@ class BlockEngine {
         val nowMono = clock.nowMonotonicMs()
         val fgPkg = world.foregroundPkg
         val fgSite = world.foregroundSite
-        val fgShielded by lazy { shieldPlan(world, clock).covers(fgPkg, fgSite) }
+        val plan by lazy { shieldPlan(world, clock) }
         val sessions = world.sessions.mapValues { (blockId, s) ->
             val block = world.block(blockId)
             if (!s.selfPaced || block?.state != BlockState.UNLOCKED) return@mapValues s
             val delta = s.markMonotonic?.let { (nowMono - it).coerceAtLeast(0) } ?: 0
-            val inUse = delta > 0 && world.appliesHere(block) && covers(block, fgPkg, fgSite) && !fgShielded // I42
+            val inFront = covers(block, fgPkg, fgSite) && !plan.covers(fgPkg, fgSite)
+            val playing = world.backgroundSites.any { block.coversSite(it) && !plan.siteBlocked(it) } // I47
+            val inUse = delta > 0 && world.appliesHere(block) && (inFront || playing) // I42
             val used = if (inUse) s.usedMs + (world.deviceId to (s.usedMs[world.deviceId] ?: 0) + delta) else s.usedMs
             s.copy(usedMs = used, markMonotonic = nowMono)
         }

@@ -164,4 +164,5 @@ fun World.withoutBookkeeping(): World = copy(
     sessions = sessions.mapValues { (_, s) -> s.copy(usedMs = emptyMap(), markMonotonic = null) }, // I41's use
     foregroundPkg = null,
     foregroundSite = null,
+    backgroundSites = emptySet(),
 )

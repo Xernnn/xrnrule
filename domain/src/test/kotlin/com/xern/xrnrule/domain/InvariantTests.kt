@@ -2,6 +2,7 @@ package com.xern.xrnrule.domain
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -2527,5 +2528,155 @@ class InvariantTests {
         assertEquals(null, SharedState.baseFor(base, "\"7\"", "\"0\""))
         assertEquals("no etag to compare", base, SharedState.baseFor(base, "", "\"3\""))
         assertEquals("a weak etag reads the same", null, SharedState.baseFor(base, "W/\"7\"", "\"6\""))
+    }
+
+    private fun siteLimit(id: String, site: String, allowanceMs: Long = 10L * 60_000) =
+        modeBlock(id, BlockMode.ALLOWANCE, targetPackages = emptySet(), targetSites = setOf(site), dailyAllowanceMs = allowanceMs)
+
+    @Test
+    fun i46_aPathTargetBlocksThatPartOfTheSiteOnly() {
+        val clock = FakeClock()
+        val block = siteLimit("a", "youtube.com/shorts", allowanceMs = 0)
+            .copy(mode = BlockMode.SCHEDULE, schedule = Schedule.ALWAYS)
+        val world = buildWorld(listOf(block), clock = clock)
+        val plan = engine.shieldPlan(world, clock)
+        assertTrue(plan.siteBlocked("youtube.com/shorts/abc"))
+        assertTrue(plan.siteBlocked("m.youtube.com/shorts"))
+        assertFalse(plan.siteBlocked("youtube.com/watch"))
+        assertFalse(plan.siteBlocked("youtube.com"))
+    }
+
+    @Test
+    fun i46_aPathExceptionLeavesThatPartOpen() {
+        val clock = FakeClock()
+        val block = siteLimit("a", "youtube.com", allowanceMs = 0)
+            .copy(mode = BlockMode.SCHEDULE, schedule = Schedule.ALWAYS, exceptSites = setOf("youtube.com/watch"))
+        val world = buildWorld(listOf(block), clock = clock)
+        val plan = engine.shieldPlan(world, clock)
+        assertTrue(plan.siteBlocked("youtube.com"))
+        assertTrue(plan.siteBlocked("youtube.com/shorts"))
+        assertFalse(plan.siteBlocked("youtube.com/watch/abc"))
+    }
+
+    @Test
+    fun i46_timeOnAPathCountsOnlyThere() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(siteLimit("a", "youtube.com/shorts")), clock = clock)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "youtube.com/watch"), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "youtube.com/shorts/x"), clock).world
+        assertEquals(0L, world.progress["a"]!!.accumulatedMs)
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(60_000L, world.progress["a"]!!.accumulatedMs)
+    }
+
+    @Test
+    fun i47_soundOutOfSightCountsAgainstTheLimit() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(siteLimit("a", "youtube.com")), clock = clock)
+        world = engine.reduce(world, BlockEvent.BackgroundChanged(setOf("youtube.com/watch")), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(60_000L, world.progress["a"]!!.accumulatedMs)
+
+        world = engine.reduce(world, BlockEvent.BackgroundChanged(emptySet()), clock).world
+        assertEquals("the last stretch still counts", 60_000L, world.progress["a"]!!.accumulatedMs)
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals("and nothing after it", 60_000L, world.progress["a"]!!.accumulatedMs)
+    }
+
+    @Test
+    fun i47_aPageInFrontAndOneBehindCountOnce() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(siteLimit("a", "youtube.com")), clock = clock)
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "youtube.com"), clock).world
+        world = engine.reduce(world, BlockEvent.BackgroundChanged(setOf("m.youtube.com/watch")), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(60_000L, world.progress["a"]!!.accumulatedMs)
+    }
+
+    @Test
+    fun i47_soundDoesntRunTheWaitTimer() {
+        val clock = FakeClock()
+        val block = timerBlock("t", target = "com.target").copy(targetSites = setOf("youtube.com"))
+        var world = buildWorld(listOf(block), clock = clock)
+        world = engine.reduce(world, BlockEvent.BackgroundChanged(setOf("youtube.com")), clock).world
+        clock.advance(60_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertEquals(0L, world.progress["t"]!!.accumulatedMs)
+    }
+
+    @Test
+    fun i47_aBlockedPageBehindCountsNothing() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(siteLimit("a", "youtube.com", allowanceMs = 60_000)), clock = clock)
+        world = engine.reduce(world, BlockEvent.BackgroundChanged(setOf("youtube.com")), clock).world
+        clock.advance(120_000)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertTrue(engine.shieldPlan(world, clock).siteBlocked("youtube.com"))
+        assertEquals(60_000L, world.progress["a"]!!.accumulatedMs) // capped
+    }
+
+    @Test
+    fun i47_whatsPlayingIsntKeptOrWorthASave() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(siteLimit("a", "youtube.com")), clock = clock)
+        val before = world.withoutBookkeeping()
+        world = engine.reduce(world, BlockEvent.BackgroundChanged(setOf("youtube.com")), clock).world
+        assertEquals(before, world.withoutBookkeeping())
+        world = engine.reduce(world, BlockEvent.BootOrColdStart, clock).world
+        assertTrue(world.backgroundSites.isEmpty())
+    }
+
+    @Test
+    fun i48_everySiteWithARuleIsWatched() {
+        val clock = FakeClock()
+        val open = siteLimit("a", "youtube.com")
+        val off = siteLimit("b", "off.com").copy(enabled = false)
+        val idle = modeBlock("c", BlockMode.LOCKDOWN, targetPackages = emptySet(), targetSites = setOf("idle.com"), lockdownMs = 60_000)
+        val rules = ExtensionApi.rules(buildWorld(listOf(open, off, idle), clock = clock), null)
+        assertTrue("nothing is blocked yet", rules.blocked.isEmpty())
+        assertEquals(listOf("youtube.com"), rules.watched.map { it.domain })
+    }
+
+    @Test
+    fun i48_anExceptionHoldsOnlyIfEveryBlockHasIt() {
+        val clock = FakeClock()
+        val a = siteLimit("a", "youtube.com").copy(exceptSites = setOf("music.youtube.com", "kids.youtube.com"))
+        val b = siteLimit("b", "youtube.com").copy(exceptSites = setOf("music.youtube.com"))
+        val rules = ExtensionApi.rules(buildWorld(listOf(a, b), clock = clock), null)
+        assertEquals(listOf("music.youtube.com"), rules.watched.single().except)
+    }
+
+    @Test
+    fun i48_aChangeToTheWatchedListIsANewVersion() {
+        val clock = FakeClock()
+        val one = ExtensionApi.rules(buildWorld(listOf(siteLimit("a", "a.com")), clock = clock), null)
+        val two = ExtensionApi.rules(buildWorld(listOf(siteLimit("a", "b.com")), clock = clock), null)
+        assertNotEquals(one.v, two.v)
+    }
+
+    @Test
+    fun i49_otherBrowsersMatterOnlyWithAWebsiteRuleHere() {
+        val clock = FakeClock()
+        val site = siteLimit("a", "youtube.com")
+        assertTrue(ExtensionApi.otherBrowsersMatter(buildWorld(listOf(site), clock = clock)))
+        val appsOnly = modeBlock("b", BlockMode.ALLOWANCE)
+        assertFalse(ExtensionApi.otherBrowsersMatter(buildWorld(listOf(appsOnly), clock = clock)))
+        assertFalse(ExtensionApi.otherBrowsersMatter(buildWorld(listOf(site.copy(enabled = false)), clock = clock)))
+        val off = Settings(blockOtherBrowsers = false)
+        assertFalse(ExtensionApi.otherBrowsersMatter(buildWorld(listOf(site), clock = clock, settings = off)))
+        val laptopOnly = buildWorld(listOf(site.copy(devices = Devices.LAPTOP)), clock = clock).copy(deviceKind = DeviceKind.PHONE)
+        assertFalse(ExtensionApi.otherBrowsersMatter(laptopOnly))
+    }
+
+    @Test
+    fun i49_turningItOffLoosens() {
+        val on = Settings()
+        assertTrue(BlockEdits.settingsLoosen(on, on.copy(blockOtherBrowsers = false)))
+        assertFalse(BlockEdits.settingsLoosen(on.copy(blockOtherBrowsers = false), on))
     }
 }

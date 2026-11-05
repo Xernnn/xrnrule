@@ -618,7 +618,8 @@ fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp
  * tile, so a dark icon still shows on the dark theme; a globe until it arrives or if it has none.
  */
 @Composable
-fun SiteIcon(host: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fallback: (@Composable () -> Unit)? = null) {
+fun SiteIcon(site: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fallback: (@Composable () -> Unit)? = null) {
+    val host = Sites.hostOf(site) // I46: a target can carry a path
     val icons = (LocalContext.current.applicationContext as XrnruleApp).container.siteIcons
     val loaded by icons.loaded.collectAsState()
     val icon = remember(host, loaded) { icons.icon(host) }

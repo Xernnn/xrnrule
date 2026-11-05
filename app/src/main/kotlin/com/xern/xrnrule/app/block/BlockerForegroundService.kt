@@ -25,8 +25,10 @@ import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Effect
+import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
+import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -53,6 +55,10 @@ class BlockerForegroundService : LifecycleService() {
     private data class Foreground(val pkg: String?, val site: String?)
 
     private val foreground = MutableStateFlow(Foreground(null, null))
+
+    /** I49: the browser in front, if it's one that can't block sites and has to stay closed. */
+    private val otherBrowser = MutableStateFlow<String?>(null)
+    private var usageDetector: UsageStatsDetector? = null
     private val awake = MutableStateFlow(true)
     private lateinit var overlay: OverlayShieldPort
     private lateinit var settingsGuard: SettingsGuardOverlay
@@ -108,6 +114,7 @@ class BlockerForegroundService : LifecycleService() {
             store = container.store,
             habits = container.habits,
             shared = container.shared,
+            websites = container.websites,
             onEvent = container.store::dispatch,
         )
         container.store.shield = overlay
@@ -129,13 +136,14 @@ class BlockerForegroundService : LifecycleService() {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
 
-        val detector: ForegroundAppDetector = UsageStatsDetector(this) {
+        val detector = UsageStatsDetector(this) {
             container.store.world.value.blocks.any { it.enabled }
         }
 
         // 1. foreground app (+ the site the browser extension reports) -> engine and the
         //    site-time log. The detector only polls while the screen is on and unlocked.
         lifecycleScope.launch {
+            usageDetector = detector
             val detected = awake.flatMapLatest { isAwake -> if (isAwake) detector.foregroundPackage else flowOf(null) }
             combine(detected, SiteSightings.current, awake) { pkg, host, isAwake ->
                 val browser = pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
@@ -145,11 +153,12 @@ class BlockerForegroundService : LifecycleService() {
                 val browser = fg.pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
                 if (browser == null) browserInFront = null
                 else if (browserInFront?.first != browser) browserInFront = browser to SystemClock.elapsedRealtime()
-                // The extension speaks from whichever browser is in front when it does: that's the one it lives in.
-                if (browser != null && fg.site != null) container.websites.extensionBrowser = browser
-                container.siteUsage.onSite(fg.site)
+                container.siteUsage.onSite(fg.site?.let(Sites::hostOf))
                 container.store.dispatch(BlockEvent.ForegroundChanged(fg.pkg, fg.site))
             }
+        }
+        lifecycleScope.launch {
+            SiteSightings.playing.collect { container.store.dispatch(BlockEvent.BackgroundChanged(it)) } // I47
         }
 
         // 2. cold-start rebuild (I8), then catch up on what the home server got while we were down
@@ -173,7 +182,8 @@ class BlockerForegroundService : LifecycleService() {
             var seconds = 0
             var habitDay = container.store.world.value.habitDay(container.clock)
             while (true) {
-                if (!awake.value) awake.first { it }
+                // Asleep unless a page is playing: its time still counts (I47).
+                if (!awake.value) combine(awake, SiteSightings.playing) { on, sites -> on || sites.isNotEmpty() }.first { it }
                 if (needsTicking(container.store.world.value)) {
                     container.store.dispatch(BlockEvent.Tick)
                 }
@@ -196,9 +206,9 @@ class BlockerForegroundService : LifecycleService() {
         // 4. re-render the overlay (and the hardcore Settings guard) whenever the world or the
         //    foreground changes; keep the status notification in step
         lifecycleScope.launch {
-            combine(container.store.world, foreground) { world, fg -> world to fg }
-                .collect { (world, fg) ->
-                    overlay.render(world, fg.pkg, fg.site)
+            combine(container.store.world, foreground, otherBrowser) { world, fg, other -> Triple(world, fg, other) }
+                .collect { (world, fg, other) ->
+                    overlay.render(world, fg.pkg, fg.site, other)
                     settingsGuard.render(fg.pkg, world)
                     notifications.updateStatus(notifications.status(world, container.engine, container.clock))
                 }
@@ -264,7 +274,21 @@ class BlockerForegroundService : LifecycleService() {
             now - since >= EXTENSION_GRACE_MS && SiteSightings.silent(now)
         }?.first
         container.websites.quiet = silentBrowser != null
-        val sitesOff = silentBrowser != null && world.blocks.any { it.enabled && it.targetSites.isNotEmpty() }
+        // The extension speaks from whichever browser is in front when it does: that's the one it
+        // lives in. Only a report from well after that browser came in front counts: one from
+        // the moment of switching is the last browser's.
+        inFront?.takeIf { (_, since) ->
+            SiteSightings.lastReportWasSite && SiteSightings.reportedAtElapsed >= since + BROWSER_SETTLE_MS
+        }?.let { (pkg, _) -> container.websites.extensionBrowser = pkg }
+        // I49: a browser that can't block sites, once one that can is known. Never that one itself:
+        // it's where the extension gets fixed.
+        val other = inFront?.takeIf { (pkg, since) ->
+            SystemClock.elapsedRealtime() - since >= EXTENSION_GRACE_MS && !inCustomTab() &&
+                container.websites.lacksExtension(pkg) && Browsers.isFullBrowser(this, pkg) &&
+                ExtensionApi.otherBrowsersMatter(world)
+        }?.first
+        otherBrowser.value = other
+        val sitesOff = other == null && silentBrowser != null && world.blocks.any { it.enabled && it.targetSites.isNotEmpty() }
         // Sync failing for an hour: unlocks and ticks from the laptop stop arriving, silently.
         val now = System.currentTimeMillis()
         val blocksStuck = container.shared.failingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
@@ -363,9 +387,12 @@ class BlockerForegroundService : LifecycleService() {
     }
 
     /** Daily limits, schedules, lockdowns and breaks change what's blocked by time alone, so they always tick. */
+    private fun inCustomTab() = usageDetector?.customTab == true
+
     private fun needsTicking(world: World): Boolean =
         world.sessions.isNotEmpty() ||
             world.pause != null ||
+            world.backgroundSites.isNotEmpty() ||
             world.blocks.any { it.state == BlockState.EARNED || it.mode != BlockMode.HABIT || it.hasLimit || it.blockedHours != null } ||
             world.progress.values.any { it.timerRunning } ||
             world.focus?.let { it.running || it.resumeAtWall != null } == true // I37: goals reached mid-run, breaks ending
@@ -390,6 +417,7 @@ class BlockerForegroundService : LifecycleService() {
         private const val SYNC_ALERT_MS = 60 * 60 * 1000L
 
         /** How long a browser may be in front without a word from the extension. */
+        private const val BROWSER_SETTLE_MS = 3_000L
         private const val EXTENSION_GRACE_MS = 10_000L
 
         /**
