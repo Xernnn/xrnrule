@@ -32,4 +32,4 @@ jobs:
       - run: pip install bcrypt
       - run: python3 -m unittest server/test_xrnrule_sync.py
       - run: for f in extension/*.js; do node --check "$f"; done
-      - run: node --test extension/test
+      - run: node --test extension/test/*.test.mjs
