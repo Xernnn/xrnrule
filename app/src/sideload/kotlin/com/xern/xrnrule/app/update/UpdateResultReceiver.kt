@@ -18,6 +18,7 @@ class UpdateResultReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val updater = (context.applicationContext as XrnruleApp).container.updates as? ApkUpdater ?: return
+        if (!updater.isCurrent(intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1))) return
         when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION ->
                 IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)?.let(updater::needsConfirmation)

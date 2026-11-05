@@ -51,6 +51,10 @@ import java.util.concurrent.TimeUnit
  * The background check runs every [CHECK_EVERY_H] hours and installs only while the screen is
  * off, so the restart an update brings never lands mid-use: Android replaces the process, and
  * BootReceiver brings the service back on MY_PACKAGE_REPLACED. Check now installs at once.
+ *
+ * Unattended, a build gets one try, however it ends. The phone may answer a try with a question
+ * (HyperOS's installer, Play Protect) that waits for the next unlock, so trying again at each
+ * screen-off puts a popup in front of every unlock. A later build, or Check now, tries again.
  */
 class ApkUpdater(context: Context, private val sync: SyncSettings, private val scope: CoroutineScope) : AppUpdates {
     private val context = context.applicationContext
@@ -145,8 +149,8 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
             report(true, "Up to date")
             return null
         }
-        // A build Android refused, or that wasn't confirmed, waits for Check now or a newer one.
-        if (!manual && release.versionCode == prefs.getLong(KEY_FAILED, 0)) return null
+        // One unattended try for each build: after that it waits for Check now or a newer one.
+        if (!manual && release.versionCode == prefs.getLong(KEY_TRIED, 0)) return null
         if (!canInstall()) {
             report(false, "Version ${release.label} is out, but Android doesn't let xrnrule install it yet: allow it above.")
             return null
@@ -160,7 +164,7 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
         }
         problemWith(file, release)?.let { problem ->
             file.delete()
-            prefs.edit { putLong(KEY_FAILED, release.versionCode) }
+            prefs.edit { putLong(KEY_TRIED, release.versionCode) }
             report(false, problem)
             return null
         }
@@ -241,7 +245,13 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
     }
 
     private fun install(ready: Ready, manual: Boolean) {
+        prefs.edit {
+            remove(KEY_READY)
+            putLong(KEY_TRIED, ready.release.versionCode)
+        }
         val installer = context.packageManager.packageInstaller
+        // An older try may still be waiting for an answer; only the newest may ask.
+        installer.mySessions.forEach { old -> runCatching { installer.abandonSession(old.sessionId) } }
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
             setSize(ready.file.length())
@@ -260,6 +270,7 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
                 }
                 prefs.edit {
                     putLong(KEY_INSTALLING, ready.release.versionCode)
+                    putInt(KEY_SESSION, sessionId)
                     putBoolean(KEY_MANUAL, manual)
                 }
                 report(true, "Installing version ${ready.release.label}: the app closes, and blocking is back by itself in a few seconds.")
@@ -270,6 +281,9 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
             report(false, "Couldn't start installing version ${ready.release.label}: ${e.message}")
         }
     }
+
+    /** Whether [sessionId] is the newest try: abandoning an older one reports back as well. */
+    fun isCurrent(sessionId: Int) = sessionId == prefs.getInt(KEY_SESSION, -1)
 
     /** From [UpdateResultReceiver]: Android (or the phone maker) wants a tap before it installs. */
     fun needsConfirmation(confirm: Intent) {
@@ -294,11 +308,7 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
 
     /** From [UpdateResultReceiver]. */
     fun installFailed(status: Int, message: String?) {
-        val code = prefs.getLong(KEY_INSTALLING, 0)
-        prefs.edit {
-            remove(KEY_INSTALLING)
-            putLong(KEY_FAILED, code)
-        }
+        prefs.edit { remove(KEY_INSTALLING) }
         Notifications(context).cancel(Notifications.ALERT_UPDATE)
         report(
             false,
@@ -366,8 +376,10 @@ class ApkUpdater(context: Context, private val sync: SyncSettings, private val s
         /** The build handed to the installer; the next process compares itself with it. */
         private const val KEY_INSTALLING = "installing"
         private const val KEY_MANUAL = "installing_manual"
-        /** A build Android refused or that wasn't confirmed: not retried in the background. */
-        private const val KEY_FAILED = "failed"
+        /** The newest build installing was started for, or that failed its checks. */
+        private const val KEY_TRIED = "tried"
+        /** The session of that try; results of any other are stale. */
+        private const val KEY_SESSION = "session"
 
         private fun sha256(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
