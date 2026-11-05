@@ -9,6 +9,7 @@ import http.client
 import importlib.util
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -64,6 +65,56 @@ class SyncServerTest(unittest.TestCase):
                 return r.status, r.read().decode(), r.headers
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode(), e.headers
+
+    def state_file(self):
+        return os.path.join(srv.args.data, "users", "sonn", "state.json")
+
+    def test_an_unreadable_file_is_never_an_empty_document(self):
+        status, _, h = self.call("GET", "/state")
+        put, _, h = self.call("PUT", "/state", {"blocks": {"a": {}}}, {"If-Match": h["ETag"]})
+        self.assertEqual(put, 200)
+        with open(self.state_file()) as f:
+            good = f.read()
+        with open(self.state_file(), "w") as f:
+            f.write(good[:20])
+        try:
+            self.assertEqual(self.call("GET", "/state")[0], 503)
+            self.assertEqual(self.call("PUT", "/state", {"blocks": {}}, {"If-Match": "*"})[0], 503)
+        finally:
+            with open(self.state_file(), "w") as f:
+                f.write(good)
+        self.assertEqual(json.loads(self.call("GET", "/state")[1]), {"blocks": {"a": {}}})
+
+    def test_a_file_that_was_never_written_is_version_zero(self):
+        saved = self.state_file() + ".aside"
+        self.call("PUT", "/state", {"a": 1}, {"If-Match": "*"})
+        os.replace(self.state_file(), saved)
+        try:
+            status, body, h = self.call("GET", "/state")
+            self.assertEqual((status, body, h["ETag"]), (200, "{}", '"0"'))
+        finally:
+            os.replace(saved, self.state_file())
+
+    def test_the_first_write_of_a_day_keeps_a_copy(self):
+        self.call("PUT", "/state", {"n": 1}, {"If-Match": "*"})
+        folder = os.path.join(os.path.dirname(self.state_file()), "backups")
+        shutil.rmtree(folder, ignore_errors=True)
+        self.call("PUT", "/state", {"n": 2}, {"If-Match": "*"})
+        self.call("PUT", "/state", {"n": 3}, {"If-Match": "*"})
+        copies = os.listdir(folder)
+        self.assertEqual(len(copies), 1)
+        with open(os.path.join(folder, copies[0])) as f:
+            self.assertEqual(json.load(f)["data"], {"n": 1}, "what was there before the day's first write")
+
+    def test_old_copies_go(self):
+        self.call("PUT", "/state", {"n": 1}, {"If-Match": "*"})
+        folder = os.path.join(os.path.dirname(self.state_file()), "backups")
+        shutil.rmtree(folder, ignore_errors=True)
+        os.makedirs(folder)
+        for day in range(1, srv.BACKUP_DAYS + 5):
+            open(os.path.join(folder, f"state-2020-01-{day:02d}.json"), "w").close()
+        self.call("PUT", "/state", {"n": 2}, {"If-Match": "*"})
+        self.assertEqual(len(os.listdir(folder)), srv.BACKUP_DAYS)
 
     def test_write_needs_the_version_it_read(self):
         status, body, headers = self.call("GET", "/xrnrule/state")

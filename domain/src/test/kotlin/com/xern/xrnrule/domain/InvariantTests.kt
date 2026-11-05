@@ -2463,4 +2463,69 @@ class InvariantTests {
         assertFalse("a tag on a plain task", itemsLoosen(listOf(item.copy(tag = null)), listOf(item)))
         assertEquals("the id is the hash, not the UID", 16, kitchen.length)
     }
+
+    // ---- I45: a server that went back ------------------------------------------------------
+
+    @Test
+    fun i45_aServerThatLostItsStateIsFilledAgain() {
+        val clock = FakeClock()
+        val phone = Device("phone", buildWorld(listOf(timerBlock(id = "a"), timerBlock(id = "b", target = "com.b")), clock = clock), clock)
+        val laptop = Device("laptop", World(), FakeClock(mono = 5_000))
+        val server = FakeServer()
+        phone.sync(server)
+        laptop.sync(server)
+        assertEquals(2, laptop.world.blocks.size)
+
+        server.wentBack() // what the server answers with its file gone: version 0, no document
+        phone.sync(server)
+        assertEquals("nobody deleted them", 2, phone.world.blocks.size)
+        assertEquals("and the server has them again", 2, server.state.blocks.size)
+        laptop.sync(server)
+        assertEquals(2, laptop.world.blocks.size)
+        assertFalse("and it settles", phone.sync(server))
+    }
+
+    @Test
+    fun i45_aBackupDoesntDeleteWhatCameAfterIt() {
+        val clock = FakeClock()
+        val phone = Device("phone", buildWorld(listOf(timerBlock(id = "old")), clock = clock), clock)
+        val server = FakeServer()
+        phone.sync(server)
+        val backup = server.state
+        val backupAt = server.version
+        phone.world = phone.world.copy(blocks = phone.world.blocks + timerBlock(id = "new", target = "com.new"))
+        phone.sync(server)
+        phone.world = phone.world.copy(blocks = phone.world.blocks + timerBlock(id = "newer", target = "com.newer"))
+        phone.sync(server)
+
+        server.wentBack(backup, backupAt)
+        phone.sync(server)
+        assertEquals(setOf("old", "new", "newer"), phone.world.blocks.map { it.id }.toSet())
+        assertEquals(3, server.state.blocks.size)
+    }
+
+    @Test
+    fun i45_aServerMovingOnStillCarriesDeletions() {
+        val clock = FakeClock()
+        val phone = Device("phone", buildWorld(listOf(timerBlock(id = "a"), timerBlock(id = "b", target = "com.b")), clock = clock), clock)
+        val laptop = Device("laptop", World(), FakeClock(mono = 5_000))
+        val server = FakeServer()
+        phone.sync(server)
+        laptop.sync(server)
+        laptop.world = laptop.world.copy(blocks = laptop.world.blocks.filterNot { it.id == "b" })
+        laptop.sync(server)
+        phone.sync(server)
+        assertEquals("a real delete still goes through", listOf("a"), phone.world.blocks.map { it.id })
+    }
+
+    @Test
+    fun i45_baseForOnlyDropsTheBaseWhenTheVersionWentBack() {
+        val base = SharedState()
+        assertEquals(base, SharedState.baseFor(base, "\"7\"", "\"7\""))
+        assertEquals(base, SharedState.baseFor(base, "\"7\"", "\"8\""))
+        assertEquals(null, SharedState.baseFor(base, "\"7\"", "\"6\""))
+        assertEquals(null, SharedState.baseFor(base, "\"7\"", "\"0\""))
+        assertEquals("no etag to compare", base, SharedState.baseFor(base, "", "\"3\""))
+        assertEquals("a weak etag reads the same", null, SharedState.baseFor(base, "W/\"7\"", "\"6\""))
+    }
 }

@@ -206,7 +206,8 @@ class SharedSync(
             // Nothing of ours to send: a conditional read, usually a bodyless 304.
             val cheap = base != null && base.state == local
             val remote = api.get(if (cheap) base!!.etag else null) ?: return "Up to date"
-            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(base?.state, remote.state))
+            val against = SharedState.baseFor(base?.state, base?.etag, remote.etag) // I45
+            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, remote.state))
             saveBase(Base(remote.etag, remote.state))
             val merged = SharedState.of(world)
             if (merged == remote.state) return "Up to date"

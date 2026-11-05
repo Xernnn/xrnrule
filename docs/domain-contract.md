@@ -244,6 +244,15 @@ luôn `ARMED`); rời EARNED/UNLOCKED theo cách này thì reset như I10; vào 
 (`spentEpochDay`/`spentAmount` đổi qua lần trộn) **không** tiêu thêm, còn item nó không tiêu (có thể
 nó chưa có entry mới) thì tiêu ở đây như redeem (I24), để một lần tick không trả cho hai lần mở. Sau đó sweep chạy như mọi sự kiện. Test: `SharedStateTest` (bảng trên), I26–I28.
 
+**Server lùi lại (I45).** Mỗi lần ghi, `version` của server tăng; base của thiết bị nhớ etag lúc đồng
+ý. Một server trả `version` **nhỏ hơn** etag của base (mất `state.json` → `0`, hoặc khôi phục từ bản
+sao lưu cũ) không phải là "máy kia đã xóa hết": base bị bỏ và lần trộn chạy như thiết bị chưa từng
+đồng bộ (`SharedState.baseFor`), nên block mới hơn server được giữ lại rồi ghi lên, server tự đầy lại.
+Giới hạn đã biết: thứ đã xóa sau bản sao lưu sẽ quay lại (chặt hơn, giống §2.5). Server **không bao
+giờ** trả tài liệu rỗng thay cho file không đọc được: `state.json` hỏng → 503 và thiết bị giữ nguyên;
+chỉ file thật sự chưa có mới là version 0. Server giữ 14 bản sao theo ngày trong `backups/` cạnh
+`state.json`; xóa file hỏng thì các thiết bị tự ghi lại, khỏi cần khôi phục tay.
+
 ### 2.5 Habit server: danh sách habit chung
 
 Habit và entry đi qua **habit server** (`xrnloops-sync`, trước là server của xrnloops), không qua
@@ -322,6 +331,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I42** | `World.appliesHere(block)` = `block.devices.include(deviceKind)`: `deviceKind == null` (dữ liệu cũ), `devices == BOTH`, hoặc `devices` khớp `deviceKind`. Block không áp dụng ở máy này: `isBlocking == false`, không nằm trong `blockers` (I22) nên không vào `ShieldPlan`, `timeLeft` bỏ qua nó, và không tích lũy ALLOWANCE (I19), lượt dùng I41 hay timer HABIT đếm trên target (I4); timer HABIT có `habitPackages` (I16) vẫn đếm. `BlockEdits.loosens`: `devices` mới không phủ hết thiết bị của cái cũ là nới lỏng. | `i42_laptopOnlyBlockDoesNothingOnThePhone`, `i42_phoneOnlyBlockStillBlocksThePhone`, `i42_aHabitAppElsewhereStillEarnsIt`, `i42_aTargetTimerOnlyCountsWhereTheBlockHolds`, `i42_droppingADeviceLoosens`. |
 | **I43** | Tag item (`tag != null`): `ToggleChecklistItem(done = true)` trên nó là **no-op**; bỏ tick (`done = false`) thì được (khó hơn, không nới lỏng). `TagScanned(tag)`: với mọi block `HABIT` đang `ARMED`, mọi tag item chưa xong có `tag` đó → `done = true`; rồi kiểm `triggerMet` (I11/I15) → `EARNED`. Block ở trạng thái khác không đổi. App đăng ký đọc thẻ (`TECH_DISCOVERED`), nên chạm thẻ ở đâu (kể cả lúc shield đang hiện) cũng tính, không cần mở app. Lưu thẻ: đọc hai lần cùng `Tags.id` (thẻ ngân hàng, hộ chiếu đổi UID mỗi lần đọc). | `i43_aTagItemTicksOnlyFromItsTag`, `i43_oneScanTicksEveryBlockWaitingForIt`, `i43_aDifferentTagLoosens`. |
 | **I44** | Một block giữ được giờ chặn, hạn mức và habit cùng lúc (§2.2); luật nào chặn thì block chặn, và `blockers` (I22) tính phần của habit riêng: phần giữ chặt (giờ chặn, nghỉ bắt buộc, hạn mức ở habit trước) không có block `HABIT` nào mở được, phần đòi habit thì theo I6. `Redeem` bị từ chối khi luật của chính block đang giữ chặt. Block gộp chặn y như hai block nó thay thế. | `i44_blockedHoursAddToALimit`, `i44_aMergedBlockBlocksLikeTheTwoItReplaces`, `i44_aHabitNeverOpensBlockedHours`, `i44_nothingIsCashedInWhileItsBlockIsHeld`, `i44_limitFirstGivesTheFreeMinutesThenTheHabitOpensIt`, `i44_habitFirstBlocksUntilTheHabitAndTheLimitHolds`, `i44_aRowRuleAloneActsLikeHabitFirst`, `i44_aForcedBreakHoldsThroughAnUnlock`, `i44_theLimitAndTheHabitTimerCountApart`, `i44_goingBackToArmedKeepsTheLimitUse`, `i44_theLimitsCountIsOnlyBookkeeping`, `i44_aWaitTimerDoesNotCountDuringFreeMinutes`, `i44_boughtMinutesLiftHoursAndLimit`, `i44_aLimitOnAHabitBlockIsShared`, `i44_changingModeMovesTheCount`. |
+| **I45** | Server có `version` nhỏ hơn etag của base là đã lùi lại (mất dữ liệu, hay khôi phục bản cũ): base bị bỏ, không block nào mất, và thiết bị ghi lại đầy đủ (§2.4). Test: `i45_*` |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 

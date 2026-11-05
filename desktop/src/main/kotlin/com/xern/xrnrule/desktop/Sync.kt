@@ -152,7 +152,8 @@ class SharedSyncClient(
             check(got.statusCode() == 200) { "server answered ${got.statusCode()}" }
             val etag = got.headers().firstValue("ETag").orElse("")
             val remote = json.decodeFromString(SharedState.serializer(), got.body())
-            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(base?.state, remote))
+            val against = SharedState.baseFor(base?.state, base?.etag, etag) // I45
+            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, remote))
             saveBase(Base(etag, remote)) // it's all in here now; a retry mustn't undo the other side
             val merged = SharedState.of(world)
             if (merged == remote) return "Up to date"

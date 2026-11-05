@@ -13,6 +13,8 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               ?wait=S with If-None-Match long-polls up to S seconds (the laptop)
     PUT  /state               needs If-Match: "<version>" (or "*"); 200 with the new ETag, or
                               412 if someone wrote first: re-read, merge, try again
+                              503 if the stored file can't be read: never an empty document, which
+                              a device would take as everything deleted (contract I45)
     GET  /devices             when each device last checked in (X-Device), for the status page
     POST /events              {"events": [{"t": "blocked"|"habit"|"unlock", "at": ms, ...}]} from a
                               device's local log (X-Device); duplicates are dropped. 120 days kept
@@ -58,6 +60,7 @@ MAX_BODY = 8 * 1024 * 1024
 FAIL_DELAY_S = 2  # after a wrong password, as Radicale does
 AUTH_CACHE_S = 600  # a bcrypt check costs ~0.3s on a phone; don't pay it per request
 MAX_WAIT_S = 55
+BACKUP_DAYS = 14  # daily copies of each user's state, next to it in backups/
 FAIL_LIMIT = 10  # wrong logins from one address within FAIL_WINDOW_S, then 429 until they age out
 FAIL_WINDOW_S = 15 * 60
 SEEN_WRITE_S = 60  # devices.json is rewritten at most this often per user
@@ -363,17 +366,42 @@ def state_path(user):
     return os.path.join(args.data, "users", user, "state.json")
 
 
+class Unreadable(Exception):
+    """state.json is there and can't be read. Never answer that with an empty document: a device
+    takes what's missing as deleted and drops its blocks (docs/domain-contract.md, I45)."""
+
+
 def read_state(user):
     try:
         with open(state_path(user), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {"version": 0, "data": {}}
+            doc = json.load(f)
+    except FileNotFoundError:
+        return {"version": 0, "data": {}}  # a new user; the devices fill it
+    except (OSError, ValueError) as e:
+        print(f"state of {user} unreadable: {e}", file=sys.stderr, flush=True)
+        raise Unreadable from e
+    if not isinstance(doc, dict) or not isinstance(doc.get("version"), int):
+        print(f"state of {user} has no version", file=sys.stderr, flush=True)
+        raise Unreadable
+    return doc
+
+
+def keep_backup(path):
+    """The first write of a day keeps what's there, for BACKUP_DAYS days."""
+    folder = os.path.join(os.path.dirname(path), "backups")
+    name = f"state-{datetime.now(timezone.utc):%Y-%m-%d}.json"
+    if os.path.exists(os.path.join(folder, name)) or not os.path.exists(path):
+        return
+    os.makedirs(folder, exist_ok=True)
+    shutil.copyfile(path, os.path.join(folder, name))
+    for old in sorted(os.listdir(folder))[:-BACKUP_DAYS]:
+        os.remove(os.path.join(folder, old))
 
 
 def write_state(user, doc):
     path = state_path(user)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    keep_backup(path)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
@@ -504,15 +532,18 @@ class Handler(BaseHTTPRequestHandler):
             wait = min(max(float(query.get("wait", 0)), 0), MAX_WAIT_S)
         except ValueError:
             return self.send(400, "bad wait")
-        with lock:
-            doc = read_state(user)
-            deadline = time.monotonic() + wait
-            while known and known == str(doc["version"]):
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    break
-                changed.wait(left)
+        try:
+            with lock:
                 doc = read_state(user)
+                deadline = time.monotonic() + wait
+                while known and known == str(doc["version"]):
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    changed.wait(left)
+                    doc = read_state(user)
+        except Unreadable:
+            return self.send(503, "the stored state can't be read")
         etag = {"ETag": f'"{doc["version"]}"'}
         if known and known == str(doc["version"]):
             return self.send(304, headers=etag)
@@ -578,7 +609,10 @@ class Handler(BaseHTTPRequestHandler):
         if not want:
             return self.send(428, "If-Match required")
         with lock:
-            cur = read_state(user)
+            try:
+                cur = read_state(user)
+            except Unreadable:
+                return self.send(503, "the stored state can't be read")
             if want != "*" and etag_version(want) != str(cur["version"]):
                 return self.send(412, "changed since you read it", headers={"ETag": f'"{cur["version"]}"'})
             version = cur["version"] + 1

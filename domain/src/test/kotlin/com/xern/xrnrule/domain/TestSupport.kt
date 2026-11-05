@@ -236,8 +236,23 @@ fun buildWorld(
 
 // ---- several devices (contract §2.4) ---------------------------------------------------
 
-/** The sync server: it only stores the last state pushed. */
-class FakeServer(var state: SharedState = SharedState())
+/** The sync server: it only stores the last state pushed, and counts up with every write. */
+class FakeServer(var state: SharedState = SharedState()) {
+    var version = 0L
+        private set
+    val etag: String get() = "\"$version\""
+
+    fun write(next: SharedState) {
+        state = next
+        version++
+    }
+
+    /** I45: its file went, or it came back from a backup taken at [atVersion]. */
+    fun wentBack(to: SharedState = SharedState(), atVersion: Long = 0) {
+        state = to
+        version = atVersion
+    }
+}
 
 /**
  * One device in a multi-device test: its own world and clock, and the shared state it last
@@ -252,6 +267,7 @@ class Device(
     private val engine = BlockEngine()
     var base: SharedState? = null
         private set
+    private var baseEtag: String? = null
 
     init {
         world = world.copy(deviceId = id)
@@ -261,11 +277,12 @@ class Device(
 
     /** One round: merge with what the server has, adopt it, push the result. True if that wrote anything. */
     fun sync(server: FakeServer): Boolean {
-        on(BlockEvent.SharedStateMerged(base, server.state))
+        on(BlockEvent.SharedStateMerged(SharedState.baseFor(base, baseEtag, server.etag), server.state))
         val pushed = SharedState.of(world)
         val wrote = pushed != server.state
-        server.state = pushed
+        if (wrote) server.write(pushed)
         base = pushed
+        baseEtag = server.etag
         return wrote
     }
 

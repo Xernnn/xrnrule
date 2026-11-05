@@ -98,6 +98,19 @@ data class SharedState(
          * side changed takes that side, deletion included; the table in contract §2.4 settles
          * keys both changed.
          */
+        /**
+         * I45: the base to merge against. A server whose version is behind the one [base] was
+         * agreed at lost its state or came back from a backup: what's missing there wasn't deleted
+         * by anyone, so the merge runs without a base and this device fills the server again.
+         */
+        fun baseFor(base: SharedState?, baseEtag: String?, remoteEtag: String): SharedState? {
+            val agreed = baseEtag?.let(::versionOf)
+            val now = versionOf(remoteEtag)
+            return base.takeUnless { agreed != null && now != null && now < agreed }
+        }
+
+        private fun versionOf(etag: String): Long? = etag.filter(Char::isDigit).toLongOrNull()
+
         fun merge(base: SharedState?, local: SharedState, remote: SharedState): SharedState {
             val b = base ?: SharedState()
             val unlockSameDay = local.unlockEpochDay == remote.unlockEpochDay

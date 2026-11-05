@@ -76,6 +76,7 @@ class OverlayShieldPort(
     private var plan = ShieldPlan(emptySet())
 
     private var view: View? = null
+    private var layout: WindowManager.LayoutParams? = null
 
     private val _visible = MutableStateFlow(false)
 
@@ -144,6 +145,21 @@ class OverlayShieldPort(
         // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
         if (view == null) shared.request()
         show()
+        keepScreenOn(uiState.value?.let { it.timerRunning || it.overrideReadyAtElapsed != null } == true)
+    }
+
+    /**
+     * The screen stays on only while something is counting on it: a wait timer stops with the
+     * screen, and the wait before buying minutes is shorter than most screen timeouts' patience.
+     * Otherwise a block screen left on a table would keep the phone awake until the battery ran out.
+     */
+    private fun keepScreenOn(on: Boolean) {
+        val host = view ?: return
+        val params = layout ?: return
+        val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        if ((params.flags and flag != 0) == on) return
+        params.flags = if (on) params.flags or flag else params.flags and flag.inv()
+        runCatching { wm.updateViewLayout(host, params) }
     }
 
     /**
@@ -203,12 +219,12 @@ class OverlayShieldPort(
         host.setViewTreeSavedStateRegistryOwner(owner)
         host.addView(composeView)
 
-        val layout = WindowManager.LayoutParams(
+        val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
             // Focusable: Back comes here, and the override sentence is typed here.
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.OPAQUE,
         ).apply {
             gravity = Gravity.CENTER
@@ -228,8 +244,9 @@ class OverlayShieldPort(
             }
         }
 
-        runCatching { wm.addView(host, layout) }
+        runCatching { wm.addView(host, params) }
         view = host
+        layout = params
         _visible.value = true
         windowOwner = owner
         owner.onStart()
@@ -238,6 +255,7 @@ class OverlayShieldPort(
     private fun hide() {
         view?.let { v -> runCatching { wm.removeView(v) } }
         view = null
+        layout = null
         _visible.value = false
         windowOwner?.onDestroy()
         windowOwner = null

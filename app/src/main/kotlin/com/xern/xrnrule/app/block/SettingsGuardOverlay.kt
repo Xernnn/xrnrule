@@ -58,7 +58,7 @@ class SettingsGuardOverlay(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            0, // no keep-screen-on: this prompt mustn't hold the phone awake if left up
             PixelFormat.OPAQUE,
         ).apply {
             gravity = Gravity.CENTER
