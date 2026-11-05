@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Schedule
@@ -43,8 +44,9 @@ data class BlockStatusUi(
 
 fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): BlockStatusUi {
     val blocking = engine.isBlocking(world, block, clock)
+    val reason = engine.blockReason(world, block, clock)
     return when (block.mode) {
-        BlockMode.HABIT -> {
+        BlockMode.HABIT -> if (reason == BlockReason.LIMIT || reason == BlockReason.BREAK) limitStatus(block, world, engine, clock) else {
             val parts = world.habitParts(block, appLabel = null, engine, clock)
             BlockStatusUi(
                 label = stateVerbose(block.state),
@@ -62,35 +64,7 @@ fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): 
             )
         }
 
-        BlockMode.ALLOWANCE -> {
-            val used = engine.allowanceUsedMs(world, block, clock)
-            val allowance = block.dailyAllowanceMs
-            val rowBreak = engine.rowBreakRemainingMs(world, block, clock)
-            val bought = engine.overrideRemainingMs(world, block.id, clock)
-            val row = if (block.hasRowRule) "${formatRemaining(block.sessionMs - engine.rowUsedMs(world, block, clock))} of ${formatDuration(block.sessionMs)} in a row left" else null
-            val daily = if (allowance > 0) "${formatDuration(used)} of ${formatDuration(allowance)} used today" else null
-            BlockStatusUi(
-                label = when {
-                    rowBreak > 0 -> "On a break"
-                    blocking -> "Limit reached"
-                    bought > 0 -> "Bought time"
-                    allowance > 0 -> "${formatRemaining(allowance - used)} left"
-                    else -> "Open"
-                },
-                icon = if (blocking) Icons.Filled.Lock else Icons.Filled.HourglassBottom,
-                tone = if (blocking) BlockState.ARMED else BlockState.UNLOCKED,
-                line = when {
-                    rowBreak > 0 -> "${formatRemaining(rowBreak)} of the break left · ${formatDuration(block.sessionMs)} in a row is the most"
-                    bought > 0 -> "${formatRemaining(bought)} of bought time left" + (daily?.let { " · $it" } ?: "")
-                    else -> listOfNotNull(daily?.let { if (blocking) "$it · opens at midnight" else it }, row).joinToString(" · ")
-                },
-                fraction = when {
-                    allowance > 0 -> used.toFloat() / allowance
-                    block.hasRowRule -> engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs
-                    else -> null
-                },
-            )
-        }
+        BlockMode.ALLOWANCE -> limitStatus(block, world, engine, clock)
 
         BlockMode.SCHEDULE -> {
             val until = if (blocking) freeAtWall(block, world, engine, clock) else null
@@ -130,25 +104,63 @@ fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): 
     }
 }
 
-/** For a non-HABIT block that is blocking now: when it lets go, as wall-clock ms. Null if unknown/never. */
+/** Where a block's limit stands (I19, I32, I44). */
+private fun limitStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): BlockStatusUi {
+    val blocking = engine.isBlocking(world, block, clock)
+    val reason = engine.blockReason(world, block, clock)
+    val used = engine.allowanceUsedMs(world, block, clock)
+    val allowance = block.dailyAllowanceMs
+    val rowBreak = engine.rowBreakRemainingMs(world, block, clock)
+    val bought = engine.overrideRemainingMs(world, block.id, clock)
+    val row = if (block.hasRowRule) "${formatRemaining(block.sessionMs - engine.rowUsedMs(world, block, clock))} of ${formatDuration(block.sessionMs)} in a row left" else null
+    val daily = if (allowance > 0) "${formatDuration(used)} of ${formatDuration(allowance)} used today" else null
+    return BlockStatusUi(
+        label = when {
+            rowBreak > 0 -> "On a break"
+            reason == BlockReason.LIMIT -> "Limit reached"
+            blocking -> "Blocking now"
+            bought > 0 -> "Bought time"
+            allowance > 0 -> "${formatRemaining(allowance - used)} left"
+            else -> "Open"
+        },
+        icon = if (blocking) Icons.Filled.Lock else Icons.Filled.HourglassBottom,
+        tone = if (blocking) BlockState.ARMED else BlockState.UNLOCKED,
+        line = when {
+            rowBreak > 0 -> "${formatRemaining(rowBreak)} of the break left · ${formatDuration(block.sessionMs)} in a row is the most"
+            bought > 0 -> "${formatRemaining(bought)} of bought time left" + (daily?.let { " · $it" } ?: "")
+            else -> listOfNotNull(daily?.let { if (reason == BlockReason.LIMIT) "$it · opens at midnight" else it }, row).joinToString(" · ")
+        },
+        fraction = when {
+            allowance > 0 -> used.toFloat() / allowance
+            block.hasRowRule -> engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs
+            else -> null
+        },
+    )
+}
+
+/** For a block held by time alone: when the last of what holds it lets go, as wall-clock ms. Null if a habit could or it isn't blocking (I44). */
 fun freeAtWall(block: Block, world: World, engine: BlockEngine, clock: Clock): Long? {
     val zone = clock.zone()
     val now = Instant.ofEpochMilli(clock.nowWallMs()).atZone(zone)
-    return when (block.mode) {
-        BlockMode.HABIT -> null
-        BlockMode.LOCKDOWN -> engine.lockdownRemainingMs(world, block.id, clock)
-            .takeIf { it > 0 }?.let { clock.nowWallMs() + it }
-        BlockMode.ALLOWANCE -> engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
-            ?: now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        BlockMode.SCHEDULE -> {
-            // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
-            val start = now.withSecond(0).withNano(0)
-            (1..7 * 24 * 60).asSequence()
-                .map { start.plusMinutes(it.toLong()) }
-                .firstOrNull { t -> !engine.scheduleActive(block, AtClock(t.toInstant().toEpochMilli(), zone)) }
-                ?.toInstant()?.toEpochMilli()
-        }
+    when (engine.blockReason(world, block, clock)) {
+        null, BlockReason.HABIT -> return null
+        BlockReason.LOCKDOWN -> return clock.nowWallMs() + engine.lockdownRemainingMs(world, block.id, clock)
+        else -> Unit
     }
+    val hoursEnd = if (engine.inBlockedHours(block, clock)) {
+        // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
+        val start = now.withSecond(0).withNano(0)
+        (1..7 * 24 * 60).asSequence()
+            .map { start.plusMinutes(it.toLong()) }
+            .firstOrNull { t -> !engine.inBlockedHours(block, AtClock(t.toInstant().toEpochMilli(), zone)) }
+            ?.toInstant()?.toEpochMilli()
+    } else {
+        null
+    }
+    val breakEnd = engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
+    val limitEnd = now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        .takeIf { engine.limitHolds(world, block, clock) && engine.overrideRemainingMs(world, block.id, clock) == 0L }
+    return listOfNotNull(hoursEnd, breakEnd, limitEnd).maxOrNull()
 }
 
 /** A clock stopped at [wall], to ask the engine about another moment. */

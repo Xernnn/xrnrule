@@ -706,6 +706,300 @@ class InvariantTests {
         assertEquals(4L * 60_000, engine.allowanceUsedMs(phone.world, phone.block("a1"), phone.clock))
     }
 
+    // ---- several rules on one block (contract §2.2) ----------------------------------------
+
+    private val tenMinutes = 10L * 60_000
+
+    /** Every day, [startH]:00 to [endH]:00. */
+    private fun hours(startH: Int, endH: Int) = Schedule((1..7).toSet(), TimeWindow(startH * 60, endH * 60))
+
+    /** [ms] in the target, then out of it. */
+    private fun use(world: World, ms: Long, clock: FakeClock): World {
+        val inTarget = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock).world
+        clock.advance(ms)
+        val ticked = engine.reduce(inTarget, BlockEvent.Tick, clock).world
+        return engine.reduce(ticked, BlockEvent.ForegroundChanged(null), clock).world
+    }
+
+    private fun tick(world: World, clock: FakeClock) = engine.reduce(world, BlockEvent.Tick, clock).world
+
+    /** Ticks the block's first item and redeems it. */
+    private fun unlock(world: World, blockId: String, clock: FakeClock): World {
+        val ticked = engine.reduce(world, BlockEvent.ToggleChecklistItem("$blockId-i0", true), clock).world
+        return engine.reduce(ticked, BlockEvent.Redeem(blockId), clock).world
+    }
+
+    private fun reason(world: World, id: String, clock: Clock) = engine.blockReason(world, world.block(id)!!, clock)
+
+    @Test
+    fun i44_blockedHoursAddToALimit() {
+        val clock = FakeClock() // 12:00
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = tenMinutes).copy(blockedHours = hours(14, 18))
+        var world = buildWorld(listOf(block), clock = clock)
+        assertNull(reason(world, "a1", clock))
+
+        world = use(world, 4L * 60_000, clock)
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(world, block, clock))
+
+        clock.advance(2L * 60 * 60_000) // 14:04
+        world = tick(world, clock)
+        assertEquals(BlockReason.HOURS, reason(world, "a1", clock))
+        assertTrue("com.target" in engine.blockedPackages(world, clock))
+
+        clock.advance(4L * 60 * 60_000) // 18:04: the limit still has six minutes
+        world = tick(world, clock)
+        assertNull(reason(world, "a1", clock))
+        world = use(world, 6L * 60_000, clock)
+        assertEquals(BlockReason.LIMIT, reason(world, "a1", clock))
+    }
+
+    @Test
+    fun i44_aMergedBlockBlocksLikeTheTwoItReplaces() {
+        val blockedHours = Schedule(
+            activeDays = (1..6).toSet(),
+            activeWindow = TimeWindow(0, 14 * 60),
+            moreWindows = listOf(DayWindow((1..7).toSet(), TimeWindow(18 * 60, 22 * 60)), DayWindow(setOf(7), TimeWindow(23 * 60, 2 * 60))),
+        )
+        val limit = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = tenMinutes)
+        val alone = modeBlock("s1", BlockMode.SCHEDULE, schedule = blockedHours)
+        val merged = limit.copy(blockedHours = blockedHours)
+        for (usedMs in listOf(0L, tenMinutes / 2, tenMinutes)) {
+            val clock = FakeClock()
+            repeat(7 * 24 * 2) { // every half hour for a week
+                clock.advance(30L * 60_000)
+                val used = mapOf("a1" to HabitProgress("a1", usedMs, clock.startOfLocalDayMs(), clock.nowMonotonicMs()))
+                val two = buildWorld(listOf(limit, alone), clock = clock).copy(progress = used)
+                val one = buildWorld(listOf(merged), clock = clock).copy(progress = used)
+                assertEquals(engine.blockedPackages(two, clock), engine.blockedPackages(one, clock))
+            }
+        }
+    }
+
+    @Test
+    fun i44_aHabitNeverOpensBlockedHours() {
+        val clock = FakeClock() // 12:00, before the hours
+        val inside = checklistBlock("c1", unlockMs = 3L * 60 * 60_000).copy(blockedHours = hours(13, 14))
+        val other = checklistBlock("c2", unlockMs = 3L * 60 * 60_000)
+        var world = buildWorld(listOf(inside, other), mapOf("c1" to items("c1", 1), "c2" to items("c2", 1)), clock).let { w ->
+            w.copy(settings = w.settings.copy(dailyCapMs = 8L * 60 * 60_000))
+        }
+        world = unlock(world, "c1", clock)
+        world = unlock(world, "c2", clock)
+        assertFalse("com.target" in engine.blockedPackages(world, clock))
+
+        clock.advance(61L * 60_000) // 13:01
+        world = tick(world, clock)
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+        assertEquals(BlockReason.HOURS, reason(world, "c1", clock))
+        assertTrue("I6's other block doesn't lift it either", "com.target" in engine.blockedPackages(world, clock))
+
+        clock.advance(60L * 60_000) // 14:01
+        world = tick(world, clock)
+        assertNull(reason(world, "c1", clock))
+        assertFalse("com.target" in engine.blockedPackages(world, clock))
+    }
+
+    @Test
+    fun i44_nothingIsCashedInWhileItsBlockIsHeld() {
+        val clock = FakeClock() // 12:00, inside the hours
+        val block = checklistBlock("c1").copy(blockedHours = hours(11, 13))
+        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        world = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-i0", true), clock).world
+        assertEquals(BlockState.EARNED, world.block("c1")!!.state)
+        assertEquals(RejectReason.HELD, engine.redeemRejection(world, "c1", clock))
+
+        val refused = engine.reduce(world, BlockEvent.Redeem("c1"), clock)
+        assertEquals(BlockState.EARNED, refused.world.block("c1")!!.state)
+        assertNotNull("the credit is still there", refused.world.credits["c1"])
+        assertTrue(Effect.RedeemRejected("c1", RejectReason.HELD) in refused.effects)
+
+        clock.advance(61L * 60_000) // 13:01
+        world = tick(refused.world, clock)
+        assertNull(engine.redeemRejection(world, "c1", clock))
+    }
+
+    @Test
+    fun i44_limitFirstGivesTheFreeMinutesThenTheHabitOpensIt() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1", unlockMs = 5L * 60_000).copy(dailyAllowanceMs = tenMinutes)
+        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        assertNull("the free minutes come first", reason(world, "c1", clock))
+
+        world = use(world, tenMinutes, clock)
+        assertEquals(BlockReason.HABIT, reason(world, "c1", clock))
+        assertTrue("com.target" in engine.blockedPackages(world, clock))
+
+        world = unlock(world, "c1", clock)
+        assertNull("the habit opens it again", reason(world, "c1", clock))
+        assertFalse("com.target" in engine.blockedPackages(world, clock))
+
+        clock.advance(5L * 60_000)
+        world = tick(world, clock)
+        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
+        assertEquals(BlockReason.HABIT, reason(world, "c1", clock))
+
+        clock.advance(DAY_MS)
+        world = tick(world, clock)
+        assertNull("a new day, new minutes", reason(world, "c1", clock))
+        assertEquals(0L, engine.allowanceUsedMs(world, block, clock))
+    }
+
+    @Test
+    fun i44_habitFirstBlocksUntilTheHabitAndTheLimitHolds() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1", unlockMs = 30L * 60_000).copy(dailyAllowanceMs = tenMinutes, habitFirst = true)
+        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        assertEquals("the habit comes first", BlockReason.HABIT, reason(world, "c1", clock))
+
+        world = unlock(world, "c1", clock)
+        assertNull(reason(world, "c1", clock))
+
+        world = use(world, tenMinutes, clock)
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+        assertEquals("no habit gets past the limit", BlockReason.LIMIT, reason(world, "c1", clock))
+        assertTrue("com.target" in engine.blockedPackages(world, clock))
+    }
+
+    @Test
+    fun i44_aRowRuleAloneActsLikeHabitFirst() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1").copy(sessionMs = tenMinutes, sessionBreakMs = tenMinutes)
+        val world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        assertFalse(block.limitComesFirst)
+        assertEquals(BlockReason.HABIT, reason(world, "c1", clock))
+    }
+
+    @Test
+    fun i44_aForcedBreakHoldsThroughAnUnlock() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1", unlockMs = 30L * 60_000).copy(dailyAllowanceMs = 3 * tenMinutes, sessionMs = tenMinutes, sessionBreakMs = tenMinutes)
+        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        world = unlock(world, "c1", clock)
+
+        world = use(world, tenMinutes, clock)
+        assertEquals(BlockState.UNLOCKED, world.block("c1")!!.state)
+        assertEquals("a habit doesn't end a forced break", BlockReason.BREAK, reason(world, "c1", clock))
+        assertTrue("com.target" in engine.blockedPackages(world, clock))
+
+        clock.advance(tenMinutes)
+        world = tick(world, clock)
+        assertNull(reason(world, "c1", clock))
+    }
+
+    @Test
+    fun i44_theLimitAndTheHabitTimerCountApart() {
+        val clock = FakeClock()
+        val block = timerBlock("t1", habitPackages = setOf("com.habit"), requiredMs = 30L * 60_000).copy(dailyAllowanceMs = tenMinutes)
+        var world = buildWorld(listOf(block), clock = clock)
+        world = engine.reduce(world, BlockEvent.TimerControl("t1", true), clock).world
+
+        world = use(world, 4L * 60_000, clock)
+        assertEquals(0L, world.progress.getValue("t1").accumulatedMs)
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(world, block, clock))
+
+        world = engine.reduce(world, BlockEvent.ForegroundChanged("com.habit"), clock).world
+        clock.advance(3L * 60_000)
+        world = tick(world, clock)
+        assertEquals(3L * 60_000, world.progress.getValue("t1").accumulatedMs)
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(world, block, clock))
+    }
+
+    @Test
+    fun i44_goingBackToArmedKeepsTheLimitUse() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1", unlockMs = 5L * 60_000).copy(dailyAllowanceMs = tenMinutes, habitFirst = true)
+        var world = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        world = unlock(world, "c1", clock)
+        world = use(world, 3L * 60_000, clock)
+
+        clock.advance(2L * 60_000) // the unlock ends
+        world = tick(world, clock)
+        assertEquals(BlockState.ARMED, world.block("c1")!!.state)
+        assertEquals(3L * 60_000, engine.allowanceUsedMs(world, block, clock))
+
+        clock.advance(DAY_MS)
+        world = tick(world, clock)
+        assertEquals(0L, engine.allowanceUsedMs(world, block, clock))
+    }
+
+    @Test
+    fun i44_theLimitsCountIsOnlyBookkeeping() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1").copy(dailyAllowanceMs = tenMinutes)
+        val before = buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock)
+        val after = use(before, 60_000, clock)
+        assertTrue(engine.allowanceUsedMs(after, block, clock) > 0)
+        assertEquals("a save needn't hurry for a count that moves every tick", before.withoutBookkeeping(), after.withoutBookkeeping())
+    }
+
+    @Test
+    fun i44_aWaitTimerDoesNotCountDuringFreeMinutes() {
+        val clock = FakeClock()
+        val block = timerBlock("t1", requiredMs = 30L * 60_000).copy(dailyAllowanceMs = tenMinutes)
+        var world = buildWorld(listOf(block), clock = clock)
+        world = engine.reduce(world, BlockEvent.TimerControl("t1", true), clock).world
+
+        world = use(world, tenMinutes, clock)
+        assertEquals("using it isn't waiting", 0L, world.progress.getValue("t1").accumulatedMs)
+
+        world = use(world, 5L * 60_000, clock) // on the block screen now
+        assertEquals(5L * 60_000, world.progress.getValue("t1").accumulatedMs)
+    }
+
+    @Test
+    fun i44_boughtMinutesLiftHoursAndLimit() {
+        val clock = FakeClock() // inside the hours, and the limit is used up
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = tenMinutes).copy(blockedHours = hours(11, 13))
+        var world = buildWorld(listOf(block), clock = clock)
+        world = world.copy(progress = mapOf("a1" to HabitProgress("a1", tenMinutes, clock.startOfLocalDayMs(), clock.nowMonotonicMs())))
+        assertEquals(BlockReason.HOURS, reason(world, "a1", clock))
+
+        world = engine.reduce(world, BlockEvent.BeginOverride(setOf("a1")), clock).world
+        clock.advance(Defaults.OVERRIDE_WAIT_MS)
+        world = claim(world, clock).world
+        assertNull(reason(world, "a1", clock))
+        assertEquals(ClockKind.OVERRIDE, engine.timeLeft(world, "com.target", null, clock)?.kind)
+
+        clock.advance(Defaults.OVERRIDE_GRANT_MS)
+        world = tick(world, clock)
+        assertEquals(BlockReason.HOURS, reason(world, "a1", clock))
+
+        val habit = checklistBlock("c1").copy(blockedHours = hours(11, 13))
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(buildWorld(listOf(habit), clock = clock), listOf(habit), clock))
+    }
+
+    @Test
+    fun i44_aLimitOnAHabitBlockIsShared() {
+        val block = checklistBlock("c1").copy(dailyAllowanceMs = tenMinutes)
+        val (phone, laptop, server) = twoDevices(listOf(block), mapOf("c1" to items("c1", 1)))
+
+        phone.world = use(phone.world, 7L * 60_000, phone.clock)
+        settle(phone, laptop, server)
+        assertEquals(7L * 60_000, engine.allowanceUsedMs(laptop.world, laptop.block("c1"), laptop.clock))
+
+        laptop.world = use(laptop.world, 3L * 60_000, laptop.clock)
+        settle(phone, laptop, server)
+        assertEquals(BlockReason.HABIT, reason(phone.world, "c1", phone.clock))
+        assertEquals(BlockReason.HABIT, reason(laptop.world, "c1", laptop.clock))
+    }
+
+    @Test
+    fun i44_changingModeMovesTheCount() {
+        val limit = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = tenMinutes)
+        val (phone, laptop, server) = twoDevices(listOf(limit))
+        laptop.world = use(laptop.world, 4L * 60_000, laptop.clock)
+        settle(phone, laptop, server)
+
+        val habit = limit.copy(mode = BlockMode.HABIT, trigger = Trigger(TriggerType.TIMER, tenMinutes, TriggerUnit.MS), editedAtWall = phone.clock.nowWallMs() + 1)
+        phone.world = phone.world.withBlock(habit, emptyList())
+        settle(phone, laptop, server)
+
+        val p = laptop.world.progress.getValue("a1")
+        assertEquals("its use isn't a head start on the timer", 0L, p.accumulatedMs)
+        assertEquals(4L * 60_000, p.limitUsedMs)
+        assertEquals(4L * 60_000, engine.allowanceUsedMs(laptop.world, laptop.block("a1"), laptop.clock))
+    }
+
     @Test
     fun i26_creditUsedElsewhereIsNotResurrected() {
         val (phone, laptop, server) = twoDevices(listOf(checklistBlock("c1")), mapOf("c1" to items("c1", 1)))

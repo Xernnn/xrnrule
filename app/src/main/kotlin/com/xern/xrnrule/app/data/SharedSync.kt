@@ -1,6 +1,7 @@
 package com.xern.xrnrule.app.data
 
 import android.content.Context
+import androidx.core.content.pm.PackageInfoCompat
 import android.os.PowerManager
 import android.util.Base64
 import androidx.core.content.edit
@@ -91,6 +92,7 @@ class SharedSync(
 ) {
     val settings = SyncSettings(context)
 
+    private val build by lazy { PackageInfoCompat.getLongVersionCode(context.packageManager.getPackageInfo(context.packageName, 0)) }
     private val baseFile = AtomicFile(File(context.filesDir, "shared-base.json"))
     private val json = Json {
         ignoreUnknownKeys = true
@@ -295,7 +297,8 @@ class SharedSync(
          * holds a 304 back for up to that long, answering as soon as the copy changes.
          */
         fun get(ifNoneMatch: String?, waitS: Int = 0): Remote? {
-            val conn = open("GET", if (waitS > 0) "?wait=$waitS" else "")
+            // The server ignores `build`; it's in its log, to see what a device runs before relying on a new field.
+            val conn = open("GET", if (waitS > 0) "?wait=$waitS&build=$build" else "?build=$build")
             if (waitS > 0) conn.readTimeout = (waitS + 15) * 1000
             try {
                 ifNoneMatch?.let { conn.setRequestProperty("If-None-Match", it) }

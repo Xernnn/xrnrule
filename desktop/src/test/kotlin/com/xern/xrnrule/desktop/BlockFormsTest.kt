@@ -8,9 +8,12 @@ import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.CombineMode
+import com.xern.xrnrule.domain.DayWindow
 import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.LinkedDay
+import com.xern.xrnrule.domain.Schedule
+import com.xern.xrnrule.domain.TimeWindow
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
 import java.time.ZoneId
@@ -172,6 +175,64 @@ class BlockFormsTest {
         val edited = ok(BlockForms.edit(r.world, Form(id = r.block.id, name = "YouTube", sites = listOf("youtube.com"), exceptSites = listOf("music.youtube.com"), allowanceMin = 30, rowMin = 0, perDevice = true)))
         assertEquals(0L, edited.block.sessionMs)
         assertTrue(BlockEdits.loosens(r.block, edited.block))
+    }
+
+    @Test
+    fun aHabitBlockCanHoldALimitAndHours_andAnEditKeepsThem() {
+        val form = Form(
+            name = "YouTube", sites = listOf("youtube.com"), items = listOf("Read"),
+            limitOn = true, allowanceMin = 30, rowMin = 15, rowBreakMin = 10, perDevice = true, habitFirst = true,
+            hoursOn = true, hoursDays = (1..6).toSet(), hoursStartMin = 0, hoursEndMin = 840,
+            hoursMore = listOf(BlockForms.Window((1..7).toSet(), 1080, 1320)),
+        )
+        val made = ok(BlockForms.create(World(), form, clock))
+        val block = made.block
+        assertEquals(BlockMode.HABIT, block.mode)
+        assertEquals(30L * 60_000, block.dailyAllowanceMs)
+        assertEquals(15L * 60_000, block.sessionMs)
+        assertEquals(10L * 60_000, block.sessionBreakMs)
+        assertTrue(block.perDevice)
+        assertTrue(block.habitFirst)
+        val hours = Schedule((1..6).toSet(), TimeWindow(0, 840), listOf(DayWindow((1..7).toSet(), TimeWindow(1080, 1320))))
+        assertEquals(hours, block.blockedHours)
+        assertEquals(Schedule.ALWAYS, block.schedule)
+
+        val same = ok(BlockForms.edit(made.world, form.copy(id = block.id))).block
+        assertEquals("nothing lost in an edit", block, same)
+        assertFalse(BlockEdits.loosens(block, same))
+
+        val fewer = ok(BlockForms.edit(made.world, form.copy(id = block.id, hoursOn = false))).block
+        assertEquals(null, fewer.blockedHours)
+        assertTrue("dropping the hours loosens", BlockEdits.loosens(block, fewer))
+
+        val noLimit = ok(BlockForms.edit(made.world, form.copy(id = block.id, limitOn = false))).block
+        assertFalse(noLimit.hasLimit)
+        assertFalse(noLimit.habitFirst)
+        assertTrue("dropping the limit loosens", BlockEdits.loosens(block, noLimit))
+
+        val limitFirst = ok(BlockForms.edit(made.world, form.copy(id = block.id, habitFirst = false))).block
+        assertTrue("so does putting the limit first", BlockEdits.loosens(block, limitFirst))
+    }
+
+    @Test
+    fun aLimitBlockCanHoldHours_butAScheduleKeepsItsOwn() {
+        val limit = Form(name = "Reddit", mode = BlockMode.ALLOWANCE, sites = listOf("reddit.com"), hoursOn = true, hoursAllDay = true, hoursDays = setOf(6, 7))
+        val made = ok(BlockForms.create(World(), limit, clock)).block
+        assertEquals(Schedule(setOf(6, 7), null), made.blockedHours)
+
+        val schedule = Form(name = "Nights", mode = BlockMode.SCHEDULE, sites = listOf("reddit.com"), hoursOn = true, limitOn = true)
+        val strict = ok(BlockForms.create(World(), schedule, clock)).block
+        assertEquals(null, strict.blockedHours)
+        assertFalse(strict.hasLimit)
+    }
+
+    @Test
+    fun blockedHoursAreChecked() {
+        val form = Form(name = "X", sites = listOf("x.com"), items = listOf("Read"), hoursOn = true)
+        assertEquals("Pick at least one day for the blocked hours", reason(BlockForms.create(World(), form.copy(hoursDays = emptySet()), clock)))
+        assertEquals("Blocked hours can't start and end at the same time", reason(BlockForms.create(World(), form.copy(hoursStartMin = 60, hoursEndMin = 60), clock)))
+        assertEquals("Those times don't make sense", reason(BlockForms.create(World(), form.copy(hoursEndMin = 2000), clock)))
+        assertEquals("Set how long the break is", reason(BlockForms.create(World(), form.copy(limitOn = true, rowMin = 10, rowBreakMin = 0), clock)))
     }
 
     @Test

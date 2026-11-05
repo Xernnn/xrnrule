@@ -64,6 +64,7 @@ import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.OverrideRejection
@@ -99,8 +100,8 @@ fun BlockOverlayContent(
 ) {
     XrnruleTheme {
         val block = ui?.block
-        // Daily limit / schedule / lockdown: no habit to do, just say when it lets go (contract §2.2).
-        val strict = block != null && block.mode != BlockMode.HABIT
+        // Blocked by time, not by a habit (contract §2.2, I44): no habit to do, just say when it lets go.
+        val strict = block != null && (block.mode != BlockMode.HABIT || (ui.reason != null && ui.reason != BlockReason.HABIT))
         val earned = !strict && block?.state == BlockState.EARNED
         val subject = ui?.subject ?: "This app"
         val parts = if (block != null && !strict) {
@@ -222,8 +223,8 @@ private fun KindIcon(ui: OverlayShieldPort.OverlayUi?, block: Block?, strict: Bo
         Icon(
             when {
                 ui?.isSite == true -> Icons.Outlined.Language
-                block?.mode == BlockMode.ALLOWANCE -> Icons.Outlined.HourglassBottom
-                block?.mode == BlockMode.SCHEDULE -> Icons.Outlined.Schedule
+                ui?.reason == BlockReason.LIMIT || ui?.reason == BlockReason.BREAK -> Icons.Outlined.HourglassBottom
+                ui?.reason == BlockReason.HOURS -> Icons.Outlined.Schedule
                 else -> Icons.Outlined.Lock
             },
             contentDescription = null,
@@ -236,14 +237,12 @@ private fun KindIcon(ui: OverlayShieldPort.OverlayUi?, block: Block?, strict: Bo
 /** When a daily limit / schedule / lockdown lets go — status, not instructions. */
 private fun strictStatus(block: Block, ui: OverlayShieldPort.OverlayUi): String {
     val freeAt = ui.freeAtWall
-    if (block.mode == BlockMode.ALLOWANCE && ui.rowBreakRemainingMs > 0) {
-        return "A break after ${formatDuration(block.sessionMs)} in a row · ${formatRemaining(ui.rowBreakRemainingMs)} left"
-    }
-    return when (block.mode) {
-        BlockMode.ALLOWANCE -> "Today's ${formatDuration(ui.allowanceMs ?: block.dailyAllowanceMs)} is used up. It opens again at midnight."
-        BlockMode.SCHEDULE -> if (freeAt != null) "Blocked until ${formatClockTime(freeAt)}." else ""
-        BlockMode.LOCKDOWN -> ui.freeInMs?.let { "Locked down for ${formatRemaining(it)} more." }.orEmpty()
-        BlockMode.HABIT -> ""
+    return when (ui.reason) {
+        BlockReason.BREAK -> "A break after ${formatDuration(block.sessionMs)} in a row · ${formatRemaining(ui.rowBreakRemainingMs)} left"
+        BlockReason.LIMIT -> "Today's ${formatDuration(ui.allowanceMs ?: block.dailyAllowanceMs)} is used up. It opens again at midnight."
+        BlockReason.HOURS -> if (freeAt != null) "Blocked until ${formatClockTime(freeAt)}." else ""
+        BlockReason.LOCKDOWN -> ui.freeInMs?.let { "Locked down for ${formatRemaining(it)} more." }.orEmpty()
+        BlockReason.HABIT, null -> ""
     }
 }
 

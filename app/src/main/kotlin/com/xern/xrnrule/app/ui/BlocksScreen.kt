@@ -75,11 +75,13 @@ import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.RejectReason
+import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.appliesHere
 import com.xern.xrnrule.domain.deleteBlock
@@ -333,7 +335,7 @@ private fun BlockCard(
     /** Shown from a link: outlined for a moment. */
     outlined: Boolean = false,
 ) {
-    if (block.mode != BlockMode.HABIT || block.state == BlockState.UNLOCKED) rememberTicker() // countdowns move with time
+    if (block.mode != BlockMode.HABIT || block.state == BlockState.UNLOCKED || block.hasLimit || block.blockedHours != null) rememberTicker() // countdowns move with time
     var menu by remember { mutableStateOf(false) }
     var locking by remember { mutableStateOf(false) }
     val hardcore = block.enforcementTier == EnforcementTier.HARDCORE
@@ -393,7 +395,10 @@ private fun BlockCard(
             }
             Gap(10)
             when (block.mode) {
-                BlockMode.HABIT -> HabitBody(block, world, store, appLabels, onFocus)
+                BlockMode.HABIT -> {
+                    RuleRows(block, world, store)
+                    HabitBody(block, world, store, appLabels, onFocus)
+                }
                 else -> StrictBody(block, world, store)
             }
         }
@@ -442,13 +447,18 @@ private fun HabitBody(
             dayLabel = if (goal.yesterday) "yesterday" else "today",
         )
     }
+    val reason = store.engine.blockReason(world, block, store.clock)
     if (block.state == BlockState.UNLOCKED) {
         val left = sessionLeftMs(world, block.id, store.clock)
+        val held = reason != null // I44: hours or a forced break came down over the unlock
         StatusPill(
-            if (world.sessions[block.id]?.selfPaced == true) "open · use left today" // I41: runs only while in use
-            else "open until ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}",
-            container = kinds.habit.fill,
-            content = kinds.habit.color,
+            when {
+                held -> "blocked for now · the unlock is still running"
+                world.sessions[block.id]?.selfPaced == true -> "open · use left today" // I41: runs only while in use
+                else -> "open until ${formatClockTime(store.clock.nowWallMs() + left, store.clock.zone())}"
+            },
+            container = if (held) MaterialTheme.colorScheme.surfaceVariant else kinds.habit.fill,
+            content = if (held) MaterialTheme.colorScheme.onSurfaceVariant else kinds.habit.color,
             trailing = compactDuration(left),
         )
         return
@@ -457,9 +467,16 @@ private fun HabitBody(
     val habitApps = block.trigger.habitPackages.takeIf { it.isNotEmpty() }?.joinToString(" or ") { appLabels[it] ?: it }
     val parts = world.habitParts(block, habitApps, store.engine, store.clock)
     val armed = block.state == BlockState.ARMED
+    val rejection = store.engine.redeemRejection(world, block.id, store.clock)
     when {
+        block.state != BlockState.EARNED && reason == null && block.limitComesFirst -> StatusPill( // I44
+            "open · the habit comes in after the limit",
+            container = kinds.habit.fill,
+            content = kinds.habit.color,
+        )
         block.state != BlockState.EARNED -> StatusPill("no unlocks available")
-        store.engine.redeemRejection(world, block.id, store.clock) == RejectReason.CAP_REACHED -> StatusPill(
+        rejection == RejectReason.HELD -> StatusPill("done · it can open once it's no longer blocked")
+        rejection == RejectReason.CAP_REACHED -> StatusPill(
             capReachedText(store.engine.unlockCommittedMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs, world.sessions.isNotEmpty()),
         )
         else -> StatusPill(
@@ -573,53 +590,71 @@ private fun StatusPill(
     }
 }
 
+/** A block's limit and its blocked hours, on any kind of block that has them (I44). */
+@Composable
+private fun RuleRows(block: Block, world: World, store: WorldStore) {
+    val kinds = LocalKinds.current
+    val engine = store.engine
+    val clock = store.clock
+    if (block.hasLimit) {
+        if (block.dailyAllowanceMs > 0) {
+            val used = engine.allowanceUsedMs(world, block, clock)
+            HabitRow(
+                icon = Icons.Outlined.HourglassBottom,
+                kind = kinds.limit,
+                label = if (block.perDevice) "A day, on this phone" else "A day",
+                value = "${formatDuration(used)} / ${formatDuration(block.dailyAllowanceMs)}",
+                fraction = used.toFloat() / block.dailyAllowanceMs,
+            )
+        }
+        if (block.hasRowRule) {
+            HabitRow(
+                icon = Icons.Outlined.Timer,
+                kind = kinds.limit,
+                label = "In a row",
+                value = "${formatDuration(engine.rowUsedMs(world, block, clock))} / ${formatDuration(block.sessionMs)}",
+                fraction = engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs,
+            )
+        }
+        val reason = engine.blockReason(world, block, clock)
+        if (reason == BlockReason.LIMIT || reason == BlockReason.BREAK || engine.overrideRemainingMs(world, block.id, clock) > 0) {
+            StatusLine(blockStatus(block, world, engine, clock).line, reason != null)
+        }
+    }
+    block.blockedHours?.let { HoursRow(block, it, world, store) }
+}
+
+/** The hours a block blocks outright: what it's doing now is the line; the times, which can be long, wrap under it. */
+@Composable
+private fun HoursRow(block: Block, hours: Schedule, world: World, store: WorldStore) {
+    val engine = store.engine
+    val clock = store.clock
+    val blocking = engine.blockReason(world, block, clock) == BlockReason.HOURS
+    val bought = engine.overrideRemainingMs(world, block.id, clock).takeIf { engine.inBlockedHours(block, clock) } ?: 0
+    HabitRow(
+        icon = Icons.Outlined.CalendarMonth,
+        kind = LocalKinds.current.strict,
+        label = when {
+            bought > 0 -> "Bought time · ${formatRemaining(bought)} left"
+            blocking -> freeAtWall(block, world, engine, clock)
+                ?.let { "Blocking until ${formatClockTime(it, clock.zone())}" } ?: "Blocking now"
+            block.mode == BlockMode.SCHEDULE -> "Off now"
+            else -> "Blocked hours"
+        },
+        dim = !blocking && bought <= 0,
+        note = describeSchedule(hours),
+    )
+}
+
 /** Daily limit, schedule, lockdown: no habit to do, so the card says where the rule stands. */
 @Composable
 private fun StrictBody(block: Block, world: World, store: WorldStore) {
     val kinds = LocalKinds.current
     val engine = store.engine
     val clock = store.clock
-    val status = blockStatus(block, world, engine, clock)
-    val blocking = engine.isBlocking(world, block, clock)
     when (block.mode) {
-        BlockMode.ALLOWANCE -> {
-            if (block.dailyAllowanceMs > 0) {
-                val used = engine.allowanceUsedMs(world, block, clock)
-                HabitRow(
-                    icon = Icons.Outlined.HourglassBottom,
-                    kind = kinds.limit,
-                    label = if (block.perDevice) "A day, on this phone" else "A day",
-                    value = "${formatDuration(used)} / ${formatDuration(block.dailyAllowanceMs)}",
-                    fraction = used.toFloat() / block.dailyAllowanceMs,
-                )
-            }
-            if (block.hasRowRule) {
-                HabitRow(
-                    icon = Icons.Outlined.Timer,
-                    kind = kinds.limit,
-                    label = "In a row",
-                    value = "${formatDuration(engine.rowUsedMs(world, block, clock))} / ${formatDuration(block.sessionMs)}",
-                    fraction = engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs,
-                )
-            }
-            if (blocking || engine.overrideRemainingMs(world, block.id, clock) > 0) StatusLine(status.line, blocking)
-        }
-        BlockMode.SCHEDULE -> {
-            val bought = engine.overrideRemainingMs(world, block.id, clock)
-            HabitRow(
-                icon = Icons.Outlined.CalendarMonth,
-                kind = kinds.strict,
-                // What it's doing now is the line; the schedule, which can be long, wraps under it.
-                label = when {
-                    bought > 0 -> "Bought time · ${formatRemaining(bought)} left"
-                    blocking -> freeAtWall(block, world, engine, clock)
-                        ?.let { "Blocking until ${formatClockTime(it, clock.zone())}" } ?: "Blocking now"
-                    else -> "Off now"
-                },
-                dim = !blocking && bought <= 0,
-                note = describeSchedule(block.schedule),
-            )
-        }
+        BlockMode.ALLOWANCE -> RuleRows(block, world, store)
+        BlockMode.SCHEDULE -> HoursRow(block, block.schedule, world, store)
         BlockMode.LOCKDOWN -> {
             val left = engine.lockdownRemainingMs(world, block.id, clock)
             if (left > 0) {

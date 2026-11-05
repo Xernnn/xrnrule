@@ -91,17 +91,16 @@ class BlockEngine {
 
     /**
      * I22: the blocks keeping a target blocked, out of [all] that cover it; empty when it is
-     * free. Any engaged ALLOWANCE / SCHEDULE / LOCKDOWN block blocks outright; HABIT blocks block
-     * unless *any* covering HABIT block is UNLOCKED (I6). During a break (I25) the blocks it
-     * covers drop out first.
+     * free. What [holds] blocks outright; blocks asking for a habit block unless *any* covering
+     * HABIT block is UNLOCKED (I6, I44). During a break (I25) the blocks it covers drop out first.
      */
     fun blockers(world: World, all: List<Block>, clock: Clock): List<Block> {
         val here = all.filter { world.appliesHere(it) } // I42
         val covering = if (pauseRemainingMs(world, clock) > 0) here.filterNot(::pausable) else here
-        val strict = covering.filter { it.mode != BlockMode.HABIT && isBlocking(world, it, clock) }
+        val strict = covering.filter { it.enabled && holds(world, it, clock) }
         val habit = covering.filter { it.mode == BlockMode.HABIT }
-        val habitBlocking = if (habit.any { it.state == BlockState.UNLOCKED }) emptyList() else habit.filter { it.enabled && scheduleActive(it, clock) }
-        return strict + habitBlocking
+        val asking = if (habit.any { it.state == BlockState.UNLOCKED }) emptyList() else habit.filter { it.enabled && asksForHabit(world, it, clock) }
+        return (strict + asking).distinct()
     }
 
     /** The blocks keeping this app or site blocked right now (I22, I31); empty when it is open. */
@@ -121,15 +120,48 @@ class BlockEngine {
     fun isBlocking(world: World, block: Block, clock: Clock): Boolean {
         if (!block.enabled || !world.appliesHere(block)) return false // I42
         if (pausable(block) && pauseRemainingMs(world, clock) > 0) return false // I25
+        return holds(world, block, clock) ||
+            (asksForHabit(world, block, clock) && block.state != BlockState.UNLOCKED)
+    }
+
+    /** What keeps [block] blocking whatever its habit's state: nothing but time or bought minutes lift these (I22, I44). */
+    private fun holds(world: World, block: Block, clock: Clock): Boolean {
+        val bought = overrideRemainingMs(world, block.id, clock) > 0 // I34
+        if (inBlockedHours(block, clock) && !bought) return true
+        val onBreak = block.hasLimit && scheduleActive(block, clock) && rowBreakRemainingMs(world, block, clock) > 0
         return when (block.mode) {
-            BlockMode.HABIT -> block.state != BlockState.UNLOCKED && scheduleActive(block, clock)
-            BlockMode.ALLOWANCE -> scheduleActive(block, clock) && (
-                rowBreakRemainingMs(world, block, clock) > 0 || // I32: a bought minute doesn't lift a forced break
-                    (dailyLimitReached(world, block, clock) && overrideRemainingMs(world, block.id, clock) == 0L)
-                )
-            BlockMode.SCHEDULE -> scheduleActive(block, clock) && overrideRemainingMs(world, block.id, clock) == 0L // I34
+            BlockMode.HABIT -> onBreak || limitHolds(world, block, clock)
+            BlockMode.ALLOWANCE -> onBreak || (limitHolds(world, block, clock) && !bought) // I32: a bought minute doesn't lift a forced break
+            BlockMode.SCHEDULE -> false // its hours, above
             BlockMode.LOCKDOWN -> lockdownRemainingMs(world, block.id, clock) > 0
         }
+    }
+
+    /** I44: a used-up daily limit that a habit can't get past: all but a HABIT block with its limit first. */
+    fun limitHolds(world: World, block: Block, clock: Clock): Boolean =
+        block.hasLimit && !block.limitComesFirst && scheduleActive(block, clock) && dailyLimitReached(world, block, clock)
+
+    /**
+     * I44: whether a HABIT block wants its habit done right now: while its schedule is on, and with
+     * the limit first only once the day's free minutes are gone.
+     */
+    fun asksForHabit(world: World, block: Block, clock: Clock): Boolean =
+        block.mode == BlockMode.HABIT && scheduleActive(block, clock) &&
+            (!block.limitComesFirst || dailyLimitReached(world, block, clock))
+
+    /** I44: inside the hours [block] blocks outright: its [Block.blockedHours], or a SCHEDULE block's schedule. */
+    fun inBlockedHours(block: Block, clock: Clock): Boolean =
+        if (block.mode == BlockMode.SCHEDULE) scheduleActive(block, clock)
+        else block.blockedHours?.let { active(it, clock) } == true
+
+    /** Why [block] is blocking right now, the firmest reason first; null when it isn't (I44). */
+    fun blockReason(world: World, block: Block, clock: Clock): BlockReason? = when {
+        !isBlocking(world, block, clock) -> null
+        block.mode == BlockMode.LOCKDOWN -> BlockReason.LOCKDOWN
+        inBlockedHours(block, clock) && overrideRemainingMs(world, block.id, clock) == 0L -> BlockReason.HOURS
+        block.hasLimit && rowBreakRemainingMs(world, block, clock) > 0 -> BlockReason.BREAK
+        limitHolds(world, block, clock) -> BlockReason.LIMIT
+        else -> BlockReason.HABIT
     }
 
     /** I19: the daily limit is on and used up (0 means no daily limit, only the row rule). */
@@ -142,7 +174,7 @@ class BlockEngine {
      */
     fun allowanceUsedMs(world: World, block: Block, clock: Clock): Long {
         val p = world.progress[block.id]
-        val here = if (p == null || dayRolled(p, clock)) 0 else p.accumulatedMs
+        val here = if (p == null || dayRolled(p, clock)) 0 else p.limitUsed(block)
         if (block.perDevice) return here
         val today = clock.startOfLocalDayMs()
         val elsewhere = world.otherAllowance[block.id].orEmpty().values.sumOf { if (it.dayStartWall == today) it.ms else 0 }
@@ -216,23 +248,22 @@ class BlockEngine {
         if (covering.isEmpty()) return null
         val left = mutableListOf<TimeLeft>()
         for (b in covering) {
-            when (b.mode) {
-                BlockMode.ALLOWANCE -> if (scheduleActive(b, clock)) {
-                    val bought = overrideRemainingMs(world, b.id, clock)
-                    if (b.dailyAllowanceMs > 0) {
-                        left += if (bought > 0 && dailyLimitReached(world, b, clock)) TimeLeft(bought, ClockKind.OVERRIDE, b.id)
-                        else TimeLeft((b.dailyAllowanceMs - allowanceUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.LIMIT, b.id)
-                    }
-                    if (b.hasRowRule) left += TimeLeft((b.sessionMs - rowUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.ROW, b.id)
+            val bought = overrideRemainingMs(world, b.id, clock)
+            if (bought > 0 && inBlockedHours(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE, b.id)
+            if (b.hasLimit && scheduleActive(b, clock)) {
+                val spent = dailyLimitReached(world, b, clock)
+                when {
+                    b.dailyAllowanceMs <= 0 -> Unit
+                    bought > 0 && spent -> left += TimeLeft(bought, ClockKind.OVERRIDE, b.id)
+                    !spent || b.mode != BlockMode.HABIT ->
+                        left += TimeLeft((b.dailyAllowanceMs - allowanceUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.LIMIT, b.id)
                 }
-                BlockMode.SCHEDULE -> {
-                    val bought = overrideRemainingMs(world, b.id, clock)
-                    if (bought > 0 && scheduleActive(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE, b.id)
-                }
-                BlockMode.HABIT -> world.sessions[b.id]?.takeIf { b.state == BlockState.UNLOCKED }?.let { s ->
+                if (b.hasRowRule) left += TimeLeft((b.sessionMs - rowUsedMs(world, b, clock)).coerceAtLeast(0), ClockKind.ROW, b.id)
+            }
+            if (b.mode == BlockMode.HABIT) {
+                world.sessions[b.id]?.takeIf { b.state == BlockState.UNLOCKED }?.let { s ->
                     left += TimeLeft(s.leftMs(clock), ClockKind.UNLOCK, b.id)
                 }
-                BlockMode.LOCKDOWN -> Unit
             }
         }
         val pause = pauseRemainingMs(world, clock)
@@ -271,11 +302,12 @@ class BlockEngine {
     fun unlockCommittedMs(world: World, clock: Clock): Long =
         unlockUsedTodayMs(world, clock) + world.sessions.values.sumOf { it.durationMs }
 
-    /** Why [BlockEvent.Redeem] would be refused right now, or null if it would go through (I9). */
+    /** Why [BlockEvent.Redeem] would be refused right now, or null if it would go through (I9, I44). */
     fun redeemRejection(world: World, blockId: String, clock: Clock): RejectReason? {
         val block = world.block(blockId)
         val credit = world.credits[blockId]
         if (block?.state != BlockState.EARNED || credit == null) return RejectReason.NOT_EARNED
+        if (holds(world, block, clock)) return RejectReason.HELD // it would open nothing and spend the cap
         if (unlockCommittedMs(world, clock) + credit.amountMs > world.settings.dailyCapMs) return RejectReason.CAP_REACHED
         return null
     }
@@ -426,7 +458,7 @@ class BlockEngine {
 
         var progress = world.progress
         for (b in world.blocks) {
-            if (b.mode == BlockMode.ALLOWANCE && b.id !in progress) {
+            if (b.hasLimit && b.id !in progress) {
                 progress = progress + (b.id to freshProgress(b.id, clock))
             }
         }
@@ -437,26 +469,25 @@ class BlockEngine {
         progress = progress.mapValues { (blockId, p) ->
             val block = world.block(blockId) ?: return@mapValues p
             val delta = (nowMono - p.lastUpdated).coerceAtLeast(0)
-            val credit = when (block.mode) {
-                BlockMode.ALLOWANCE -> !fgShielded && world.appliesHere(block) && covers(block, fgPkg, fgSite) // I42
-                BlockMode.HABIT -> {
-                    val hasTimer = block.trigger.type == TriggerType.TIMER || block.trigger.type == TriggerType.COMBINED
-                    val counted = if (block.trigger.habitPackages.isNotEmpty()) {
-                        fgPkg != null && fgPkg in block.trigger.habitPackages // I16, on any device (I42)
-                    } else {
-                        world.appliesHere(block) && covers(block, fgPkg, fgSite)
-                    }
-                    hasTimer && p.timerRunning && block.state == BlockState.ARMED && counted
-                }
-                BlockMode.SCHEDULE, BlockMode.LOCKDOWN -> false
+            var next = p.copy(lastUpdated = nowMono)
+            if (block.hasLimit && !fgShielded && world.appliesHere(block) && covers(block, fgPkg, fgSite)) { // I42
+                if (block.hasRowRule) runs[blockId] = advanceRun(world, block, runs[blockId], delta, nowWall)
+                val used = p.limitUsed(block) + delta
+                next = next.withLimitUsed(block, if (block.dailyAllowanceMs > 0) used.coerceAtMost(block.dailyAllowanceMs) else used)
             }
-            if (!credit) return@mapValues p.copy(lastUpdated = nowMono)
-            if (block.hasRowRule) runs[blockId] = advanceRun(world, block, runs[blockId], delta, nowWall)
-            val accumulated = p.accumulatedMs + delta
-            p.copy(
-                accumulatedMs = if (block.mode == BlockMode.ALLOWANCE && block.dailyAllowanceMs > 0) accumulated.coerceAtMost(block.dailyAllowanceMs) else accumulated,
-                lastUpdated = nowMono,
-            )
+            if (block.mode == BlockMode.HABIT) {
+                val hasTimer = block.trigger.type == TriggerType.TIMER || block.trigger.type == TriggerType.COMBINED
+                val counted = if (block.trigger.habitPackages.isNotEmpty()) {
+                    fgPkg != null && fgPkg in block.trigger.habitPackages // I16, on any device (I42)
+                } else {
+                    // I44: using the free minutes of a limit isn't waiting on the block screen (I4).
+                    world.appliesHere(block) && covers(block, fgPkg, fgSite) && (!block.hasLimit || fgShielded)
+                }
+                if (hasTimer && p.timerRunning && block.state == BlockState.ARMED && counted) {
+                    next = next.copy(accumulatedMs = next.accumulatedMs + delta)
+                }
+            }
+            next
         }
         return world.copy(progress = progress, runs = runs)
     }
@@ -777,9 +808,15 @@ class BlockEngine {
             blocks = world.blocks.replace(block.id) { it.copy(state = BlockState.ARMED) },
             credits = world.credits - block.id,
             sessions = world.sessions - block.id,
-            progress = world.progress + (block.id to freshProgress(block.id, clock)),
+            progress = world.progress + (block.id to freshProgressKeepingUse(world.progress[block.id], block.id, clock)),
             checklist = world.checklist + (block.id to resetItems(world.items(block.id))),
         )
+
+    /** I10 resets the habit's window, but what's used of a limit stays until the day ends (I44). */
+    private fun freshProgressKeepingUse(old: HabitProgress?, blockId: String, clock: Clock): HabitProgress {
+        val used = if (old == null || dayRolled(old, clock)) 0 else old.limitUsedMs
+        return freshProgress(blockId, clock).copy(limitUsedMs = used)
+    }
 
     // ---- housekeeping sweep --------------------------------------------------------
 
@@ -949,17 +986,19 @@ class BlockEngine {
             }
             .toMutableMap()
 
-        val progress = world.progress.filterKeys { it in blockIds }.toMutableMap()
+        val progress = world.progress.filterKeys { it in blockIds }
+            .mapValues { (id, p) -> world.block(id)?.let { p.forMode(it.mode, shared.blocks.getValue(id).mode) } ?: p } // I44
+            .toMutableMap()
         // §2.4: more of this device's own use on the server than it remembers here (its state was
         // lost or restored) comes back, so what it projects next agrees and the rounds settle.
         val runs = world.runs.toMutableMap()
         if (world.deviceId.isNotEmpty()) {
             for ((blockId, byDevice) in shared.allowance) {
-                if (shared.blocks[blockId]?.mode != BlockMode.ALLOWANCE) continue
+                val block = shared.blocks[blockId]?.takeIf { it.hasLimit } ?: continue
                 val theirs = byDevice[world.deviceId] ?: continue
                 val p = progress[blockId]
-                if (p != null && SharedState.newerUse.compare(theirs, SharedState.ownUse(world, p)) <= 0) continue
-                progress[blockId] = (p ?: freshProgress(blockId, clock)).copy(windowStart = theirs.dayStartWall, accumulatedMs = theirs.ms)
+                if (p != null && SharedState.newerUse.compare(theirs, SharedState.ownUse(world, block, p)) <= 0) continue
+                progress[blockId] = (p ?: freshProgress(blockId, clock)).withLimitUsed(block, theirs.ms).copy(windowStart = theirs.dayStartWall)
                 if (theirs.run != null) runs[blockId] = theirs.run else runs.remove(blockId)
             }
         }
@@ -973,7 +1012,7 @@ class BlockEngine {
             val before = world.block(b.id)?.state ?: BlockState.ARMED
             val items = checklist[b.id].orEmpty()
             if (before != BlockState.ARMED && state == BlockState.ARMED) { // I10, as returnToArmed
-                progress[b.id] = freshProgress(b.id, clock)
+                progress[b.id] = freshProgressKeepingUse(progress[b.id], b.id, clock)
                 checklist[b.id] = resetItems(items)
             } else if (before != BlockState.UNLOCKED && state == BlockState.UNLOCKED) { // I24, I27
                 // What the redeeming device spent stands; an item it didn't spend (its entries may
@@ -1097,8 +1136,9 @@ class BlockEngine {
     }
 
     /** I20, I30: any of the schedule's windows is on. */
-    fun scheduleActive(block: Block, clock: Clock): Boolean {
-        val s = block.schedule
+    fun scheduleActive(block: Block, clock: Clock): Boolean = active(block.schedule, clock)
+
+    private fun active(s: Schedule, clock: Clock): Boolean {
         val zdt = Instant.ofEpochMilli(clock.nowWallMs()).atZone(clock.zone())
         return windowActive(s.activeDays, s.activeWindow, zdt) ||
             s.moreWindows.any { windowActive(it.days, it.window, zdt) }

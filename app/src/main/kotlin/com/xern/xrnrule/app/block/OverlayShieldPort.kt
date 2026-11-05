@@ -36,6 +36,7 @@ import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.OverrideRejection
@@ -102,8 +103,8 @@ class OverlayShieldPort(
         val clock = store.clock
         val blockers = engine.blockersOf(world, foregroundPkg.takeIf { appBlocked }, foregroundSite.takeIf { !appBlocked }, clock)
         val blockerIds = blockers.map { it.id }.toSet()
-        // A daily limit / schedule / lockdown can't be lifted by a habit (I22), so it is the one to explain.
-        val block = blockers.firstOrNull { it.mode != BlockMode.HABIT }
+        // What a habit can't lift (I22, I44) is the one to explain.
+        val block = blockers.firstOrNull { engine.blockReason(world, it, clock).let { why -> why != null && why != BlockReason.HABIT } }
             ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
         val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
         uiState.value = OverlayUi(
@@ -111,13 +112,14 @@ class OverlayShieldPort(
             pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,
+            reason = block?.let { engine.blockReason(world, it, clock) },
             items = block?.let { world.items(it.id) }.orEmpty(),
             habitAppLabel = block?.trigger?.habitPackages
                 ?.takeIf { it.isNotEmpty() }
                 ?.joinToString(" or ") { appLabel(it) },
             freeAtWall = block?.let { freeAtWall(it, world, engine, clock) },
             freeInMs = block?.let { freeAtWall(it, world, engine, clock) }?.let { it - clock.nowWallMs() },
-            allowanceMs = block?.takeIf { it.mode == BlockMode.ALLOWANCE }?.dailyAllowanceMs,
+            allowanceMs = block?.takeIf { it.hasLimit }?.dailyAllowanceMs,
             timerMs = block?.let { world.progress[it.id]?.accumulatedMs } ?: 0,
             timerRunning = block?.let { world.progress[it.id]?.timerRunning } == true,
             redeemRejection = block?.takeIf { it.state == BlockState.EARNED }?.let { engine.redeemRejection(world, it.id, clock) },
@@ -255,6 +257,8 @@ class OverlayShieldPort(
         val pkg: String? = null,
         val isSite: Boolean,
         val block: Block?,
+        /** Why [block] is blocking: a habit shows its habits, the rest say when it lets go (I44). */
+        val reason: BlockReason? = null,
         val items: List<ChecklistItem>,
         /** Set when [Block.trigger] has `habitPackages` — the app(s) the timer actually counts in. */
         val habitAppLabel: String? = null,

@@ -123,6 +123,6 @@ private const val SYNC_ALERT_MS = 60 * 60 * 1000L
 private fun needsTicking(world: World): Boolean =
     world.sessions.isNotEmpty() ||
         world.pause != null ||
-        world.blocks.any { it.state == BlockState.EARNED || it.mode != BlockMode.HABIT } ||
+        world.blocks.any { it.state == BlockState.EARNED || it.mode != BlockMode.HABIT || it.hasLimit || it.blockedHours != null } ||
         world.progress.values.any { it.timerRunning } ||
         world.focus?.let { it.running || it.resumeAtWall != null } == true // I37

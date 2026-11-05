@@ -121,23 +121,30 @@ const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?
 
 const KIND = { HABIT: "habit", ALLOWANCE: "daily limit", SCHEDULE: "schedule", LOCKDOWN: "lockdown" };
 
+/** Where a block's limit stands (I19, I32, I44). */
+function limitStatus(b) {
+  if (b.rowBreakRemainingMs > 0) return ["blocked", `On a break: ${clock(b.rowBreakRemainingMs)} left (${min(b.rowMs)} min in a row is the most)`];
+  if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
+  const row = b.rowMs > 0 ? `${min(b.rowMs - b.rowUsedMs)} of ${min(b.rowMs)} min in a row left` : null;
+  if (b.allowanceMs <= 0) return ["open", row];
+  return b.reason === "LIMIT" ? ["blocked", `Used up: ${min(b.allowanceUsedMs)} of ${min(b.allowanceMs)} min today`] : ["open", [`${min(b.allowanceMs - b.allowanceUsedMs)} of ${min(b.allowanceMs)} min left today`, row].filter(Boolean).join(" · ")];
+}
+
 function status(b) {
   if (!b.enabled) return ["idle", "Turned off"];
   if (state.pauseRemainingMs > 0 && !b.hardcore && b.mode !== "LOCKDOWN") return ["open", `On a break for ${clock(state.pauseRemainingMs)}`];
+  if (b.reason === "HOURS" && b.mode !== "SCHEDULE") return ["blocked", `Blocked by its hours (${b.hoursText})`]; // I44
   switch (b.mode) {
     case "HABIT":
+      if (b.reason === "BREAK" || b.reason === "LIMIT") return limitStatus(b);
       if (b.openUntilWall) return ["open", `Open until ${time.format(b.openUntilWall)} (${clock(b.openUntilWall - state.nowWall)} left)`];
       if (b.useLeftMs != null) return ["open", `Open: ${clock(b.useLeftMs)} of use left today`];
+      if (!b.blocking && b.limitFirst) return limitStatus(b);
       if (!b.blocking) return ["idle", "Not blocking now" + (b.scheduleText ? ` (${b.scheduleText})` : "")];
       if (b.state === "EARNED") return ["earned", `Earned: ${min(b.unlockMs)} min ready until ${time.format(b.creditExpiresAtWall)}`];
       return ["blocked", "Blocked until you do the habit"];
-    case "ALLOWANCE": {
-      if (b.rowBreakRemainingMs > 0) return ["blocked", `On a break: ${clock(b.rowBreakRemainingMs)} left (${min(b.rowMs)} min in a row is the most)`];
-      if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
-      const row = b.rowMs > 0 ? `${min(b.rowMs - b.rowUsedMs)} of ${min(b.rowMs)} min in a row left` : null;
-      if (b.allowanceMs <= 0) return ["open", row];
-      return b.blocking ? ["blocked", `Used up: ${min(b.allowanceUsedMs)} of ${min(b.allowanceMs)} min today`] : ["open", [`${min(b.allowanceMs - b.allowanceUsedMs)} of ${min(b.allowanceMs)} min left today`, row].filter(Boolean).join(" · ")];
-    }
+    case "ALLOWANCE":
+      return limitStatus(b);
     case "SCHEDULE":
       if (b.overrideRemainingMs > 0) return ["open", `Bought time: ${clock(b.overrideRemainingMs)} left`];
       return b.blocking ? ["blocked", `Blocked by its schedule (${b.scheduleText ?? "all day"})`] : ["idle", `Not now (${b.scheduleText ?? "all day"})`];
@@ -179,20 +186,32 @@ function habitItem(x) {
     h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (x.amount / Math.max(1, x.unlock ?? 1)) * 100)}%` })));
 }
 
-function how(b) {
-  if (b.mode === "ALLOWANCE") {
-    const parts = [];
-    if (b.allowanceMs > 0) parts.push(`${min(b.allowanceMs)} min a day`);
-    if (b.rowMs > 0) parts.push(`at most ${min(b.rowMs)} min in a row, then ${min(b.rowBreakMs)} min off`);
-    return `${parts.join(", ")}${parts.length ? "; " : ""}${b.perDevice ? "each device has its own" : "phone and laptop share it"}.`;
-  }
-  if (b.mode !== "HABIT") return null;
+function limitHow(b) {
+  const parts = [];
+  if (b.allowanceMs > 0) parts.push(`${min(b.allowanceMs)} min a day`);
+  if (b.rowMs > 0) parts.push(`at most ${min(b.rowMs)} min in a row, then ${min(b.rowBreakMs)} min off`);
+  const limit = `${parts.join(", ")}${parts.length ? "; " : ""}${b.perDevice ? "each device has its own" : "phone and laptop share it"}.`;
+  if (b.mode !== "HABIT") return limit;
+  return `${limit} ${b.limitFirst ? "The limit comes first, then the habit opens it." : "The habit comes first, then the limit holds."}`;
+}
+
+function habitHow(b) {
   const unlock = b.selfPaced ? `opens for ${min(b.unlockMs)} min of use over the day` : `opens for ${min(b.unlockMs)} min`;
   const items = b.items.length;
   if (b.trigger === "TIMER") return `Wait ${min(b.requiredMs)} min on the block page, then it ${unlock}.`;
   const need = b.requiredItems === -1 ? (items === 1 ? "the item" : `all ${items} items`) : `${b.requiredItems} of ${items} items`;
   if (b.trigger === "CHECKLIST") return `Do ${need}, then it ${unlock}.`;
   return `Wait ${min(b.requiredMs)} min ${b.combineOr ? "or" : "and"} do every item, then it ${unlock}.`;
+}
+
+/** A block's rules in words; it can have several (I44). */
+function how(b) {
+  const rules = [
+    b.mode === "HABIT" && habitHow(b),
+    b.hasLimit && limitHow(b),
+    b.mode !== "SCHEDULE" && b.hoursText && `Blocked outright: ${b.hoursText}.`,
+  ].filter(Boolean);
+  return rules.length ? rules.join(" ") : null;
 }
 
 // ---- views ---------------------------------------------------------------------------------
@@ -216,8 +235,10 @@ function blockCard(b) {
   const actions = [];
   if (b.state === "EARNED" && b.mode === "HABIT") {
     const capped = b.redeemRejection === "CAP_REACHED";
-    actions.push(h("button", { class: "btn primary", disabled: capped, onclick: () => act({ type: "redeem", blockId: b.id }) }, `Open for ${min(b.unlockMs)} min`));
+    const held = b.redeemRejection === "HELD"; // I44: opening now would open nothing
+    actions.push(h("button", { class: "btn primary", disabled: capped || held, onclick: () => act({ type: "redeem", blockId: b.id }) }, `Open for ${min(b.unlockMs)} min`));
     if (capped) actions.push(h("span", { class: "note" }, `Today's ${min(state.dailyCapMs)} min of unlocks is used up.`));
+    if (held) actions.push(h("span", { class: "note" }, "It can open once it's no longer blocked."));
   }
   if (b.mode === "LOCKDOWN" && b.lockdownRemainingMs === 0 && b.enabled) {
     actions.push(h("button", { class: "btn", onclick: () => act({ type: "lockdown", blockId: b.id }) }, `Start lockdown (${min(b.lockdownMs)} min)`));
@@ -230,6 +251,8 @@ function blockCard(b) {
         h("h3", {}, b.name),
         h("div", { class: "chips" },
           h("span", { class: "chip" }, KIND[b.mode] ?? b.mode.toLowerCase()),
+          b.mode === "HABIT" && b.hasLimit && h("span", { class: "chip" }, KIND.ALLOWANCE),
+          b.mode !== "SCHEDULE" && b.hoursText && h("span", { class: "chip" }, "blocked hours"),
           b.devices === "PHONE" && h("span", { class: "chip" }, "phone only"),
           b.devices === "LAPTOP" && h("span", { class: "chip" }, "laptop only"),
           b.hardcore && h("span", { class: "chip strict" }, "hardcore"))),
@@ -274,7 +297,8 @@ const minutesOf = (text) => {
 async function openForm(b) {
   cancelGuard();
   message = "";
-  const base = { checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: false, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
+  const hours = { days: [1, 2, 3, 4, 5, 6, 7], startMin: 540, endMin: 1020, moreWindows: [] };
+  const base = { limitOn: false, habitFirst: false, hoursOn: false, hoursAllDay: false, hours, checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: false, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
   form = b
     ? {
       blockId: b.id,
@@ -287,7 +311,17 @@ async function openForm(b) {
         unlockMin: min(b.unlockMs),
         selfPaced: b.selfPaced,
         devices: b.devices,
-        dailyOn: b.allowanceMs > 0,
+        dailyOn: !b.hasLimit || b.allowanceMs > 0,
+        limitOn: b.hasLimit,
+        habitFirst: b.habitFirst,
+        hoursOn: b.hoursDays != null,
+        hoursAllDay: b.hoursDays != null && b.hoursStart == null,
+        hours: {
+          days: b.hoursDays ?? hours.days,
+          startMin: b.hoursStart ?? hours.startMin,
+          endMin: b.hoursEnd ?? hours.endMin,
+          moreWindows: b.hoursMore.map((w) => ({ ...w })),
+        },
         allowanceMin: min(b.allowanceMs) || 30,
         rowOn: b.rowMs > 0,
         rowMin: min(b.rowMs) || 15,
@@ -383,6 +417,44 @@ function buildForm(b) {
       "Parts of those sites this block doesn't touch, one per line."),
     b?.phoneApps > 0 && h("div", { class: "note" }, `Also ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}: change those on the phone.`));
 
+  // Days and times, for a schedule or a block's blocked hours.
+  const dayPick = (days, set) => h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
+    h("input", { type: "checkbox", checked: days.includes(i + 1), onchange: (e) => set(e.target.checked ? [...new Set([...days, i + 1])].sort() : days.filter((x) => x !== i + 1)) }), name)));
+  const times = (w) => h("div", { class: "row" },
+    field("From", h("input", { type: "time", value: hhmm(w.startMin), oninput: (e) => (w.startMin = minutesOf(e.target.value)) })),
+    field("Until", h("input", { type: "time", value: hhmm(w.endMin), oninput: (e) => (w.endMin = minutesOf(e.target.value)) })));
+  const timesEditor = (s, allDay = false) => [
+    dayPick(s.days, (days) => (s.days = days)),
+    !allDay && times(s),
+    s.moreWindows.map((w, i) => h("div", { class: "window" },
+      dayPick(w.days, (days) => (w.days = days)),
+      times(w),
+      h("button", { class: "btn ghost", type: "button", onclick: () => { s.moreWindows.splice(i, 1); rebuildForm(); } }, "Remove these times"))),
+    h("button", { class: "btn", type: "button", onclick: () => { s.moreWindows.push({ days: [1, 2, 3, 4, 5, 6, 7], startMin: 1080, endMin: 1320 }); rebuildForm(); } }, "More times"),
+    h("div", { class: "note" }, "A window past midnight belongs to the day it starts on."),
+  ];
+
+  // The limit and blocked hours go on a habit block too (I44).
+  const limitFields = () => [
+    check("dailyOn", "A limit a day"),
+    d.dailyOn && field("Minutes a day", number("allowanceMin"), mode === "ALLOWANCE" ? "Once used up, it's blocked until tomorrow." : null),
+    check("rowOn", "At most so long in a row"),
+    d.rowOn && h("div", { class: "row" }, field("Minutes in a row", number("rowMin")), field("Then a break of (minutes)", number("rowBreakMin"))),
+    d.rowOn && h("div", { class: "note" }, "Resting that long on your own counts as the break."),
+    field("Phone and laptop", seg("perDevice", [[false, "Share one limit"], [true, "Each has its own"]])),
+  ];
+  const limitSet = mode === "ALLOWANCE" ? h("fieldset", {}, h("legend", {}, "Daily limit"), limitFields())
+    : mode === "HABIT" && h("fieldset", {}, h("legend", {}, "Daily limit"),
+      check("limitOn", "Limit it too"),
+      d.limitOn && limitFields(),
+      d.limitOn && d.dailyOn && field("What comes first", seg("habitFirst", [[false, "Limit first"], [true, "Habit first"]]),
+        d.habitFirst ? "Blocked until the habit is done. The limit still holds after that." : "Open for the limit's minutes each day. After that, the habit opens it again."));
+  const hoursSet = (mode === "HABIT" || mode === "ALLOWANCE") && h("fieldset", {}, h("legend", {}, "Blocked hours"),
+    check("hoursOn", "Block it outright at set times"),
+    d.hoursOn && h("div", { class: "note" }, "Blocked in these hours, whatever minutes are left and even with a habit done."),
+    d.hoursOn && check("hoursAllDay", "All day on these days"),
+    d.hoursOn && timesEditor(d.hours, d.hoursAllDay));
+
   // How it unlocks
   let rules;
   if (mode === "HABIT") {
@@ -424,30 +496,9 @@ function buildForm(b) {
       field("Counted as", seg("selfPaced", [[false, "Timer"], [true, "Self paced"]]),
         d.selfPaced ? "Only time spent in its apps and sites counts, on any device, until it's used up or the day ends."
           : "A timer starts, and it blocks again at the end of it."));
-  } else if (mode === "ALLOWANCE") {
-    rules = h("fieldset", {}, h("legend", {}, "Daily limit"),
-      check("dailyOn", "A limit a day"),
-      d.dailyOn && field("Minutes a day", number("allowanceMin"), "Once used up, it's blocked until tomorrow."),
-      check("rowOn", "At most so long in a row"),
-      d.rowOn && h("div", { class: "row" }, field("Minutes in a row", number("rowMin")), field("Then a break of (minutes)", number("rowBreakMin"))),
-      d.rowOn && h("div", { class: "note" }, "Resting that long on your own counts as the break."),
-      field("Phone and laptop", seg("perDevice", [[false, "Share one limit"], [true, "Each has its own"]])));
   } else if (mode === "SCHEDULE") {
-    const dayPick = (days, set) => h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
-      h("input", { type: "checkbox", checked: days.includes(i + 1), onchange: (e) => set(e.target.checked ? [...new Set([...days, i + 1])].sort() : days.filter((x) => x !== i + 1)) }), name)));
-    const times = (w) => h("div", { class: "row" },
-      field("From", h("input", { type: "time", value: hhmm(w.startMin), oninput: (e) => (w.startMin = minutesOf(e.target.value)) })),
-      field("Until", h("input", { type: "time", value: hhmm(w.endMin), oninput: (e) => (w.endMin = minutesOf(e.target.value)) })));
-    rules = h("fieldset", {}, h("legend", {}, "When it blocks"),
-      dayPick(d.days, (days) => (d.days = days)),
-      times(d),
-      d.moreWindows.map((w, i) => h("div", { class: "window" },
-        dayPick(w.days, (days) => (w.days = days)),
-        times(w),
-        h("button", { class: "btn ghost", type: "button", onclick: () => { d.moreWindows.splice(i, 1); rebuildForm(); } }, "Remove these times"))),
-      h("button", { class: "btn", type: "button", onclick: () => { d.moreWindows.push({ days: [1, 2, 3, 4, 5, 6, 7], startMin: 1080, endMin: 1320 }); rebuildForm(); } }, "+ More times"),
-      h("div", { class: "note" }, "A window past midnight belongs to the day it starts on."));
-  } else {
+    rules = h("fieldset", {}, h("legend", {}, "When it blocks"), timesEditor(d));
+  } else if (mode === "LOCKDOWN") {
     rules = h("fieldset", {}, h("legend", {}, "Lockdown"), field("Minutes", number("lockdownMin"), isNew ? "It starts as soon as you create it." : "How long each lockdown lasts."));
   }
 
@@ -464,6 +515,8 @@ function buildForm(b) {
       LAPTOP: "This laptop only: the phone leaves its websites alone.",
     }[d.devices]),
     rules,
+    limitSet,
+    hoursSet,
     errorBox,
     h("div", { class: "guard" }),
     h("div", { class: "actions" },
@@ -513,6 +566,14 @@ async function submitForm() {
     startMin: d.startMin,
     endMin: d.endMin,
     moreWindows: d.moreWindows,
+    limitOn: d.limitOn,
+    habitFirst: d.habitFirst,
+    hoursOn: d.hoursOn,
+    hoursAllDay: d.hoursAllDay,
+    hoursDays: d.hours.days,
+    hoursStartMin: d.hours.startMin,
+    hoursEndMin: d.hours.endMin,
+    hoursMore: d.hours.moreWindows,
   });
   if (result.error) showFormError(result.error);
   else if (result.token) startGuard(result.token, result.waitMs, "Saving (it makes the block easier to get past)");

@@ -70,7 +70,7 @@ data class ShieldPlan(
     }
 }
 
-enum class RejectReason { NOT_EARNED, CAP_REACHED }
+enum class RejectReason { NOT_EARNED, CAP_REACHED, HELD }
 
 /** Why minutes can't be bought past a block (I34). */
 enum class OverrideRejection {
@@ -154,3 +154,14 @@ fun applyOutcome(
         }
     }
 }
+
+/**
+ * This world with what moves every tick taken out: two that differ only in that are the same to a
+ * throttled save, which writes them at most every 30 s (I7 still holds: everything else goes at once).
+ */
+fun World.withoutBookkeeping(): World = copy(
+    progress = progress.mapValues { (_, p) -> p.copy(accumulatedMs = 0, lastUpdated = 0, limitUsedMs = 0) },
+    sessions = sessions.mapValues { (_, s) -> s.copy(usedMs = emptyMap(), markMonotonic = null) }, // I41's use
+    foregroundPkg = null,
+    foregroundSite = null,
+)

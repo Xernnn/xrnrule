@@ -9,19 +9,12 @@ object BlockEdits {
 
     /** Whether replacing [old] with [new] loosens the block in any way. */
     fun loosens(old: Block, new: Block): Boolean {
-        val oldTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
         return !new.targetPackages.containsAll(old.targetPackages) ||
             !new.targetSites.containsAll(old.targetSites) ||
             !new.targetDesktopApps.containsAll(old.targetDesktopApps) ||
             (old.enabled && !new.enabled) ||
             (old.enforcementTier == EnforcementTier.HARDCORE && new.enforcementTier == EnforcementTier.SOFT) ||
-            new.mode != old.mode ||
-            new.trigger.type != old.trigger.type ||
-            (oldTimer && new.trigger.requiredAmount < old.trigger.requiredAmount) ||
-            (old.trigger.combineMode == CombineMode.AND && new.trigger.combineMode == CombineMode.OR) ||
-            new.trigger.habitPackages != old.trigger.habitPackages ||
-            new.reward.unlockDurationMs > old.reward.unlockDurationMs ||
-            new.reward.creditTtlMs > old.reward.creditTtlMs ||
+            rulesLoosen(old, new) ||
             allowanceLoosens(old, new) ||
             !old.exceptSites.containsAll(new.exceptSites) || // I31: a new exception opens a host
             (!old.perDevice && new.perDevice) || // I33: each device gets the whole limit
@@ -29,7 +22,41 @@ object BlockEdits {
             !new.devices.covers(old.devices) || // I42: a device it no longer holds on
             new.lockdownMs < old.lockdownMs ||
             (new.lock?.untilWall ?: 0) < (old.lock?.untilWall ?: 0) || // I39: a shorter lock
-            schedulesLoosen(old.schedule, new.schedule)
+            hoursLoosen(old, new) ||
+            // A SCHEDULE block's schedule is its hours, just compared; elsewhere it's when the rules hold.
+            (old.mode != BlockMode.SCHEDULE && new.mode != BlockMode.SCHEDULE && schedulesLoosen(old.schedule, new.schedule))
+    }
+
+    /**
+     * I44: going from one mix of rules to another. Rules may be added, but a habit is a way past a
+     * limit that comes first, a limit put first is free minutes, and a habit block's own unlock
+     * settings only count while it stays one.
+     */
+    private fun rulesLoosen(old: Block, new: Block): Boolean {
+        val oldHabit = old.mode == BlockMode.HABIT
+        val newHabit = new.mode == BlockMode.HABIT
+        if (old.mode == BlockMode.LOCKDOWN || new.mode == BlockMode.LOCKDOWN) return new.mode != old.mode
+        if (oldHabit && !newHabit) return true
+        if (!oldHabit && newHabit) return old.hasLimit && new.limitComesFirst
+        if (!oldHabit) return false
+        val oldTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
+        return new.trigger.type != old.trigger.type ||
+            (oldTimer && new.trigger.requiredAmount < old.trigger.requiredAmount) ||
+            (old.trigger.combineMode == CombineMode.AND && new.trigger.combineMode == CombineMode.OR) ||
+            new.trigger.habitPackages != old.trigger.habitPackages ||
+            new.reward.unlockDurationMs > old.reward.unlockDurationMs ||
+            new.reward.creditTtlMs > old.reward.creditTtlMs ||
+            (new.limitComesFirst && !old.limitComesFirst) // free minutes it didn't have
+    }
+
+    /** I44: the hours a block blocks outright: its [Block.blockedHours], or a SCHEDULE block's schedule. */
+    private fun hours(block: Block): Schedule? =
+        if (block.mode == BlockMode.SCHEDULE) block.schedule else block.blockedHours
+
+    private fun hoursLoosen(old: Block, new: Block): Boolean {
+        val before = hours(old) ?: return false
+        val after = hours(new) ?: return true
+        return schedulesLoosen(before, after)
     }
 
     /** I39: whether [block]'s settings are locked at [nowWall]. */

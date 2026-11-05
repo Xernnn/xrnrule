@@ -14,6 +14,7 @@ import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.HabitEntry
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.Settings
+import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
@@ -435,6 +436,17 @@ class LocalServer(
         val scheduleStart: Int?,
         val scheduleEnd: Int?,
         val moreWindows: List<UiWindow>,
+        /** I44: what's keeping it blocked (a [BlockReason]'s name), null when it isn't blocking. */
+        val reason: String?,
+        val hasLimit: Boolean,
+        val limitFirst: Boolean,
+        val habitFirst: Boolean,
+        /** Hours blocked outright (I44); null days when it has none, a null start when they are whole days. */
+        val hoursText: String?,
+        val hoursDays: List<Int>?,
+        val hoursStart: Int?,
+        val hoursEnd: Int?,
+        val hoursMore: List<UiWindow>,
     )
 
     /** The block page's app or site: what blocks it, and whether minutes can be bought past it (I34). */
@@ -528,16 +540,7 @@ class LocalServer(
         val progress = world.progress[b.id]
         val w = b.schedule.activeWindow
         val days = b.schedule.activeDays
-        fun windowText(days: Set<Int>, start: Int, end: Int) = "%02d:%02d–%02d:%02d%s".format(
-            start / 60, start % 60, end / 60, end % 60,
-            if (days.size == 7) "" else ", ${dayNames(days)}",
-        )
-        val scheduleText = when {
-            w == null && days.size == 7 -> null
-            w == null -> "On ${dayNames(days)}"
-            else -> (listOf(windowText(days, w.startMinuteOfDay, w.endMinuteOfDay)) +
-                b.schedule.moreWindows.map { windowText(it.days, it.window.startMinuteOfDay, it.window.endMinuteOfDay) }).joinToString("; ")
-        }
+        val hours = b.blockedHours
         return UiBlock(
             id = b.id,
             name = b.name,
@@ -565,7 +568,7 @@ class LocalServer(
             lockdownRemainingMs = engine.lockdownRemainingMs(world, b.id, clock),
             lockdownMs = b.lockdownMs,
             allowanceMs = b.dailyAllowanceMs,
-            allowanceUsedMs = if (b.mode == BlockMode.ALLOWANCE) engine.allowanceUsedMs(world, b, clock) else 0,
+            allowanceUsedMs = if (b.hasLimit) engine.allowanceUsedMs(world, b, clock) else 0,
             rowMs = b.sessionMs,
             rowBreakMs = b.sessionBreakMs,
             rowUsedMs = engine.rowUsedMs(world, b, clock),
@@ -605,12 +608,38 @@ class LocalServer(
                 )
             },
             redeemRejection = if (b.state == BlockState.EARNED) engine.redeemRejection(world, b.id, clock)?.name else null,
-            scheduleText = scheduleText,
+            scheduleText = scheduleText(b.schedule),
             scheduleDays = days.sorted(),
             scheduleStart = w?.startMinuteOfDay,
             scheduleEnd = w?.endMinuteOfDay,
             moreWindows = b.schedule.moreWindows.map { UiWindow(it.days.sorted(), it.window.startMinuteOfDay, it.window.endMinuteOfDay) },
+            reason = engine.blockReason(world, b, clock)?.name,
+            hasLimit = b.hasLimit,
+            limitFirst = b.limitComesFirst,
+            habitFirst = b.habitFirst,
+            hoursText = hours?.let { scheduleText(it) ?: "all day" },
+            hoursDays = hours?.activeDays?.sorted(),
+            hoursStart = hours?.activeWindow?.startMinuteOfDay,
+            hoursEnd = hours?.activeWindow?.endMinuteOfDay,
+            hoursMore = hours?.moreWindows.orEmpty().map { UiWindow(it.days.sorted(), it.window.startMinuteOfDay, it.window.endMinuteOfDay) },
         )
+    }
+
+    /** A schedule in words; null when it's simply always. */
+    private fun scheduleText(s: Schedule): String? {
+        fun windowText(days: Set<Int>, start: Int, end: Int) = "%02d:%02d–%02d:%02d%s".format(
+            start / 60, start % 60, end / 60, end % 60,
+            if (days.size == 7) "" else ", ${dayNames(days)}",
+        )
+        val w = s.activeWindow
+        val more = s.moreWindows.map { windowText(it.days, it.window.startMinuteOfDay, it.window.endMinuteOfDay) }
+        val first = when {
+            w != null -> windowText(s.activeDays, w.startMinuteOfDay, w.endMinuteOfDay)
+            s.activeDays.size < 7 -> "On ${dayNames(s.activeDays)}"
+            more.isNotEmpty() -> "All day"
+            else -> null
+        }
+        return (listOfNotNull(first) + more).joinToString("; ").ifEmpty { null }
     }
 
     private fun dayNames(days: Set<Int>) = days.sorted().joinToString(" ") { listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[it - 1] }

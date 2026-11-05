@@ -23,10 +23,14 @@ enum class EnforcementTier { SOFT, HARDCORE }
 enum class CombineMode { AND, OR }
 
 /**
- * How a block decides it is blocking (contract §2.2). Only [HABIT] runs the ARMED → EARNED →
+ * What a block is, from the rules it has (contract §2.2, I44): a habit makes it [HABIT], else a
+ * limit [ALLOWANCE], else its hours alone [SCHEDULE]. Only [HABIT] runs the ARMED → EARNED →
  * UNLOCKED machine; the others have no unlock path and stay ARMED.
  */
 enum class BlockMode { HABIT, ALLOWANCE, SCHEDULE, LOCKDOWN }
+
+/** Why a block is blocking right now, the firmest first (I44). */
+enum class BlockReason { LOCKDOWN, HOURS, BREAK, LIMIT, HABIT }
 
 /** What a device running the engine is (I42). */
 enum class DeviceKind { PHONE, LAPTOP }
@@ -303,6 +307,16 @@ data class Block(
     val selfPaced: Boolean = false,
     /** I42: the phone, the laptop, or both; elsewhere the block blocks nothing and counts no time. */
     val devices: Devices = Devices.BOTH,
+    /**
+     * I44: hours this block blocks outright, on top of its other rules and whatever their state;
+     * null = none. A SCHEDULE block has none: its [schedule] is its hours.
+     */
+    val blockedHours: Schedule? = null,
+    /**
+     * I44: a HABIT block with a daily limit. False: the free minutes come first, and once they're
+     * used up the habit opens it again. True: blocked until the habit is done, and the limit holds on top.
+     */
+    val habitFirst: Boolean = false,
     /** Wall-clock ms of the last edit; the later edit wins when two devices change a block at once (§2.4). */
     val editedAtWall: Long = 0,
     /** I39: nothing that loosens this block goes through before [BlockLock.untilWall]; never set back to null. */
@@ -315,8 +329,16 @@ data class Block(
     fun coversSite(host: String): Boolean =
         targetSites.any { Sites.matches(host, it) } && exceptSites.none { Sites.matches(host, it) }
 
-    /** Whether the "in a row" rule applies (I32). */
-    val hasRowRule: Boolean get() = mode == BlockMode.ALLOWANCE && sessionMs > 0 && sessionBreakMs > 0
+    /** Whether the "in a row" rule applies (I32, I44). */
+    val hasRowRule: Boolean
+        get() = (mode == BlockMode.ALLOWANCE || mode == BlockMode.HABIT) && sessionMs > 0 && sessionBreakMs > 0
+
+    /** Whether it has a limit: an ALLOWANCE block always, a HABIT block if it was given one (I44). */
+    val hasLimit: Boolean
+        get() = mode == BlockMode.ALLOWANCE || (mode == BlockMode.HABIT && (dailyAllowanceMs > 0 || hasRowRule))
+
+    /** I44: a HABIT block that only asks for its habit once the day's free minutes are gone. */
+    val limitComesFirst: Boolean get() = mode == BlockMode.HABIT && dailyAllowanceMs > 0 && !habitFirst
 }
 
 /**
@@ -397,7 +419,23 @@ data class HabitProgress(
     /** Monotonic ms marker of the last timer accrual (I4). */
     val lastUpdated: Long,
     val timerRunning: Boolean = false,
-)
+    /** I44: a HABIT block's use of its limit; its [accumulatedMs] is the habit's timer. */
+    val limitUsedMs: Long = 0,
+) {
+    /** I19, I44: this window's use of [block]'s limit. */
+    fun limitUsed(block: Block): Long = if (block.mode == BlockMode.HABIT) limitUsedMs else accumulatedMs
+
+    fun withLimitUsed(block: Block, ms: Long): HabitProgress =
+        if (block.mode == BlockMode.HABIT) copy(limitUsedMs = ms) else copy(accumulatedMs = ms)
+
+    /** This progress once its block goes from [old] to [new]: only a HABIT block has a timer (I44). */
+    fun forMode(old: BlockMode, new: BlockMode): HabitProgress = when {
+        old == new -> this
+        new == BlockMode.HABIT -> copy(accumulatedMs = 0, limitUsedMs = accumulatedMs)
+        old == BlockMode.HABIT -> copy(accumulatedMs = limitUsedMs, limitUsedMs = 0, timerRunning = false)
+        else -> this
+    }
+}
 
 /**
  * TTL is enforced on the wall clock ([expiresAtWall]) so it survives reboot; the monotonic

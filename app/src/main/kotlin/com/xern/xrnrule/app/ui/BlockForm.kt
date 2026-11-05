@@ -114,6 +114,7 @@ import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.FormKind
 import com.xern.xrnrule.domain.HabitKind
 import com.xern.xrnrule.domain.LinkDraft
+import com.xern.xrnrule.domain.DayWindow
 import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TagDraft
@@ -190,6 +191,10 @@ fun NewBlockScreen(
                     Question("When is this block active?")
                     Gap(22)
                     WhenSection(form)
+                    if (form.draft().hasRules) {
+                        Gap(14)
+                        HoursCard(form)
+                    }
                     if (form.mode == BlockMode.HABIT) {
                         Gap(18)
                         BlockAgainCard(form, cap)
@@ -345,30 +350,24 @@ fun EditBlockScreen(
             }
             Gap(14)
             DevicesCard(form)
-            when (existing.mode) {
-                BlockMode.HABIT -> FormSection(Icons.Outlined.VpnKey, "Select what unlocks your apps", hint = "(Tap as many as you like)") {
-                    UnlockSections(form, apps, store, headers = false)
-                }
-                BlockMode.ALLOWANCE -> FormSection(Icons.Outlined.HourglassBottom, "How long can it be open?") {
-                    UnlockSections(form, apps, store, headers = false)
-                }
-                else -> {
-                    Gap(12)
-                    Note(
-                        if (existing.mode == BlockMode.LOCKDOWN) "Nothing unlocks a lockdown: it blocks for its length, then stops until you start it again."
-                        else "Nothing unlocks this block: it just blocks while it's on.",
-                    )
-                }
-            }
-            if (existing.mode == BlockMode.HABIT) {
-                Gap(14)
-                BlockAgainCard(form, cap)
-            }
             if (existing.mode == BlockMode.LOCKDOWN) {
+                Gap(12)
+                Note("Nothing unlocks a lockdown: it blocks for its length, then stops until you start it again.")
                 FormSection(Icons.Outlined.HourglassTop, "How long") { WhenSection(form) }
             } else {
+                FormSection(Icons.Outlined.VpnKey, "Select what unlocks your apps", hint = "(Tap as many as you like)") {
+                    UnlockSections(form, apps, store, headers = false)
+                }
+                if (form.mode == BlockMode.HABIT) {
+                    Gap(14)
+                    BlockAgainCard(form, cap)
+                }
                 Gap(14)
                 ScheduleCard(form)
+                if (form.draft().hasRules) {
+                    Gap(14)
+                    HoursCard(form)
+                }
             }
 
             Gap(24)
@@ -537,7 +536,7 @@ private fun pickedSummary(apps: Int, sites: Int): String = listOfNotNull(
 @Composable
 private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store: WorldStore, headers: Boolean = true) {
     val kinds = LocalKinds.current
-    val mode = form.existing?.mode
+    val new = form.existing == null
     val labels = remember(apps) { apps.associate { it.packageName to it.label } }
     var pickingAppTime by remember { mutableStateOf(false) }
     var pickingLoop by remember { mutableStateOf(false) }
@@ -545,7 +544,7 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
     var pickingHabits by remember { mutableStateOf<Boolean?>(null) }
     var makingHabit by remember { mutableStateOf<Boolean?>(null) }
 
-    if (mode == null || mode == BlockMode.HABIT) {
+    run {
         if (headers) SectionLabel("From your phone", top = 14.dp)
         KindCard(
             icon = Icons.Outlined.Timer,
@@ -659,24 +658,24 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
         }
     }
 
-    if (mode == null || mode == BlockMode.ALLOWANCE) {
-        if (mode == null) SectionLabel("Or just limit it", top = 6.dp)
+    run {
+        if (headers) SectionLabel("Limit it", top = 6.dp)
         KindCard(
             icon = Icons.Outlined.HourglassBottom,
             title = "Daily limit",
             kind = kinds.limit,
-            selected = form.limitOn || mode == BlockMode.ALLOWANCE,
+            selected = form.limitOn,
             summary = listOfNotNull(
                 if (form.dailyOn) "${formatDuration(form.dailyMinutes * 60_000)} a day" else null,
                 if (form.rowOn) "${formatDuration(form.rowMinutes * 60_000)} in a row" else null,
             ).joinToString(" · "),
-            onToggle = if (mode == null) ({ form.setKind(FormKind.LIMIT, it) }) else null,
+            onToggle = { form.setKind(FormKind.LIMIT, it) },
         ) {
             LimitEditor(form, kinds.limit)
         }
     }
 
-    if (mode == null && !form.habitChosen && !form.limitOn) {
+    if (new && !form.habitChosen && !form.limitOn) {
         Gap(12)
         Note("You could also choose nothing, which just keeps it blocked.")
     }
@@ -695,6 +694,21 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
+    }
+
+    if (form.draft().orderMatters) {
+        Gap(16)
+        Text("What comes first", style = MaterialTheme.typography.bodyLarge)
+        Gap(8)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OptionButton(Icons.Outlined.HourglassBottom, "Limit first", !form.habitFirst, Modifier.weight(1f), centred = true) { form.habitFirst = false }
+            OptionButton(Icons.Outlined.TaskAlt, "Habit first", form.habitFirst, Modifier.weight(1f), centred = true) { form.habitFirst = true }
+        }
+        Gap(4)
+        Note(
+            if (form.habitFirst) "Blocked until the habit is done. The limit still holds after that."
+            else "Open for the limit's minutes each day. After that, the habit opens it again.",
+        )
     }
 
     if (pickingAppTime) {
@@ -848,7 +862,7 @@ private fun WhenSection(form: BlockFormState) {
     when (form.whenMode) {
         WhenMode.ALWAYS -> Note(
             when (mode) {
-                BlockMode.HABIT -> "Blocks all day, every day, until you unlock it."
+                BlockMode.HABIT -> if (form.draft().toBlock("", "").limitComesFirst) "The limit counts all day, every day." else "Blocks all day, every day, until you unlock it."
                 BlockMode.ALLOWANCE -> "The limit counts all day, every day."
                 else -> "Blocks all the time. Turn it off or delete it to stop."
             },
@@ -1141,23 +1155,77 @@ private fun ScheduleCard(form: BlockFormState) {
 }
 
 /**
- * The days a schedule blocks on, "Specify time" or its hours, and more times with their own
- * days. [onChange] after a change to which days or whether there are times.
+ * I44: hours blocked outright on a block with a habit or a limit, whatever the rest of it says.
+ * Off: a grey row. On: the same editor as a schedule.
  */
 @Composable
-private fun ScheduleEditor(form: BlockFormState, onChange: () -> Unit = {}) {
-    DayCircles(form.scheduleDays) { form.scheduleDays = it; onChange() }
-    Gap(12)
-    if (form.timeOn) {
-        TimeRange(form.startMinute, form.endMinute, onStart = { form.startMinute = it }, onEnd = { form.endMinute = it })
-        TextButton(onClick = { form.timeOn = false; onChange() }) { Text("All day instead") }
-    } else {
-        GreyButton("Specify time", Icons.Filled.AddCircle) { form.timeOn = true; onChange() }
+private fun HoursCard(form: BlockFormState) {
+    KindCard(
+        icon = Icons.Outlined.CalendarMonth,
+        title = "Blocked hours",
+        kind = LocalKinds.current.strict,
+        selected = form.hoursOn,
+        summary = describeSchedule(Schedule(form.hoursDays, if (form.hoursTimeOn) TimeWindow(form.hoursStart, form.hoursEnd) else null, form.hoursMore)),
+        onToggle = { form.hoursOn = it },
+    ) {
+        TimesEditor(
+            days = form.hoursDays,
+            onDays = { form.hoursDays = it },
+            timeOn = form.hoursTimeOn,
+            onTimeOn = { form.hoursTimeOn = it },
+            start = form.hoursStart,
+            end = form.hoursEnd,
+            onStart = { form.hoursStart = it },
+            onEnd = { form.hoursEnd = it },
+            more = form.hoursMore,
+            onMore = { form.hoursMore = it },
+        )
+        Gap(4)
+        Note("Blocked in these hours, whatever minutes are left and even with a habit done.")
     }
-    form.moreWindows.forEachIndexed { i, w ->
-        fun update(new: com.xern.xrnrule.domain.DayWindow) {
-            form.moreWindows = form.moreWindows.toMutableList().also { it[i] = new }
-        }
+}
+
+/** A schedule's days and times. [onChange] after a change to which days or whether there are times. */
+@Composable
+private fun ScheduleEditor(form: BlockFormState, onChange: () -> Unit = {}) {
+    TimesEditor(
+        days = form.scheduleDays,
+        onDays = { form.scheduleDays = it; onChange() },
+        timeOn = form.timeOn,
+        onTimeOn = { form.timeOn = it; onChange() },
+        start = form.startMinute,
+        end = form.endMinute,
+        onStart = { form.startMinute = it },
+        onEnd = { form.endMinute = it },
+        more = form.moreWindows,
+        onMore = { form.moreWindows = it; onChange() },
+    )
+}
+
+/** The days, "Specify time" or its hours, and more times with their own days. */
+@Composable
+private fun TimesEditor(
+    days: Set<Int>,
+    onDays: (Set<Int>) -> Unit,
+    timeOn: Boolean,
+    onTimeOn: (Boolean) -> Unit,
+    start: Int,
+    end: Int,
+    onStart: (Int) -> Unit,
+    onEnd: (Int) -> Unit,
+    more: List<DayWindow>,
+    onMore: (List<DayWindow>) -> Unit,
+) {
+    DayCircles(days, onDays)
+    Gap(12)
+    if (timeOn) {
+        TimeRange(start, end, onStart = onStart, onEnd = onEnd)
+        TextButton(onClick = { onTimeOn(false) }) { Text("All day instead") }
+    } else {
+        GreyButton("Specify time", Icons.Filled.AddCircle) { onTimeOn(true) }
+    }
+    more.forEachIndexed { i, w ->
+        fun update(new: DayWindow) = onMore(more.toMutableList().also { it[i] = new })
         Gap(12)
         Hairline()
         Gap(12)
@@ -1169,13 +1237,13 @@ private fun ScheduleEditor(form: BlockFormState, onChange: () -> Unit = {}) {
             onStart = { update(w.copy(window = w.window.copy(startMinuteOfDay = it))) },
             onEnd = { update(w.copy(window = w.window.copy(endMinuteOfDay = it))) },
         )
-        TextButton(onClick = { form.moreWindows = form.moreWindows.toMutableList().also { it.removeAt(i) }; onChange() }) {
+        TextButton(onClick = { onMore(more.toMutableList().also { it.removeAt(i) }) }) {
             Text("Remove these times")
         }
     }
-    if (form.timeOn) {
+    if (timeOn) {
         Gap(8)
-        DashedButton("More times", null) { form.moreWindows = form.moreWindows + newDayWindow(); onChange() }
+        DashedButton("More times", null) { onMore(more + newDayWindow()) }
     }
 }
 

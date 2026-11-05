@@ -32,8 +32,8 @@ data class LinkDraft(
  * Everything the phone's new-block wizard and edit page let you set, in the form's words ("app
  * time", "manual timer", "nothing, just block it"), and the [Block] and checklist it makes. Plain
  * data, so what decides whether a save loosens a block (§2.3) is tested here rather than only by
- * hand. A block's kind can't change once made (an edit keeps HABIT a HABIT); within a HABIT block
- * anything can.
+ * hand. A block may mix a habit, a limit and blocked hours, and its kind follows what it has (I44);
+ * only a lockdown stays one.
  */
 data class BlockDraft(
     /** The block being edited, null for a new one. */
@@ -76,6 +76,16 @@ data class BlockDraft(
     val rowMinutes: Long = 15,
     val rowBreakMinutes: Long = 15,
     val perDevice: Boolean = false,
+    /** I44: with a habit and a daily limit, the habit comes first and the limit holds on top. */
+    val habitFirst: Boolean = false,
+
+    // ---- blocked hours, on a block with a habit or a limit (I44) ----
+    val hoursOn: Boolean = false,
+    val hoursDays: Set<Int> = (1..7).toSet(),
+    val hoursTimeOn: Boolean = true,
+    val hoursStart: Int = 9 * 60,
+    val hoursEnd: Int = 17 * 60,
+    val hoursMore: List<DayWindow> = emptyList(),
 
     // ---- when ----
     val whenMode: WhenMode = WhenMode.ALWAYS,
@@ -104,19 +114,28 @@ data class BlockDraft(
         get() = (manualOn && (tasks.any { it.text.isNotBlank() } || doHabits.isNotEmpty())) ||
             (focusOn && timerHabits.isNotEmpty()) || (loopOn && links.isNotEmpty()) || (tagOn && tags.isNotEmpty())
 
-    /** The block's kind, from what's picked: a limit, habits, or nothing (a schedule or a lockdown). */
+    /** The block's kind, from what's picked: a habit, a limit, or neither (a schedule or a lockdown). */
     val mode: BlockMode
-        get() = existing?.mode ?: when {
-            limitOn -> BlockMode.ALLOWANCE
+        get() = when {
+            existing?.mode == BlockMode.LOCKDOWN -> BlockMode.LOCKDOWN
             habitChosen -> BlockMode.HABIT
+            limitOn -> BlockMode.ALLOWANCE
             whenMode == WhenMode.FOR_A_WHILE -> BlockMode.LOCKDOWN
             else -> BlockMode.SCHEDULE
         }
 
+    /** I44: whether it has the rules that blocked hours go on top of. */
+    val hasRules: Boolean get() = habitChosen || limitOn
+
+    /** I44: whether "limit first or habit first" means anything here. */
+    val orderMatters: Boolean get() = habitChosen && limitOn && dailyOn
+
+    private val hasHours: Boolean get() = hoursOn && (mode == BlockMode.HABIT || mode == BlockMode.ALLOWANCE)
+
     /**
-     * One way to unlock turned on or off. Picking a habit drops the limit and the other way round;
-     * a block has one timer, so app time and the wait timer exclude each other; with something to
-     * unlock it or a limit, "for a while" (a lockdown) goes back to always.
+     * One rule turned on or off; they all go together (I44). A block has one timer, so app time and
+     * the wait timer exclude each other; with something to unlock it or a limit, "for a while" (a
+     * lockdown) goes back to always.
      */
     fun withKind(kind: FormKind, on: Boolean): BlockDraft {
         var d = when (kind) {
@@ -128,10 +147,37 @@ data class BlockDraft(
             FormKind.LIMIT -> copy(limitOn = on)
             FormKind.TAG -> copy(tagOn = on)
         }
-        if (on && kind == FormKind.LIMIT) d = d.copy(appTimeOn = false, timerOn = false, manualOn = false, focusOn = false, loopOn = false, tagOn = false)
-        if (on && kind != FormKind.LIMIT) d = d.copy(limitOn = false)
-        if ((d.habitChosen || d.limitOn) && d.whenMode == WhenMode.FOR_A_WHILE) d = d.copy(whenMode = WhenMode.ALWAYS)
-        return d
+        if (d.hasRules && d.whenMode == WhenMode.FOR_A_WHILE) d = d.copy(whenMode = WhenMode.ALWAYS)
+        return d.hoursFollowing(this)
+    }
+
+    /**
+     * Hours keep meaning "blocked" as rules come and go: alone they are the block's schedule, beside
+     * a habit or a limit they are its blocked hours, where the schedule says when those rules hold.
+     */
+    private fun hoursFollowing(was: BlockDraft): BlockDraft = when {
+        !was.hasRules && hasRules && was.whenMode == WhenMode.SCHEDULE -> copy(
+            whenMode = WhenMode.ALWAYS,
+            hoursOn = true,
+            hoursDays = scheduleDays,
+            hoursTimeOn = timeOn,
+            hoursStart = startMinute,
+            hoursEnd = endMinute,
+            hoursMore = moreWindows,
+            scheduleDays = (1..7).toSet(),
+            timeOn = false,
+            moreWindows = emptyList(),
+        )
+        was.hasRules && !hasRules && hoursOn -> copy(
+            whenMode = WhenMode.SCHEDULE,
+            hoursOn = false,
+            scheduleDays = hoursDays,
+            timeOn = hoursTimeOn,
+            startMinute = hoursStart,
+            endMinute = hoursEnd,
+            moreWindows = hoursMore,
+        )
+        else -> this
     }
 
     /** One habit added to the block, unless it's there. */
@@ -180,7 +226,7 @@ data class BlockDraft(
         loopOn && links.isEmpty() -> "Pick at least one habit"
         tagOn && tags.isEmpty() -> "Scan a tag"
         limitOn && !dailyOn && !rowOn -> "Set minutes a day, minutes in a row, or both"
-        existing?.mode == BlockMode.HABIT && !habitChosen -> "Pick at least one way to unlock it"
+        existing?.mode == BlockMode.HABIT && !hasRules -> "Pick at least one way to unlock it"
         else -> null
     }
 
@@ -191,6 +237,11 @@ data class BlockDraft(
         whenMode == WhenMode.SCHEDULE && moreWindows.any { it.days.isEmpty() } -> "Pick at least one day for each time"
         whenMode == WhenMode.SCHEDULE && moreWindows.any { it.window.startMinuteOfDay == it.window.endMinuteOfDay } ->
             "Start and end can't be the same time"
+        hasHours && hoursDays.isEmpty() -> "Pick at least one day for the blocked hours"
+        hasHours && hoursTimeOn && hoursStart == hoursEnd -> "Blocked hours can't start and end at the same time"
+        hasHours && hoursMore.any { it.days.isEmpty() } -> "Pick at least one day for each of the blocked hours"
+        hasHours && hoursMore.any { it.window.startMinuteOfDay == it.window.endMinuteOfDay } ->
+            "Blocked hours can't start and end at the same time"
         mode == BlockMode.LOCKDOWN && lockdownMinutes <= 0 -> "Set how long to block"
         mode == BlockMode.HABIT && unlockMinutes <= 0 -> "Set how long an unlock lasts"
         mode == BlockMode.HABIT && unlockMinutes > capMinutes ->
@@ -223,9 +274,13 @@ data class BlockDraft(
         }
     }
 
+    private fun builtHours(): Schedule? =
+        if (hasHours) Schedule(hoursDays, if (hoursTimeOn) TimeWindow(hoursStart, hoursEnd) else null, hoursMore) else null
+
     /** The block this form describes: a new one with [id], or [existing] with its settings replaced. */
     fun toBlock(id: String, autoName: String): Block {
         val mode = mode
+        val limited = limitOn && (mode == BlockMode.ALLOWANCE || mode == BlockMode.HABIT)
         val base = existing ?: Block(id = id, name = "", trigger = builtTrigger(), state = BlockState.ARMED)
         return base.copy(
             name = name.trim().ifEmpty { autoName },
@@ -237,10 +292,12 @@ data class BlockDraft(
             reward = (existing?.reward ?: Reward()).copy(unlockDurationMs = unlockMinutes * 60_000),
             schedule = builtSchedule(),
             mode = mode,
-            dailyAllowanceMs = if (mode == BlockMode.ALLOWANCE) (if (dailyOn) dailyMinutes * 60_000 else 0) else base.dailyAllowanceMs,
-            sessionMs = if (mode == BlockMode.ALLOWANCE) (if (rowOn) rowMinutes * 60_000 else 0) else base.sessionMs,
-            sessionBreakMs = if (mode == BlockMode.ALLOWANCE) (if (rowOn) rowBreakMinutes * 60_000 else 0) else base.sessionBreakMs,
-            perDevice = if (mode == BlockMode.ALLOWANCE) perDevice else base.perDevice,
+            dailyAllowanceMs = if (limited && dailyOn) dailyMinutes * 60_000 else 0,
+            sessionMs = if (limited && rowOn) rowMinutes * 60_000 else 0,
+            sessionBreakMs = if (limited && rowOn) rowBreakMinutes * 60_000 else 0,
+            perDevice = limited && perDevice,
+            habitFirst = limited && mode == BlockMode.HABIT && habitFirst,
+            blockedHours = builtHours(),
             lockdownMs = if (mode == BlockMode.LOCKDOWN) lockdownMinutes * 60_000 else base.lockdownMs,
             selfPaced = mode == BlockMode.HABIT && selfPaced,
             enforcementTier = if (hardcore) EnforcementTier.HARDCORE else EnforcementTier.SOFT,
@@ -252,7 +309,7 @@ data class BlockDraft(
      * ones start unticked with an id from [newId].
      */
     fun toItems(blockId: String, old: List<ChecklistItem>, newId: () -> String = { UUID.randomUUID().toString() }): List<ChecklistItem> {
-        if (mode != BlockMode.HABIT) return old
+        if (mode != BlockMode.HABIT) return if (existing?.mode == BlockMode.HABIT) emptyList() else old
         val byId = old.associateBy { it.id }
         val taskItems = if (manualOn) tasks.filter { it.text.isNotBlank() } else emptyList()
         val linkItems = if (loopOn) links else emptyList()
@@ -318,7 +375,8 @@ data class BlockDraft(
                 val habit = habits.firstOrNull { h -> h.id == id }
                 LinkDraft(it.id, id, habit?.name ?: it.text, it.linkedDay == LinkedDay.YESTERDAY, it.countsGoal, daily = habit?.let(::isDaily) ?: !it.countsGoal)
             }
-            val limit = existing.takeIf { it.mode == BlockMode.ALLOWANCE }
+            val limit = existing.takeIf { it.hasLimit }
+            val hours = existing.blockedHours
             val schedule = existing.schedule
             val whenMode = when {
                 existing.mode == BlockMode.LOCKDOWN -> WhenMode.FOR_A_WHILE
@@ -350,6 +408,13 @@ data class BlockDraft(
                 rowMinutes = limit?.takeIf { it.hasRowRule }?.sessionMs?.div(60_000) ?: 15,
                 rowBreakMinutes = limit?.takeIf { it.hasRowRule }?.sessionBreakMs?.div(60_000) ?: 15,
                 perDevice = limit?.perDevice == true,
+                habitFirst = existing.habitFirst,
+                hoursOn = hours != null,
+                hoursDays = hours?.activeDays ?: (1..7).toSet(),
+                hoursTimeOn = hours == null || hours.activeWindow != null,
+                hoursStart = hours?.activeWindow?.startMinuteOfDay ?: (9 * 60),
+                hoursEnd = hours?.activeWindow?.endMinuteOfDay ?: (17 * 60),
+                hoursMore = hours?.moreWindows.orEmpty(),
                 whenMode = whenMode,
                 scheduleDays = schedule.activeDays.takeIf { whenMode == WhenMode.SCHEDULE } ?: (1..7).toSet(),
                 timeOn = schedule.activeWindow != null,
@@ -390,13 +455,27 @@ fun isDaily(habit: Habit): Boolean = habit.numerical || habit.freqNum == habit.f
 
 /** [block] and its checklist [items], added or replacing the block of that id. */
 fun World.withBlock(block: Block, items: List<ChecklistItem>): World {
-    val exists = blocks.any { it.id == block.id }
+    val old = blocks.firstOrNull { it.id == block.id }
+    val habit = block.mode == BlockMode.HABIT
     return copy(
-        // An edit keeps the block's state: it moves on through events only.
-        // Nor does it touch the lock (I39), which only its own dialog sets.
-        blocks = if (exists) blocks.map { if (it.id == block.id) block.copy(state = it.state, lock = it.lock) else it } else blocks + block,
+        // An edit keeps the block's state: it moves on through events only, and stops being a
+        // HABIT block's with its habit (I44). Nor does it touch the lock (I39), which only its own dialog sets.
+        blocks = if (old != null) {
+            blocks.map { if (it.id == block.id) block.copy(state = if (habit) it.state else BlockState.ARMED, lock = it.lock) else it }
+        } else {
+            blocks + block
+        },
         checklist = if (items.isEmpty()) checklist - block.id else checklist + (block.id to items),
+        credits = if (habit) credits else credits - block.id,
+        sessions = if (habit) sessions else sessions - block.id,
+        progress = if (old != null) progress.withModeChange(old, block) else progress,
     )
+}
+
+/** The progress map once [old] became [new]: its count moves with its mode (I44). */
+fun Map<String, HabitProgress>.withModeChange(old: Block, new: Block): Map<String, HabitProgress> {
+    val p = this[old.id] ?: return this
+    return this + (old.id to p.forMode(old.mode, new.mode))
 }
 
 /** The world without the block [blockId] and everything that hangs off it. */

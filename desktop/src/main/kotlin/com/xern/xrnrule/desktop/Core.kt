@@ -12,6 +12,7 @@ import com.xern.xrnrule.domain.ShieldPort
 import com.xern.xrnrule.domain.Telemetry
 import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.applyOutcome
+import com.xern.xrnrule.domain.withoutBookkeeping
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -205,13 +206,6 @@ class FilePersist(private val file: File, private val clock: Clock) : PersistPor
             throw IOException("can't replace $target", e)
         }
     }
-
-    private fun World.withoutBookkeeping(): World = copy(
-        progress = progress.mapValues { (_, p) -> p.copy(accumulatedMs = 0, lastUpdated = 0) },
-        sessions = sessions.mapValues { (_, s) -> s.copy(usedMs = emptyMap(), markMonotonic = null) }, // I41's use
-        foregroundPkg = null,
-        foregroundSite = null,
-    )
 }
 
 object NoTelemetry : Telemetry {

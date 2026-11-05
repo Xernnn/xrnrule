@@ -21,6 +21,36 @@ class BlockEditsTest {
     }
 
     @Test
+    fun addingRulesLoosensOnlyWhenItOpensAWayPast() {
+        val day = 30L * 60_000
+        val hours = Schedule((1..5).toSet(), TimeWindow(0, 14 * 60))
+        val limit = modeBlock("b", BlockMode.ALLOWANCE, dailyAllowanceMs = day)
+        val strict = modeBlock("b", BlockMode.SCHEDULE, schedule = hours)
+        val gate = checklistBlock("b")
+        val limitFirst = gate.copy(dailyAllowanceMs = day)
+        val habitFirst = limitFirst.copy(habitFirst = true)
+
+        assertFalse("hours on a limit", BlockEdits.loosens(limit, limit.copy(blockedHours = hours)))
+        assertFalse("hours on a habit", BlockEdits.loosens(gate, gate.copy(blockedHours = hours)))
+        assertTrue("dropping hours", BlockEdits.loosens(limit.copy(blockedHours = hours), limit))
+        assertTrue("fewer hours", BlockEdits.loosens(limit.copy(blockedHours = hours), limit.copy(blockedHours = hours.copy(activeDays = (1..4).toSet()))))
+
+        assertFalse("a limit beside a block's hours", BlockEdits.loosens(strict, limit.copy(blockedHours = hours)))
+        assertTrue("that keeps fewer hours", BlockEdits.loosens(strict, limit.copy(blockedHours = hours.copy(activeDays = setOf(1)))))
+        assertTrue("that drops them", BlockEdits.loosens(strict, limit))
+        assertFalse("a habit beside a block's hours", BlockEdits.loosens(strict, gate.copy(blockedHours = hours)))
+
+        assertTrue("a habit opening a limit", BlockEdits.loosens(limit, limitFirst))
+        assertFalse("a habit before a limit", BlockEdits.loosens(limit, habitFirst))
+        assertTrue("free minutes on a habit block", BlockEdits.loosens(gate, limitFirst))
+        assertFalse("a limit on top of a habit", BlockEdits.loosens(gate, habitFirst))
+        assertTrue("putting the limit first", BlockEdits.loosens(habitFirst, limitFirst))
+        assertFalse("putting the habit first", BlockEdits.loosens(limitFirst, habitFirst))
+        assertTrue("dropping the habit", BlockEdits.loosens(habitFirst, limit))
+        assertTrue("more free minutes", BlockEdits.loosens(limitFirst, limitFirst.copy(dailyAllowanceMs = 2 * day)))
+    }
+
+    @Test
     fun weakerEditsLoosen() {
         assertTrue(BlockEdits.loosens(habit, habit.copy(targetPackages = setOf("a"))))
         assertTrue(BlockEdits.loosens(habit, habit.copy(trigger = habit.trigger.copy(requiredAmount = 60_000))))

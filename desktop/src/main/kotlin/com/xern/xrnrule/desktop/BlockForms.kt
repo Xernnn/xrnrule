@@ -27,8 +27,9 @@ import kotlinx.serialization.Serializable
  * apps, so a new block targets laptop apps and websites; phone apps are added on the phone. Every
  * new block is SOFT: hardcore needs the phone's Device Admin and password.
  *
- * An edit keeps the block's kind and how it unlocks, as on the phone; the checklist is edited
- * item by item ([addItem], [linkHabit], [removeItem]).
+ * An edit keeps the block's kind and how it unlocks (a habit or a limit is added on the phone, which
+ * has the pickers); its limit, blocked hours and their order can change (I44). The checklist is
+ * edited item by item ([addItem], [linkHabit], [removeItem]).
  */
 object BlockForms {
 
@@ -72,6 +73,17 @@ object BlockForms {
         val startMin: Int = 9 * 60,
         val endMin: Int = 17 * 60,
         val moreWindows: List<Window> = emptyList(),
+        /** A HABIT block's limit: the same numbers as a limit block's (I44). */
+        val limitOn: Boolean = false,
+        /** With a habit and a daily limit, the habit comes first and the limit holds on top. */
+        val habitFirst: Boolean = false,
+        /** Hours blocked outright, on a block with a habit or a limit (I44). */
+        val hoursOn: Boolean = false,
+        val hoursAllDay: Boolean = false,
+        val hoursDays: Set<Int> = (1..7).toSet(),
+        val hoursStartMin: Int = 9 * 60,
+        val hoursEndMin: Int = 17 * 60,
+        val hoursMore: List<Window> = emptyList(),
     )
 
     /** Either the changed world or why not, in the phone's words. */
@@ -110,6 +122,7 @@ object BlockForms {
             state = BlockState.ARMED,
             mode = form.mode,
             lockdownMs = if (form.mode == BlockMode.LOCKDOWN) form.lockdownMin * 60_000 else 0,
+            blockedHours = hours(form),
         ).withLimits(form)
         val plain = if (habit && form.checklist) items.mapIndexed { i, text -> ChecklistItem(id = "$id-i$i", blockId = id, text = text, order = i) } else emptyList()
         val linked = if (habit && form.checklist) {
@@ -157,7 +170,7 @@ object BlockForms {
             devices = form.devices,
             lockdownMs = if (old.mode == BlockMode.LOCKDOWN) form.lockdownMin * 60_000 else old.lockdownMs,
             schedule = if (old.mode == BlockMode.SCHEDULE) schedule(form) else old.schedule,
-        ).let { if (old.mode == BlockMode.ALLOWANCE) it.withLimits(form) else it }
+        ).let { if (takesRules(old.mode)) it.withLimits(form).copy(blockedHours = hours(kept)) else it }
         return Result.Ok(world.copy(blocks = world.blocks.map { if (it.id == old.id) block else it }), block)
     }
 
@@ -190,14 +203,28 @@ object BlockForms {
         overrides = world.overrides - blockId,
     )
 
-    /** A daily limit's numbers: the limit itself, the row rule, shared or per device. */
+    /** A daily limit's numbers: the limit itself, the row rule, shared or per device, and its order (I44). */
     private fun Block.withLimits(form: Form): Block =
-        if (mode != BlockMode.ALLOWANCE) copy(dailyAllowanceMs = 0) else copy(
+        if (!limited(form.copy(mode = mode))) copy(dailyAllowanceMs = 0, sessionMs = 0, sessionBreakMs = 0, perDevice = false, habitFirst = false) else copy(
             dailyAllowanceMs = if (form.dailyOn) form.allowanceMin * 60_000 else 0,
             sessionMs = if (form.rowMin > 0) form.rowMin * 60_000 else 0,
             sessionBreakMs = if (form.rowMin > 0) form.rowBreakMin * 60_000 else 0,
             perDevice = form.perDevice,
+            habitFirst = mode == BlockMode.HABIT && form.habitFirst,
         )
+
+    /** I44: the kinds a limit and blocked hours go on; a schedule's hours are its schedule. */
+    private fun takesRules(mode: BlockMode) = mode == BlockMode.HABIT || mode == BlockMode.ALLOWANCE
+
+    private fun limited(form: Form) = form.mode == BlockMode.ALLOWANCE || (form.mode == BlockMode.HABIT && form.limitOn)
+
+    private fun hasHours(form: Form) = takesRules(form.mode) && form.hoursOn
+
+    private fun hours(form: Form): Schedule? = if (!hasHours(form)) null else Schedule(
+        form.hoursDays,
+        if (form.hoursAllDay) null else TimeWindow(form.hoursStartMin, form.hoursEndMin),
+        form.hoursMore.map { DayWindow(it.days, TimeWindow(it.startMin, it.endMin)) },
+    )
 
     private fun schedule(form: Form) = Schedule(
         form.days,
@@ -239,13 +266,17 @@ object BlockForms {
             !hasTargets -> "Pick a laptop app or add a website to block"
             !onItsDevices -> "Laptop apps aren't blocked on the phone: add a website, or phone apps on the phone"
             form.name.isBlank() -> "Give the block a name"
-            form.mode == BlockMode.ALLOWANCE && !form.dailyOn && form.rowMin <= 0 -> "Set minutes a day, minutes in a row, or both"
-            form.mode == BlockMode.ALLOWANCE && form.dailyOn && form.allowanceMin <= 0 -> "Set how many minutes a day"
-            form.mode == BlockMode.ALLOWANCE && form.rowMin > 0 && form.rowBreakMin <= 0 -> "Set how long the break is"
+            limited(form) && !form.dailyOn && form.rowMin <= 0 -> "Set minutes a day, minutes in a row, or both"
+            limited(form) && form.dailyOn && form.allowanceMin <= 0 -> "Set how many minutes a day"
+            limited(form) && form.rowMin > 0 && form.rowBreakMin <= 0 -> "Set how long the break is"
             form.mode == BlockMode.SCHEDULE && form.days.isEmpty() -> "Pick at least one day"
-            form.mode == BlockMode.SCHEDULE && (windows(form).any { (days, start, end) -> days.any { it !in 1..7 } || start !in 0 until 1440 || end !in 0 until 1440 }) -> "Those times don't make sense"
+            form.mode == BlockMode.SCHEDULE && badTimes(windows(form)) -> "Those times don't make sense"
             form.mode == BlockMode.SCHEDULE && windows(form).any { (_, start, end) -> start == end } -> "Start and end time can't be the same"
             form.mode == BlockMode.SCHEDULE && form.moreWindows.any { it.days.isEmpty() } -> "Pick at least one day for each time"
+            hasHours(form) && form.hoursDays.isEmpty() -> "Pick at least one day for the blocked hours"
+            hasHours(form) && badTimes(hoursWindows(form)) -> "Those times don't make sense"
+            hasHours(form) && hoursWindows(form).any { (_, start, end) -> start == end } -> "Blocked hours can't start and end at the same time"
+            hasHours(form) && form.hoursMore.any { it.days.isEmpty() } -> "Pick at least one day for each of the blocked hours"
             form.mode == BlockMode.LOCKDOWN && form.lockdownMin <= 0 -> "Set how long to block"
             form.mode != BlockMode.HABIT -> null
             !form.checklist && !form.timer -> "Pick at least one way to unlock it"
@@ -259,4 +290,12 @@ object BlockForms {
 
     private fun windows(form: Form): List<Triple<Set<Int>, Int, Int>> =
         listOf(Triple(form.days, form.startMin, form.endMin)) + form.moreWindows.map { Triple(it.days, it.startMin, it.endMin) }
+
+    private fun hoursWindows(form: Form): List<Triple<Set<Int>, Int, Int>> =
+        (if (form.hoursAllDay) emptyList() else listOf(Triple(form.hoursDays, form.hoursStartMin, form.hoursEndMin))) +
+            form.hoursMore.map { Triple(it.days, it.startMin, it.endMin) }
+
+    private fun badTimes(windows: List<Triple<Set<Int>, Int, Int>>) = windows.any { (days, start, end) ->
+        days.any { it !in 1..7 } || start !in 0 until 1440 || end !in 0 until 1440
+    }
 }

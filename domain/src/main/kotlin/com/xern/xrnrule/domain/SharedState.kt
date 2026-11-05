@@ -50,10 +50,10 @@ data class SharedState(
         val newerUse: Comparator<AllowanceUse> =
             compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.atWall }
 
-        /** This device's own report of its use of an ALLOWANCE block with progress [p] (I19, I32). */
-        fun ownUse(world: World, p: HabitProgress): AllowanceUse {
+        /** This device's own report of its use of [block]'s limit, with progress [p] (I19, I32, I44). */
+        fun ownUse(world: World, block: Block, p: HabitProgress): AllowanceUse {
             val run = world.runs[p.blockId]
-            return AllowanceUse(p.windowStart, p.accumulatedMs, run, run?.lastActiveWall ?: 0)
+            return AllowanceUse(p.windowStart, p.limitUsed(block), run, run?.lastActiveWall ?: 0)
         }
 
         /** This device's view of the shared state. */
@@ -61,11 +61,11 @@ data class SharedState(
             val allowance = world.otherAllowance.mapValues { it.value.toMutableMap() }.toMutableMap()
             if (world.deviceId.isNotEmpty()) {
                 for (block in world.blocks) {
-                    if (block.mode != BlockMode.ALLOWANCE) continue
+                    if (!block.hasLimit) continue
                     val p = world.progress[block.id] ?: continue
                     // Even unused (§2.4): the merge never drops a device's entry, so only this
                     // device's newer day can replace an older copy of its use kept elsewhere.
-                    allowance.getOrPut(block.id) { mutableMapOf() }[world.deviceId] = ownUse(world, p)
+                    allowance.getOrPut(block.id) { mutableMapOf() }[world.deviceId] = ownUse(world, block, p)
                 }
             }
             return SharedState(

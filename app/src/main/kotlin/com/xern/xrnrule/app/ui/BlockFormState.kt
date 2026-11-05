@@ -61,6 +61,16 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     var rowMinutes by mutableLongStateOf(start.rowMinutes)
     var rowBreakMinutes by mutableLongStateOf(start.rowBreakMinutes)
     var perDevice by mutableStateOf(start.perDevice)
+    /** I44: with a habit and a daily limit, the habit comes first. */
+    var habitFirst by mutableStateOf(start.habitFirst)
+
+    // ---- blocked hours (I44) ----
+    var hoursOn by mutableStateOf(start.hoursOn)
+    var hoursDays by mutableStateOf(start.hoursDays)
+    var hoursTimeOn by mutableStateOf(start.hoursTimeOn)
+    var hoursStart by mutableIntStateOf(start.hoursStart)
+    var hoursEnd by mutableIntStateOf(start.hoursEnd)
+    var hoursMore by mutableStateOf(start.hoursMore)
 
     // ---- when ----
     var whenMode by mutableStateOf(start.whenMode)
@@ -84,7 +94,8 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
         timerMinutes = timerMinutes, tasks = tasks, habitIds = habitIds, manualOn = manualOn, focusOn = focusOn,
         links = links, loopOn = loopOn, combineMode = combineMode, tagOn = tagOn, tags = tags, limitOn = limitOn, dailyOn = dailyOn,
         dailyMinutes = dailyMinutes, rowOn = rowOn, rowMinutes = rowMinutes, rowBreakMinutes = rowBreakMinutes,
-        perDevice = perDevice, whenMode = whenMode, scheduleDays = scheduleDays, timeOn = timeOn,
+        perDevice = perDevice, habitFirst = habitFirst, hoursOn = hoursOn, hoursDays = hoursDays, hoursTimeOn = hoursTimeOn,
+        hoursStart = hoursStart, hoursEnd = hoursEnd, hoursMore = hoursMore, whenMode = whenMode, scheduleDays = scheduleDays, timeOn = timeOn,
         startMinute = startMinute, endMinute = endMinute, moreWindows = moreWindows, lockdownMinutes = lockdownMinutes,
         unlockMinutes = unlockMinutes, selfPaced = selfPaced, hardcore = hardcore,
     )
@@ -93,6 +104,10 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     private fun load(d: BlockDraft) {
         appTimeOn = d.appTimeOn; timerOn = d.timerOn; manualOn = d.manualOn; focusOn = d.focusOn; loopOn = d.loopOn
         limitOn = d.limitOn; whenMode = d.whenMode; habitIds = d.habitIds; links = d.links; tagOn = d.tagOn
+        // Hours move between the schedule and the blocked hours as rules come and go (I44).
+        scheduleDays = d.scheduleDays; timeOn = d.timeOn; startMinute = d.startMinute; endMinute = d.endMinute; moreWindows = d.moreWindows
+        hoursOn = d.hoursOn; hoursDays = d.hoursDays; hoursTimeOn = d.hoursTimeOn; hoursStart = d.hoursStart; hoursEnd = d.hoursEnd
+        hoursMore = d.hoursMore
     }
 
     val doHabits get() = draft().doHabits

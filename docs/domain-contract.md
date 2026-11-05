@@ -95,7 +95,8 @@ rỗng, nếu không thì đếm theo target của block (`targetPackages` + `ta
 
 Máy trạng thái ở trên chỉ áp dụng cho `mode == HABIT`. Ba chế độ còn lại **không có đường
 mở khóa**: block luôn ở `ARMED`, trigger/checklist/credit bị bỏ qua, và engine không bao giờ
-chuyển trạng thái cho chúng. "Đang chặn" của từng chế độ:
+chuyển trạng thái cho chúng. "Đang chặn" của từng chế độ, khi block chỉ có một luật (nhiều luật:
+xem I44 ngay dưới bảng):
 
 | Mode | Đang chặn khi | Tham số |
 |---|---|---|
@@ -106,6 +107,49 @@ chuyển trạng thái cho chúng. "Đang chặn" của từng chế độ:
 
 Gộp nhiều block cùng phủ một target: xem I22. Một block có thể chừa ra vài host con của site nó
 chặn (`exceptSites`, I31).
+
+**Nhiều luật trên một block** (I44). Một block giữ được cùng lúc ba luật, luật nào cũng tùy chọn:
+
+- **Giờ chặn** (`Block.blockedHours`, null = không có; dùng cho `HABIT` và `ALLOWANCE`): trong các
+  giờ đó block chặn hẳn. Block `SCHEDULE` không dùng trường này: `schedule` của nó đã là giờ chặn.
+- **Hạn mức** (`dailyAllowanceMs`, `sessionMs`/`sessionBreakMs`, `perDevice`, I19, I32, I33):
+  block `ALLOWANCE` luôn có; block `HABIT` có khi được đặt (`Block.hasLimit`).
+- **Habit** (`mode == HABIT`): máy trạng thái ở trên.
+
+`mode` vẫn nói block có gì: có habit là `HABIT`, không habit mà có hạn mức là `ALLOWANCE`, chỉ có
+giờ là `SCHEDULE`. `LOCKDOWN` đứng riêng, không ghép với luật nào. Ở block `HABIT`/`ALLOWANCE`,
+`schedule` vẫn là lúc habit và hạn mức có hiệu lực; **giờ chặn không phụ thuộc `schedule`**.
+
+Luật nào chặn thì block chặn. Habit chỉ mở được phần của habit:
+
+| Luật | Chặn khi | Habit mở được? | Phút mua (I34)? |
+|---|---|---|---|
+| Giờ chặn | đang trong giờ chặn | không | được, nếu block mua được |
+| Nghỉ bắt buộc (I32) | đang nghỉ | không | không |
+| Hạn mức ngày | đã dùng ≥ `dailyAllowanceMs` | xem thứ tự dưới đây | được, nếu block mua được |
+| Habit | `state != UNLOCKED` | có | không |
+
+Trong lúc luật của chính block đang giữ chặt (giờ chặn, nghỉ bắt buộc, hạn mức ở habit trước), `Redeem`
+bị từ chối (`RejectReason.HELD`) và credit giữ nguyên: mở lúc đó chỉ đốt phút và tốn `dailyCapMs` mà
+không mở được gì.
+
+Block `HABIT` có hạn mức ngày thì **thứ tự** chọn được theo từng block (`Block.habitFirst`):
+
+- **Hạn mức trước** (`false`, mặc định): phút miễn phí đi trước. Chưa dùng hết thì block không đòi
+  habit. Dùng hết thì block chặn, và habit mở lại được `reward.unlockDurationMs`.
+- **Habit trước** (`true`): chặn tới khi xong habit, như block `HABIT` thường, và hạn mức giữ
+  ở trên: dùng hết rồi thì habit cũng không mở được nữa.
+- Không có hạn mức ngày (chỉ có luật liên tục) thì không có gì để "hết": tính như habit trước.
+
+Block `HABIT` không mua phút được (I34), kể cả khi có hạn mức hay giờ chặn. Block `ALLOWANCE` có
+giờ chặn mua được: phút mua mở cả giờ chặn lẫn hạn mức ngày, không mở nghỉ bắt buộc. Pause (I25)
+nhấc mọi luật của block như trước.
+
+`progress.accumulatedMs` của block `HABIT` là timer của habit, nên hạn mức của nó đếm riêng ở
+`progress.limitUsedMs`; về `ARMED` không xóa số này, chỉ qua ngày mới xóa (I13). `HabitProgress`
+đọc qua `limitUsed(block)`. Đổi mode thì số chuyển theo (`forMode`), cả khi nhận từ máy khác.
+Timer không có `habitPackages` trên block có hạn mức chỉ đếm khi target đang bị chặn (I4): đang
+dùng phút miễn phí không phải là đang chờ.
 
 **Thiết bị** (`Block.devices`, I42): `BOTH` (mặc định), `PHONE` hay `LAPTOP`. Mỗi máy biết nó là
 gì (`World.deviceKind`, của riêng máy, không chung; null = dữ liệu cũ, mọi block đều áp dụng). Ở máy
@@ -124,7 +168,11 @@ Ngoài sự kiện, user còn sửa cấu hình block (lớp app gọi `WorldSto
 chuẩn (bỏ target, giảm timer, `AND → OR`, đổi habit app, tăng thời gian mở khóa / TTL / hạn mức,
 giảm độ dài lockdown, đổi lịch, `HARDCORE → SOFT`, đổi mode hay loại trigger). Ngoài ra cũng
 là nới lỏng: xóa block, xóa một mục checklist, đổi `linkedDay`/`countsGoal` của habit item,
-tăng `dailyCapMs`, và bắt đầu Pause (I25). Với habit (`BlockEdits.habitLoosens`, chỉ khi có block
+tăng `dailyCapMs`, và bắt đầu Pause (I25). Với nhiều luật (I44): bỏ hay đổi giờ chặn (kể cả
+`schedule` của `SCHEDULE`), bỏ habit, thêm habit vào block có hạn mức theo thứ tự hạn mức trước
+(thêm một đường vượt hạn mức), thêm hạn mức ngày vào block `HABIT` theo thứ tự hạn mức trước
+(thêm phút miễn phí), và `habitFirst` từ `true` về `false`. Thêm giờ chặn, hay thêm hạn mức hoặc
+habit vào block chỉ có giờ, thì chặt hơn. Với habit (`BlockEdits.habitLoosens`, chỉ khi có block
 dùng nó): phần mở khóa (I36) nhỏ đi, đổi `kind`, hay tần suất `freqNum/freqDen` của habit `CHECK`
 thấp đi (Loop tự điền nhiều ngày hơn). Xóa habit **không** nới lỏng: habit item của nó ở lại và
 không bao giờ xong nữa (I36), muốn bỏ thì sửa block. Sửa habit ở xrnloops hay web app (§2.5) không
@@ -176,14 +224,14 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ |
 | settings | từng trường: `dailyCapMs`, `skewToleranceMs`, `overrideGrantMs`, `overridesPerDay` lấy nhỏ hơn; `unlockWarningMs`, `overrideWaitMs` lấy lớn hơn; `overridePhrase` lấy cái dài hơn; `showClock` lấy `false` |
 | `unlockLog` | ngày lớn hơn thắng cả; cùng ngày → hợp, mỗi khóa lấy max |
-| allowance | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32) |
+| allowance (mọi block `hasLimit`, I44) | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32) |
 | override | kết thúc muộn hơn; một bên xóa → bên còn (như lockdown) |
 | `overrideLog` | như `unlockLog`: ngày lớn hơn thắng; cùng ngày → hợp |
 | `block.lock` | trộn riêng, bất kể bản block nào thắng: `setAtWall` muộn hơn (đặt khóa và mở khẩn cấp đều đóng dấu lúc làm) (I39) |
 | `emergencyLog` | hợp, không bao giờ bớt (I40) |
 
 Bản ghi allowance chỉ được thêm, không bị xóa khi trộn, nên máy chủ của bản ghi phải tự thay nó: mỗi
-máy **luôn** chiếu bản ghi của chính nó cho mọi block `ALLOWANCE` có `progress`, kể cả khi chưa dùng
+máy **luôn** chiếu bản ghi của chính nó cho mọi block `hasLimit` có `progress`, kể cả khi chưa dùng
 (0 ms), để ngày mới của nó thắng bản của hôm trước mà máy kia còn giữ. Khi nhận, bản ghi của chính
 máy này trên server mà "lớn hơn" bản của nó (cùng thứ tự như bảng trên: ngày, `ms`, `atWall`; ví dụ
 dữ liệu máy này bị mất) thì được nhận vào `progress` và `runs` của nó. Hai điều này để hai máy luôn
@@ -273,6 +321,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I41** | Mở khóa tự điều tiết (`Block.selfPaced`, chỉ HABIT; "Self paced" của Habits First): redeem tạo session `selfPaced = true`, và thời gian của nó chỉ trôi khi **đang dùng**: mỗi lần tích lũy (như I19), nếu foreground là target của block (I18) và không bị block khác chặn, `delta` monotonic từ mốc `markMonotonic` được cộng vào `session.usedMs[deviceId]`. `markMonotonic` là của máy này: đặt `now_mono` lúc redeem và lúc nhận một session mới từ máy khác; bỏ (null) khi chiếu (§2.4) và khi neo lại (I8), không có mốc thì lần tích lũy đó chỉ đặt mốc. Hết khi `Σ usedMs ≥ durationMs` **hoặc** khi sang ngày mới (`startedAtWall` trước đầu ngày hôm nay); `consumed = min(Σ usedMs, durationMs)` vào `unlockLog` (I28). Không kiểm tamper I3 (wall không dùng để đếm). Cảnh báo sắp hết khi lượt dùng còn lại ≤ `unlockWarningMs`. Trộn (§2.4): cùng session ở hai bên → `usedMs` lấy max theo từng thiết bị, nên thời gian dùng ở hai máy cộng lại. Đổi `false → true` là nới lỏng (§2.3). | `i41_selfPacedCountsOnlyUse`, `i41_selfPacedEndsWhenUsedUp`, `i41_selfPacedEndsWithTheDay`, `i41_selfPacedSurvivesARebootWithoutCountingIt`, `i41_selfPacedUseAddsUpAcrossDevices` (dùng xong ở một máy thì máy kia không mở lại), `i41_turningSelfPacedOnLoosens`. |
 | **I42** | `World.appliesHere(block)` = `block.devices.include(deviceKind)`: `deviceKind == null` (dữ liệu cũ), `devices == BOTH`, hoặc `devices` khớp `deviceKind`. Block không áp dụng ở máy này: `isBlocking == false`, không nằm trong `blockers` (I22) nên không vào `ShieldPlan`, `timeLeft` bỏ qua nó, và không tích lũy ALLOWANCE (I19), lượt dùng I41 hay timer HABIT đếm trên target (I4); timer HABIT có `habitPackages` (I16) vẫn đếm. `BlockEdits.loosens`: `devices` mới không phủ hết thiết bị của cái cũ là nới lỏng. | `i42_laptopOnlyBlockDoesNothingOnThePhone`, `i42_phoneOnlyBlockStillBlocksThePhone`, `i42_aHabitAppElsewhereStillEarnsIt`, `i42_aTargetTimerOnlyCountsWhereTheBlockHolds`, `i42_droppingADeviceLoosens`. |
 | **I43** | Tag item (`tag != null`): `ToggleChecklistItem(done = true)` trên nó là **no-op**; bỏ tick (`done = false`) thì được (khó hơn, không nới lỏng). `TagScanned(tag)`: với mọi block `HABIT` đang `ARMED`, mọi tag item chưa xong có `tag` đó → `done = true`; rồi kiểm `triggerMet` (I11/I15) → `EARNED`. Block ở trạng thái khác không đổi. App đăng ký đọc thẻ (`TECH_DISCOVERED`), nên chạm thẻ ở đâu (kể cả lúc shield đang hiện) cũng tính, không cần mở app. Lưu thẻ: đọc hai lần cùng `Tags.id` (thẻ ngân hàng, hộ chiếu đổi UID mỗi lần đọc). | `i43_aTagItemTicksOnlyFromItsTag`, `i43_oneScanTicksEveryBlockWaitingForIt`, `i43_aDifferentTagLoosens`. |
+| **I44** | Một block giữ được giờ chặn, hạn mức và habit cùng lúc (§2.2); luật nào chặn thì block chặn, và `blockers` (I22) tính phần của habit riêng: phần giữ chặt (giờ chặn, nghỉ bắt buộc, hạn mức ở habit trước) không có block `HABIT` nào mở được, phần đòi habit thì theo I6. `Redeem` bị từ chối khi luật của chính block đang giữ chặt. Block gộp chặn y như hai block nó thay thế. | `i44_blockedHoursAddToALimit`, `i44_aMergedBlockBlocksLikeTheTwoItReplaces`, `i44_aHabitNeverOpensBlockedHours`, `i44_nothingIsCashedInWhileItsBlockIsHeld`, `i44_limitFirstGivesTheFreeMinutesThenTheHabitOpensIt`, `i44_habitFirstBlocksUntilTheHabitAndTheLimitHolds`, `i44_aRowRuleAloneActsLikeHabitFirst`, `i44_aForcedBreakHoldsThroughAnUnlock`, `i44_theLimitAndTheHabitTimerCountApart`, `i44_goingBackToArmedKeepsTheLimitUse`, `i44_theLimitsCountIsOnlyBookkeeping`, `i44_aWaitTimerDoesNotCountDuringFreeMinutes`, `i44_boughtMinutesLiftHoursAndLimit`, `i44_aLimitOnAHabitBlockIsShared`, `i44_changingModeMovesTheCount`. |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 
