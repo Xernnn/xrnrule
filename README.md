@@ -185,6 +185,7 @@ for Java 17 whatever the JDK) and the Android SDK (platform 35, build tools 36).
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
 ./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
 node --test extension/test             # the extension's helpers and its signed .crx
+scripts/smoke.sh                       # the block screen on an emulator of its own, end to end
 node scripts/release.mjs               # publish the extension and the app; see Updates
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
 ```
