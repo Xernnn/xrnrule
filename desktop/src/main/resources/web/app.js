@@ -769,9 +769,9 @@ function render() {
     document.title = still ? `${what} is blocked · xrnrule` : "xrnrule";
   }
 
-  const pause = state.pauseRemainingMs > 0
+  const pause = !state.pauseRemainingMs && !state.breakLifts ? null : state.pauseRemainingMs > 0
     ? h("div", { class: "actions" }, h("span", { class: "note" }, `On a break: ${clock(state.pauseRemainingMs)} left`), h("button", { class: "btn", onclick: () => act({ type: "endPause" }) }, "End it now"))
-    : h("button", { class: "btn", disabled: !state.canPause || !!guard, title: state.canPause ? "Lifts SOFT blocks for 15 minutes, once a day" : "Today's break is used", onclick: () => act({ type: "pause" }) }, state.canPause ? "Take a 15-min break" : "Break used today");
+    : h("button", { class: "btn", disabled: !state.canPause || !!guard, title: state.canPause ? "Lifts soft blocks for 15 minutes, once a day, but not locked ones" : "Today's break is used", onclick: () => act({ type: "pause" }) }, state.canPause ? "Take a 15-min break" : "Break used today");
 
   app.replaceChildren(header, h("main", { class: "wrap" + (onBlockPage ? " focus" : "") },
     alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d)),

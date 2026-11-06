@@ -2679,4 +2679,121 @@ class InvariantTests {
         assertTrue(BlockEdits.settingsLoosen(on, on.copy(blockOtherBrowsers = false)))
         assertFalse(BlockEdits.settingsLoosen(on.copy(blockOtherBrowsers = false), on))
     }
+
+    /** [id] locked for [ms] from now (I39). */
+    private fun locking(world: World, id: String, clock: Clock, ms: Long = 7 * DAY_MS): World {
+        val at = clock.nowWallMs()
+        return world.copy(blocks = world.blocks.map { if (it.id == id) it.copy(lock = BlockLock(untilWall = at + ms, setAtWall = at)) else it })
+    }
+
+    /** A schedule block that is blocking, with the sentence typed after the wait. */
+    private fun bought(clock: FakeClock): World {
+        val world = engine.reduce(buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock), BlockEvent.BeginOverride(setOf("s")), clock).world
+        clock.advance(Defaults.OVERRIDE_WAIT_MS)
+        return claim(world, clock).world
+    }
+
+    @Test
+    fun i50_aLockStopsBuyingMinutes() {
+        val clock = FakeClock()
+        val world = locking(buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock), "s", clock)
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(world, listOf(world.block("s")!!), clock))
+        assertNull(engine.reduce(world, BlockEvent.BeginOverride(setOf("s")), clock).world.pendingOverride)
+    }
+
+    @Test
+    fun i50_aLockSetDuringTheWaitStopsTheClaimAndCostsNothing() {
+        val clock = FakeClock()
+        val waiting = engine.reduce(buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock), BlockEvent.BeginOverride(setOf("s")), clock).world
+        assertNotNull(waiting.pendingOverride)
+        clock.advance(Defaults.OVERRIDE_WAIT_MS)
+
+        val out = claim(locking(waiting, "s", clock), clock)
+
+        assertTrue(Effect.OverrideRejected(OverrideRejection.NOT_OVERRIDABLE) in out.effects)
+        assertNull(out.world.pendingOverride)
+        assertTrue(out.world.overrides.isEmpty())
+        assertTrue(out.world.overrideLog.isEmpty())
+    }
+
+    @Test
+    fun i50_minutesAlreadyBoughtDontCountWhileLocked() {
+        val clock = FakeClock()
+        val paid = bought(clock)
+        val left = engine.overrideRemainingMs(paid, "s", clock)
+        assertTrue(left > 0)
+        assertFalse(engine.isBlocking(paid, paid.block("s")!!, clock))
+
+        val world = locking(paid, "s", clock)
+
+        assertEquals(0L, engine.overrideRemainingMs(world, "s", clock))
+        assertTrue(engine.isBlocking(world, world.block("s")!!, clock))
+        assertEquals(setOf("com.target"), engine.shieldPlan(world, clock).blockedPackages)
+        assertNotEquals(ClockKind.OVERRIDE, engine.timeLeft(world, "com.target", null, clock)?.kind)
+
+        // Nothing was thrown away: an emergency unlock gives back what's left of them.
+        val ended = BlockEdits.emergencyUnlock(world, "s", clock.nowWallMs())!!
+        assertEquals(left, engine.overrideRemainingMs(ended, "s", clock))
+        assertFalse(engine.isBlocking(ended, ended.block("s")!!, clock))
+    }
+
+    @Test
+    fun i50_theBreakLeavesALockedBlockBlocking() {
+        val clock = FakeClock()
+        val blocks = listOf(checklistBlock("free", target = "com.free"), checklistBlock("kept", target = "com.kept"))
+        val world = locking(buildWorld(blocks, clock = clock), "kept", clock)
+
+        val out = engine.reduce(world, BlockEvent.StartPause(), clock)
+
+        assertEquals(setOf("com.kept"), out.shieldPlan!!.blockedPackages)
+        assertFalse(engine.isBlocking(out.world, out.world.block("free")!!, clock))
+        assertTrue(engine.isBlocking(out.world, out.world.block("kept")!!, clock))
+        assertEquals(listOf("kept"), engine.blockersOf(out.world, "com.kept", null, clock).map { it.id })
+    }
+
+    @Test
+    fun i50_aLockSetDuringABreakHoldsAtOnce() {
+        val clock = FakeClock()
+        val block = modeBlock("s", BlockMode.SCHEDULE)
+        val resting = engine.reduce(buildWorld(listOf(block), clock = clock), BlockEvent.StartPause(), clock).world
+        assertEquals(ClockKind.BREAK, engine.timeLeft(resting, "com.target", null, clock)?.kind)
+
+        val world = locking(resting, "s", clock)
+
+        assertTrue(engine.isBlocking(world, world.block("s")!!, clock))
+        assertEquals(setOf("com.target"), engine.shieldPlan(world, clock).blockedPackages)
+        assertNotEquals(ClockKind.BREAK, engine.timeLeft(world, "com.target", null, clock)?.kind)
+    }
+
+    @Test
+    fun i50_aLockThatRanOutStandsAside() {
+        val clock = FakeClock()
+        val world = locking(buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock), "s", clock, ms = 60_000)
+        clock.advance(60_000)
+        val block = world.block("s")!!
+        assertTrue(engine.pausable(block, clock))
+        assertNull(engine.overrideRejection(world, listOf(block), clock))
+    }
+
+    @Test
+    fun i50_aHabitStillOpensALockedBlock() {
+        val clock = FakeClock()
+        val world = locking(buildWorld(listOf(checklistBlock("c1")), mapOf("c1" to items("c1", 1)), clock), "c1", clock)
+
+        val done = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-i0", true), clock).world
+        assertEquals(BlockState.EARNED, done.block("c1")!!.state)
+        val open = engine.reduce(done, BlockEvent.Redeem("c1"), clock).world
+
+        assertEquals(BlockState.UNLOCKED, open.block("c1")!!.state)
+        assertFalse(engine.isBlocking(open, open.block("c1")!!, clock))
+    }
+
+    @Test
+    fun i50_aHardcoreBlockStaysUnliftedAfterItsLockRunsOut() {
+        val clock = FakeClock()
+        val hard = modeBlock("s", BlockMode.SCHEDULE).copy(enforcementTier = EnforcementTier.HARDCORE)
+        val world = locking(buildWorld(listOf(hard), clock = clock), "s", clock, ms = 60_000)
+        clock.advance(60_000)
+        assertFalse(engine.pausable(world.block("s")!!, clock))
+    }
 }

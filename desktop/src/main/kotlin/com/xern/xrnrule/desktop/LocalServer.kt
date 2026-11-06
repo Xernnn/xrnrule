@@ -168,7 +168,7 @@ class LocalServer(
 
     private fun overrideText(reason: String): String = when (reason) {
         "OFF" -> "Buying minutes is turned off."
-        "NOT_OVERRIDABLE" -> "This can't be bought off: a habit, a lockdown, a hardcore block or a forced break is in the way."
+        "NOT_OVERRIDABLE" -> "This can't be bought off: a habit, a lockdown, a hardcore or locked block, or a forced break is in the way."
         "NONE_LEFT" -> "Today's bought minutes for this are used up."
         "NOT_STARTED" -> "Start again."
         "TOO_EARLY" -> "Not yet: wait for the countdown."
@@ -492,6 +492,8 @@ class LocalServer(
         val blocks: List<UiBlock>,
         val pauseRemainingMs: Long,
         val canPause: Boolean,
+        /** Whether a break would lift anything: not with every soft block locked (I50). */
+        val breakLifts: Boolean,
         val unlockUsedMs: Long,
         val dailyCapMs: Long,
         val sync: SyncStatus?,
@@ -527,6 +529,7 @@ class LocalServer(
             blocks = blocks,
             pauseRemainingMs = engine.pauseRemainingMs(world, clock),
             canPause = engine.canPause(world, clock),
+            breakLifts = world.blocks.any { engine.pausable(it, clock) },
             unlockUsedMs = engine.unlockUsedTodayMs(world, clock),
             dailyCapMs = world.settings.dailyCapMs,
             sync = shared.status.value,

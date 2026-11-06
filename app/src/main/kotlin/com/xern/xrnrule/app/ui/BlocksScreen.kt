@@ -166,14 +166,14 @@ fun BlocksScreen(
                 Wordmark()
             },
             actions = {
-                // A break only lifts soft blocks (I25); with none, there's nothing to offer.
-                if (pauseLeft == 0L && world.blocks.any(store.engine::pausable)) {
+                // A break only lifts soft blocks that aren't locked (I25, I50); with none, there's nothing to offer.
+                if (pauseLeft == 0L && world.blocks.any { store.engine.pausable(it, store.clock) }) {
                     RoundIconButton(Icons.Outlined.FreeBreakfast, "Take a break", outlined = true, onClick = {
                         if (store.engine.canPause(world, store.clock)) {
                             loosen = LoosenRequest(
                                 title = "Take a ${formatDuration(Defaults.PAUSE_MS)} break?",
                                 detail = "Soft blocks stop blocking for ${formatDuration(Defaults.PAUSE_MS)}. " +
-                                    "You get one break a day. Hardcore blocks and lockdowns stay on.",
+                                    "You get one break a day. Hardcore blocks, locked blocks and lockdowns stay on.",
                                 hardcore = false,
                             ) { store.dispatch(BlockEvent.StartPause()) }
                         } else {

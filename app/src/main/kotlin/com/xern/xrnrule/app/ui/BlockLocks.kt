@@ -126,6 +126,7 @@ fun LockDialog(block: Block, store: WorldStore, guard: HardcoreGuard, onUnhardco
                 Text(
                     "Until then nothing that makes ${current.name} easier to get past can change: not its apps, habits or " +
                         "times, not turning it off or deleting it, whatever you wait or type. Making it stricter still works. " +
+                        "Bought minutes and the daily break won't get past it either. If a habit opens it, that still works. " +
                         "Only an emergency unlock ends it early: you have $left of ${Defaults.EMERGENCY_UNLOCKS} left, " +
                         "and used ones never come back.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

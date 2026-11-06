@@ -98,7 +98,7 @@ class BlockEngine {
      */
     fun blockers(world: World, all: List<Block>, clock: Clock): List<Block> {
         val here = all.filter { world.appliesHere(it) } // I42
-        val covering = if (pauseRemainingMs(world, clock) > 0) here.filterNot(::pausable) else here
+        val covering = if (pauseRemainingMs(world, clock) > 0) here.filterNot { pausable(it, clock) } else here
         val strict = covering.filter { it.enabled && holds(world, it, clock) }
         val habit = covering.filter { it.mode == BlockMode.HABIT }
         val asking = if (habit.any { it.state == BlockState.UNLOCKED }) emptyList() else habit.filter { it.enabled && asksForHabit(world, it, clock) }
@@ -121,7 +121,7 @@ class BlockEngine {
     /** Whether this one block, on its own, is blocking its targets right now (contract §2.2). */
     fun isBlocking(world: World, block: Block, clock: Clock): Boolean {
         if (!block.enabled || !world.appliesHere(block)) return false // I42
-        if (pausable(block) && pauseRemainingMs(world, clock) > 0) return false // I25
+        if (pausable(block, clock) && pauseRemainingMs(world, clock) > 0) return false // I25
         return holds(world, block, clock) ||
             (asksForHabit(world, block, clock) && block.state != BlockState.UNLOCKED)
     }
@@ -209,10 +209,16 @@ class BlockEngine {
         return (maxOf(here, elsewhere) - clock.nowWallMs()).coerceAtLeast(0)
     }
 
-    /** I34: what's left of the minutes bought past this block; a per-device block's only count where they were bought (I33). */
+    /**
+     * I34: what's left of the minutes bought past this block. A per-device block's only count where
+     * they were bought (I33), and none count while it's locked (I50), though they keep: an
+     * emergency unlock gives back what's left of them.
+     */
     fun overrideRemainingMs(world: World, blockId: String, clock: Clock): Long {
         val g = world.overrides[blockId] ?: return 0
-        if (world.block(blockId)?.perDevice == true && g.deviceId != world.deviceId) return 0
+        val block = world.block(blockId)
+        if (block?.perDevice == true && g.deviceId != world.deviceId) return 0
+        if (block != null && BlockEdits.locked(block, clock.nowWallMs())) return 0
         return (g.durationMs - (clock.nowMonotonicMs() - g.startedAtMonotonic)).coerceAtLeast(0)
     }
 
@@ -225,7 +231,7 @@ class BlockEngine {
     /**
      * I34: why minutes can't be bought past [blocks] — the blockers of one target
      * ([blockersOf]) — right now, or null if they can: every one has to be a SOFT daily limit or
-     * schedule, not on a forced break, with overrides left today.
+     * schedule, not locked (I50), not on a forced break, with overrides left today.
      */
     fun overrideRejection(world: World, blocks: List<Block>, clock: Clock): OverrideRejection? {
         if (world.settings.overridesPerDay <= 0) return OverrideRejection.OFF
@@ -235,7 +241,7 @@ class BlockEngine {
     }
 
     private fun overridable(world: World, block: Block, clock: Clock): Boolean =
-        block.enforcementTier == EnforcementTier.SOFT && when (block.mode) {
+        block.enforcementTier == EnforcementTier.SOFT && !BlockEdits.locked(block, clock.nowWallMs()) && when (block.mode) {
             BlockMode.SCHEDULE -> true
             BlockMode.ALLOWANCE -> rowBreakRemainingMs(world, block, clock) == 0L
             BlockMode.HABIT, BlockMode.LOCKDOWN -> false
@@ -269,7 +275,7 @@ class BlockEngine {
             }
         }
         val pause = pauseRemainingMs(world, clock)
-        if (pause > 0 && blockers(world.copy(pause = null), covering, clock).any(::pausable)) left += TimeLeft(pause, ClockKind.BREAK)
+        if (pause > 0 && blockers(world.copy(pause = null), covering, clock).any { pausable(it, clock) }) left += TimeLeft(pause, ClockKind.BREAK)
         return left.minByOrNull { it.ms }
     }
 
@@ -289,9 +295,10 @@ class BlockEngine {
     fun canPause(world: World, clock: Clock): Boolean =
         pauseRemainingMs(world, clock) == 0L && world.lastPauseEpochDay != clock.epochDay()
 
-    /** I25: a break lifts SOFT blocks only, and never a lockdown the user started on purpose. */
-    fun pausable(block: Block): Boolean =
-        block.enforcementTier == EnforcementTier.SOFT && block.mode != BlockMode.LOCKDOWN
+    /** I25: a break lifts SOFT blocks only, never a lockdown the user started on purpose or a locked block (I50). */
+    fun pausable(block: Block, clock: Clock): Boolean =
+        block.enforcementTier == EnforcementTier.SOFT && block.mode != BlockMode.LOCKDOWN &&
+            !BlockEdits.locked(block, clock.nowWallMs())
 
     /** I9/I28: unlock time spent today; counters from an earlier day count as zero. */
     fun unlockUsedTodayMs(world: World, clock: Clock): Long =

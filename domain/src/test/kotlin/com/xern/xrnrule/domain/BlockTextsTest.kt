@@ -83,6 +83,19 @@ class BlockTextsTest {
     }
 
     @Test
+    fun aBreakIsntWhyALockedBlockIsOpen() {
+        val clock = FakeClock()
+        val block = modeBlock("a", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000)
+        val resting = engine.reduce(buildWorld(listOf(block), clock = clock), BlockEvent.StartPause(), clock).world
+        assertEquals("Open · break ends in 15 min", BlockTexts.headline(engine, resting, block, clock).text)
+
+        val at = clock.nowWallMs()
+        val locked = block.copy(lock = BlockLock(untilWall = at + 60_000, setAtWall = at))
+        val world = resting.copy(blocks = listOf(locked))
+        assertEquals("Open · 30 min left today", BlockTexts.headline(engine, world, locked, clock).text)
+    }
+
+    @Test
     fun headlineOfAHabitBlock() {
         val clock = FakeClock()
         val armed = checklistBlock("c")

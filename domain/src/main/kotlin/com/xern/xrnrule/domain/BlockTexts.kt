@@ -182,7 +182,8 @@ object BlockTexts {
     private fun openHeadline(engine: BlockEngine, world: World, block: Block, clock: Clock, open: (String) -> Headline): Headline {
         val bought = engine.overrideRemainingMs(world, block.id, clock)
         val session = world.sessions[block.id]
-        val pause = engine.pauseRemainingMs(world, clock)
+        // A block the break doesn't lift is open for its own reason, not because of the break.
+        val pause = if (engine.pausable(block, clock)) engine.pauseRemainingMs(world, clock) else 0
         return when {
             block.mode == BlockMode.LOCKDOWN -> Headline("Lockdown over", Tone.OFF)
             pause > 0 -> open("Open · break ends in ${duration(pause)}")
