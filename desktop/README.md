@@ -67,8 +67,11 @@ Without a server it blocks on the laptop only, and nothing it does reaches the p
   links a task to a habit, or deletes it. Sites are shared with the phone; laptop apps only matter here. Tightening is
   instant. Anything that loosens a block waits 60 seconds with the page open, like on the
   phone, and a hardcore block can only be loosened on the phone.
-- **Opening a blocked app** closes it at once (a tray app like Steam is also stopped). A
-  notification appears, and the block page opens in the browser.
+- **Opening a blocked app** closes it at once (a tray app like Steam is also stopped), and the
+  block page opens in the browser to say why.
+- **Popups** are few: one at a time, gone by themselves after 10 seconds, and the same one at
+  most every 10 minutes. The end of an unlock only pops up if the block has a site or a laptop
+  app to lock here.
 - **Opening a blocked site** turns the tab into the block page, before the site loads. Once
   the site is open again, the tab goes back where it was. On limited sites the extension can
   show a corner clock (Settings on the local page) and warns at 10, 5, 3 and 1 minutes left.

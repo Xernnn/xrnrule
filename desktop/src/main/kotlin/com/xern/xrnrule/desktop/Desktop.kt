@@ -1,9 +1,12 @@
 package com.xern.xrnrule.desktop
 
+import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.ShieldPlan
 import com.xern.xrnrule.domain.ShieldPort
 import com.xern.xrnrule.domain.Sites
+import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.appliesHere
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import org.freedesktop.dbus.annotations.DBusInterfaceName
@@ -14,6 +17,7 @@ import java.io.File
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /** One window as KWin reports it: the `.desktop` id when it has one, else its WM class. */
 data class AppWindow(val appId: String, val resourceClass: String, val pid: Long)
@@ -345,28 +349,74 @@ object DesktopApps {
     fun name(id: String): String = all().firstOrNull { it.id == id }?.name ?: id
 }
 
+/** Whether [block] has anything to lock on this laptop: the end of a phone game's unlock isn't news here. */
+fun World.locksOnLaptop(block: Block): Boolean =
+    appliesHere(block) && (block.targetSites.isNotEmpty() || block.targetDesktopApps.isNotEmpty())
+
+/**
+ * At most one popup of a kind in [everyMs]. The engine's warnings fire on every tick, so anything
+ * reaching the desktop without this would stack up a popup a second.
+ */
+class PopupLimit(private val everyMs: Long = 10 * 60_000L) {
+    private val last = ConcurrentHashMap<String, Long>()
+
+    fun allows(kind: String, now: Long): Boolean {
+        var allowed = false
+        last.compute(kind) { _, shown ->
+            if (shown != null && now - shown < everyMs) shown else now.also { allowed = true }
+        }
+        return allowed
+    }
+}
+
 /** Desktop notifications (`notify-send`), and the block page in the browser. */
-class Notifier(private val config: Config) {
+class Notifier(private val config: Config, private val limit: PopupLimit = PopupLimit()) {
     private val lastShown = ConcurrentHashMap<String, Long>()
 
+    /** The popup on screen: the next one takes its place rather than stacking on it. */
+    @Volatile private var onScreen: String? = null
+
+    /**
+     * Gone by itself after 10 s, at normal urgency because Plasma keeps a critical one up until it's
+     * dismissed. [urgent] only leaves it in the notification history, for what shouldn't be missed.
+     */
     fun notify(title: String, body: String, urgent: Boolean = false) {
-        run("notify-send", "-a", "xrnrule", "-i", "changes-prevent", "-u", if (urgent) "critical" else "normal", title, body)
+        if (!limit.allows(title, System.currentTimeMillis())) return
+        val command = mutableListOf("notify-send", "-a", "xrnrule", "-i", "changes-prevent", "-t", "$POPUP_MS", "-p")
+        if (!urgent) command += "-e"
+        onScreen?.let { command += listOf("-r", it) }
+        try {
+            val process = ProcessBuilder(command + listOf("--", title, body)).redirectErrorStream(true).start()
+            thread(isDaemon = true) {
+                val id = process.inputStream.bufferedReader().use { it.readText() }.trim()
+                if (id.toIntOrNull() != null) onScreen = id
+            }
+        } catch (_: Exception) {
+            // no notification daemon: the block still holds
+        }
     }
 
-    /** A blocked app was closed: say why, and open the block page (at most once a minute per app). */
+    /** A blocked app was closed: the block page says why (at most once a minute per app), else a popup does. */
     fun blocked(appId: String) {
         val now = System.currentTimeMillis()
         val last = lastShown.put(appId, now)
         if (last != null && now - last < 60_000) return
-        notify("${DesktopApps.name(appId)} is blocked", "Open the block page to see what unlocks it.")
-        if (config.openBlockPage) run("xdg-open", "${config.localUrl}/block?app=" + URLEncoder.encode(appId, Charsets.UTF_8))
+        if (config.openBlockPage) {
+            run("xdg-open", "${config.localUrl}/block?app=" + URLEncoder.encode(appId, Charsets.UTF_8))
+        } else {
+            notify("${DesktopApps.name(appId)} is blocked", "Open the block page to see what unlocks it.")
+        }
     }
 
     private fun run(vararg cmd: String) {
         try {
             ProcessBuilder(*cmd).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
         } catch (_: Exception) {
-            // no notification daemon / no browser: the block still holds
+            // no browser: the block still holds
         }
+    }
+
+    private companion object {
+        const val POPUP_MS = 10_000
     }
 }

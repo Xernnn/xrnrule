@@ -61,7 +61,9 @@ fun main() = runBlocking {
             val world = store.world.value
             fun name(id: String) = world.block(id)?.name ?: "A block"
             when (effect) {
-                is Effect.UnlockEndingSoon -> notifier.notify("${name(effect.blockId)} locks again soon", "In ${effect.remainingMs / 1000} seconds.")
+                is Effect.UnlockEndingSoon -> world.block(effect.blockId)?.takeIf(world::locksOnLaptop)?.let {
+                    notifier.notify("${it.name} locks again soon", "In ${effect.remainingMs / 1000} seconds.")
+                }
                 is Effect.TamperDetected -> notifier.notify("Unlock ended", "The clock was changed, so ${name(effect.blockId)} is blocked again.", urgent = true)
                 is Effect.RedeemRejected -> notifier.notify("Can't open ${name(effect.blockId)}", "Today's unlock time is used up.")
                 else -> Unit
