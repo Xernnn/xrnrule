@@ -101,3 +101,11 @@ test("the manifest loads shared.js before content.js and exposes the block page"
     assert.ok(html.indexOf("shared.js") < html.indexOf(page.replace(".html", ".js")), `${page}: shared.js first`);
   }
 });
+
+test("every element block.js asks for is on the page", () => {
+  const html = readFileSync(new URL("../block.html", import.meta.url), "utf8");
+  const script = readFileSync(new URL("../block.js", import.meta.url), "utf8");
+  const ids = [...script.matchAll(/getElementById\("([^"]+)"\)/g)].map((m) => m[1]);
+  assert.ok(ids.length > 0);
+  for (const id of ids) assert.ok(html.includes(`id="${id}"`), `block.html has no #${id}`);
+});

@@ -465,6 +465,9 @@ class LocalServer(
         val overrideRejection: String?,
         /** A wait under way for these blockers: when it's over (wall ms). */
         val overrideReadyAtWall: Long?,
+        /** What the block page leads with: when it's back, and why it isn't now. */
+        val back: String? = null,
+        val why: String? = null,
     )
 
     @Serializable
@@ -551,11 +554,15 @@ class LocalServer(
         val blockers = store.engine.blockersOf(world, app, site, store.clock)
         val ids = blockers.map { it.id }.toSet()
         val pending = world.pendingOverride?.takeIf { it.blockIds == ids }
+        val lead = BlockTexts.leading(store.engine, world, blockers, store.clock)
+        val back = lead?.let { BlockTexts.back(store.engine, world, it, store.clock) }
         return UiSubject(
             blocked = blockers.isNotEmpty(),
             blockers = ids.toList(),
             overrideRejection = if (blockers.isEmpty()) null else store.engine.overrideRejection(world, blockers, store.clock)?.name,
             overrideReadyAtWall = pending?.let { it.sinceWall + world.settings.overrideWaitMs },
+            back = back?.at,
+            why = BlockTexts.why(back, lead),
         )
     }
 

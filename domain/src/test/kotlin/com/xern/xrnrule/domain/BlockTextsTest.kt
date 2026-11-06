@@ -94,6 +94,78 @@ class BlockTextsTest {
         )
     }
 
+    /** A limit used up, its hours as given: the state a block screen most often has to explain. */
+    private fun spentLimit(clock: FakeClock, hours: Schedule? = null): Pair<World, Block> {
+        val block = modeBlock("a", BlockMode.ALLOWANCE, dailyAllowanceMs = 30 * 60_000L).copy(blockedHours = hours)
+        var world = buildWorld(listOf(block), clock = clock, foregroundPkg = "com.target")
+        clock.advance(31 * 60_000L)
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        return world to world.block("a")!!
+    }
+
+    @Test
+    fun aLimitOverAtMidnightStillWaitsOutHoursThatStartThen() {
+        val clock = FakeClock() // 12:31 by then, a Thursday, outside its hours: they'd have stopped the limit counting
+        val (world, block) = spentLimit(clock, Schedule(all, window(0, 6)))
+        assertEquals("Fri 06:00", BlockTexts.clockTime(BlockTexts.freeAtWall(engine, world, block, clock)!!, clock))
+    }
+
+    @Test
+    fun blockedHoursSayWhenTheyAreBack() {
+        val clock = FakeClock() // 12:00 UTC
+        val block = strict(schedule = Schedule(all, window(9, 17)))
+        val world = buildWorld(listOf(block), clock = clock)
+        assertEquals(BlockTexts.Back("Back at 17:00", "Blocked hours · 5 h to go"), BlockTexts.back(engine, world, block, clock))
+    }
+
+    @Test
+    fun aSpentLimitIsBackAtMidnight() {
+        val clock = FakeClock()
+        val (world, block) = spentLimit(clock)
+        assertEquals(BlockTexts.Back("Back at midnight", "Today's 30 min is used up · 11 h 29 min to go"), BlockTexts.back(engine, world, block, clock))
+    }
+
+    @Test
+    fun aSpentLimitBeforeHoursIsBackWhenBothAreOver() {
+        val clock = FakeClock()
+        val (world, block) = spentLimit(clock, Schedule(all, window(0, 6)))
+        assertEquals("Back Fri 06:00", BlockTexts.back(engine, world, block, clock)!!.at)
+    }
+
+    @Test
+    fun aHabitHasNoTimeToBeBackBy() {
+        val clock = FakeClock()
+        val block = timerBlock("h")
+        assertNull(BlockTexts.back(engine, buildWorld(listOf(block), clock = clock), block, clock))
+    }
+
+    @Test
+    fun aHabitBlockSaysWhatItWants() {
+        val block = timerBlock("h")
+        assertEquals("Do its habits to open it.", BlockTexts.why(null, block))
+        assertEquals("Its habits are done: it's ready to open.", BlockTexts.why(null, block.copy(state = BlockState.EARNED)))
+        assertNull(BlockTexts.why(null, null))
+    }
+
+    @Test
+    fun anOpenBlockHasNothingToSay() {
+        val clock = FakeClock()
+        val block = strict(schedule = Schedule(all, window(21, 23)))
+        assertNull(BlockTexts.back(engine, buildWorld(listOf(block), clock = clock), block, clock))
+    }
+
+    @Test
+    fun theScreenSpeaksForWhatHoldsLongest() {
+        val clock = FakeClock() // 12:00 UTC
+        val soon = strict("soon", Schedule(all, window(9, 13)))
+        val late = strict("late", Schedule(all, window(9, 20)))
+        val habit = timerBlock("habit")
+        val world = buildWorld(listOf(habit, soon, late), clock = clock)
+        assertEquals("late", BlockTexts.leading(engine, world, listOf(habit, soon, late), clock)?.id)
+        assertEquals("habit", BlockTexts.leading(engine, world, listOf(habit), clock)?.id)
+        assertNull(BlockTexts.leading(engine, world, emptyList(), clock))
+    }
+
     @Test
     fun anOffBlockIsOff() {
         val clock = FakeClock()

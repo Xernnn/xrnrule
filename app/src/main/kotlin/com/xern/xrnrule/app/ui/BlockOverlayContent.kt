@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.xern.xrnrule.app.block.OverlayShieldPort
 import com.xern.xrnrule.app.ui.theme.KindColors
 import com.xern.xrnrule.app.ui.theme.LocalKinds
+import com.xern.xrnrule.app.ui.theme.GeistMono
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockMode
@@ -107,7 +108,8 @@ fun BlockOverlayContent(
         } else {
             emptyList()
         }
-        rememberTicker() // keeps a lockdown countdown live
+        rememberTicker() // keeps the time to go live
+        val back = ui?.back?.invoke()
 
         // Surface, not a bare Column: it sets LocalContentColor so headline Text with no
         // explicit colour isn't left as the default black on our dark ground.
@@ -124,71 +126,83 @@ fun BlockOverlayContent(
                     .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                     .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 20.dp),
             ) {
-                Column(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Gap(24)
-                    SubjectIcon(ui, block, strict)
-                    Gap(24)
-                    Text(
-                        when {
-                            ui?.useBrowser != null -> "$subject can't block sites"
-                            earned -> "Nice work!\n$subject is ready to open"
-                            block == null || strict -> "$subject is blocked"
-                            else -> "To unlock $subject,\nfinish your habits first!"
-                        },
-                        style = MaterialTheme.typography.headlineMedium,
-                        textAlign = TextAlign.Center,
-                    )
-                    val sentence = when {
-                        ui?.useBrowser != null -> "Your site blocks only work in ${ui.useBrowser.label}, so $subject stays closed while you have any."
-                        block == null -> null
-                        strict -> strictStatus(block, ui!!)
-                        earned -> null
-                        else -> whatsLeft(block, parts)
-                    }
-                    if (!sentence.isNullOrEmpty()) {
-                        Gap(10)
+                // Held by time, the screen is a few lines: they sit in the middle. Habits fill it from the top.
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = if (strict) Alignment.Center else Alignment.TopCenter) {
+                    Column(
+                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Gap(24)
+                        SubjectIcon(ui, block, strict)
+                        Gap(24)
                         Text(
-                            sentence,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            when {
+                                ui?.useBrowser != null -> "$subject can't block sites"
+                                earned -> "Nice work!\n$subject is ready to open"
+                                block == null || strict -> "$subject is blocked"
+                                else -> "To unlock $subject,\nfinish your habits first!"
+                            },
+                            style = MaterialTheme.typography.headlineMedium,
                             textAlign = TextAlign.Center,
                         )
-                    }
-                    if (ui != null && ui.triesToday >= 2) {
-                        Gap(10)
-                        Text(
-                            "${ordinal(ui.triesToday)} try today",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                    Gap(28)
-                    if (ui != null && strict) {
-                        Column(Modifier.fillMaxWidth()) { OverrideSection(ui, onBeginOverride, onClaimOverride, onCancelOverride) }
-                    }
-                    if (block != null && !strict && parts.isNotEmpty()) {
-                        HFCard(Modifier.fillMaxWidth()) {
-                            joinTag(block, parts)?.let { Tag(it); Gap(8) }
-                            parts.forEach { part ->
-                                if (part is HabitPart.Goal) {
-                                    GoalRow(
-                                        part,
-                                        onLog = onLogHabit,
-                                        onSetEntry = onSetHabitEntry,
-                                        onFocus = { id, _ -> onFocus(id) },
-                                        onCount = null, // no dialogs over another app: "+" adds one
-                                    )
-                                } else {
-                                    OverlayPartRow(block, part, armed = block.state == BlockState.ARMED, onToggleItem, onSetTimer)
+                        if (strict && back != null) {
+                            Gap(14)
+                            Text(
+                                back.at,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontFamily = GeistMono,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        val sentence = when {
+                            ui?.useBrowser != null -> "Your site blocks only work in ${ui.useBrowser.label}, so $subject stays closed while you have any."
+                            block == null -> null
+                            strict -> back?.why
+                            earned -> null
+                            else -> whatsLeft(block, parts)
+                        }
+                        if (!sentence.isNullOrEmpty()) {
+                            Gap(10)
+                            Text(
+                                sentence,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        if (ui != null && ui.triesToday >= 2) {
+                            Gap(10)
+                            Text(
+                                "${ordinal(ui.triesToday)} try today",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                        Gap(28)
+                        if (ui != null && strict) {
+                            Column(Modifier.fillMaxWidth()) { OverrideSection(ui, onBeginOverride, onClaimOverride, onCancelOverride) }
+                        }
+                        if (block != null && !strict && parts.isNotEmpty()) {
+                            HFCard(Modifier.fillMaxWidth()) {
+                                joinTag(block, parts)?.let { Tag(it); Gap(8) }
+                                parts.forEach { part ->
+                                    if (part is HabitPart.Goal) {
+                                        GoalRow(
+                                            part,
+                                            onLog = onLogHabit,
+                                            onSetEntry = onSetHabitEntry,
+                                            onFocus = { id, _ -> onFocus(id) },
+                                            onCount = null, // no dialogs over another app: "+" adds one
+                                        )
+                                    } else {
+                                        OverlayPartRow(block, part, armed = block.state == BlockState.ARMED, onToggleItem, onSetTimer)
+                                    }
                                 }
                             }
                         }
+                        Gap(16)
                     }
-                    Gap(16)
                 }
                 if (earned) {
                     EarnedActions(block!!.id, block.reward.unlockDurationMs, ui, onRedeem)
@@ -204,8 +218,22 @@ fun BlockOverlayContent(
                     container = MaterialTheme.colorScheme.onSurface,
                     content = MaterialTheme.colorScheme.surface,
                 )
+                if (ui != null && strict) OverrideOffer(ui, onBeginOverride)
             }
         }
+    }
+}
+
+/** The way round, under the way out: quiet on purpose, and it still costs the wait and the sentence. */
+@Composable
+private fun OverrideOffer(ui: OverlayShieldPort.OverlayUi, onBegin: (Set<String>) -> Unit) {
+    if (ui.overrideRejection != null || ui.overrideReadyAtElapsed != null) return
+    TextButton(onClick = { onBegin(ui.blockerIds) }, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Need it anyway? Take ${formatDuration(ui.overrideGrantMs)} more",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -244,18 +272,6 @@ private fun KindIcon(ui: OverlayShieldPort.OverlayUi?, block: Block?, strict: Bo
             tint = kind.color,
             modifier = Modifier.size(40.dp),
         )
-    }
-}
-
-/** When a daily limit / schedule / lockdown lets go — status, not instructions. */
-private fun strictStatus(block: Block, ui: OverlayShieldPort.OverlayUi): String {
-    val freeAt = ui.freeAtWall
-    return when (ui.reason) {
-        BlockReason.BREAK -> "A break after ${formatDuration(block.sessionMs)} in a row · ${formatRemaining(ui.rowBreakRemainingMs)} left"
-        BlockReason.LIMIT -> "Today's ${formatDuration(ui.allowanceMs ?: block.dailyAllowanceMs)} is used up. It opens again at midnight."
-        BlockReason.HOURS -> if (freeAt != null) "Blocked until ${formatClockTime(freeAt)}." else ""
-        BlockReason.LOCKDOWN -> ui.freeInMs?.let { "Locked down for ${formatRemaining(it)} more." }.orEmpty()
-        BlockReason.HABIT, null -> ""
     }
 }
 
@@ -342,19 +358,8 @@ private fun OverrideSection(
         }
         else -> return
     }
-    val readyAt = ui.overrideReadyAtElapsed
-    if (readyAt == null) {
-        OutlinePill("Take $minutes more", onClick = { onBegin(ui.blockerIds) })
-        Gap(6)
-        Text(
-            "Wait ${ui.overrideWaitMs / 1000} s, then type a sentence.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        return
-    }
+    // Not started: the offer is under the Leave button (OverrideOffer).
+    val readyAt = ui.overrideReadyAtElapsed ?: return
     var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
     LaunchedEffect(readyAt) {
         while (true) {

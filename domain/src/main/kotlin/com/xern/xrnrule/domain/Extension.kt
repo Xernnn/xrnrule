@@ -64,6 +64,10 @@ object ExtensionApi {
         val showClock: Boolean = true,
         val rules: String = "",
         val leave: Boolean = false,
+        /** While blocked: the block keeping it so, when it's back and why, for a page to say so. */
+        val block: String? = null,
+        val back: String? = null,
+        val why: String? = null,
     )
 
     fun rules(world: World, page: String?): SiteRules {
@@ -95,6 +99,8 @@ object ExtensionApi {
         val left = if (blocked) null else engine.timeLeft(world, null, site, clock)
         val label = left?.blockId?.let { world.block(it)?.name }
             ?: world.blocks.firstOrNull { it.coversSite(site) }?.name
+        val lead = if (blocked) BlockTexts.leading(engine, world, engine.blockersOf(world, null, site, clock), clock) else null
+        val back = lead?.let { BlockTexts.back(engine, world, it, clock) }
         return SiteVerdict(
             site = site,
             blocked = blocked,
@@ -103,6 +109,9 @@ object ExtensionApi {
             label = label,
             showClock = rules.showClock,
             rules = rules.v,
+            block = lead?.name,
+            back = back?.at,
+            why = BlockTexts.why(back, lead),
         )
     }
 }

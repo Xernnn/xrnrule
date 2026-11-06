@@ -32,6 +32,16 @@ async function post(path, body) {
   return res.json().catch(() => ({}));
 }
 
+/**
+ * The page redraws every second, and a button redrawn under a held press never gets its click: the
+ * browser sees the press and the release land on two different elements. So no redraw during a press.
+ */
+let pressing = false;
+window.addEventListener("pointerdown", () => (pressing = true), true);
+for (const end of ["pointerup", "pointercancel"]) {
+  window.addEventListener(end, () => setTimeout(() => (pressing = false)), true); // after the click it causes
+}
+
 async function refresh() {
   try {
     const subject = onBlockPage ? `?${new URLSearchParams(blockedApp ? { app: blockedApp } : { site: blockedSite ?? "" })}` : "";
@@ -192,6 +202,18 @@ function how(b) {
 
 // ---- views ---------------------------------------------------------------------------------
 
+/** Off the block page: back where you came from; with nowhere to go, the tab closes or, failing that, all blocks. */
+let leaving = null;
+function leaveBlockPage() {
+  if (history.length > 1) history.back();
+  else window.close();
+  leaving = setTimeout(() => location.replace("/"), 1200);
+}
+window.addEventListener("pagehide", () => clearTimeout(leaving));
+
+/** A block held by time, on the block page: nothing to do here, so only its rules, in a line. */
+const ruleLine = (b) => h("p", { class: "rule" }, h("b", {}, b.name), `: ${how(b) ?? b.hoursText ?? b.headline.text}`);
+
 /**
  * The block's picture, as the phone's card has one: its site's icon, up to four of them, or the
  * first letter of its laptop app (the page has no app icons).
@@ -247,7 +269,7 @@ function blockCard(b) {
         i.text))),
     how(b) && h("div", { class: "how" }, how(b)),
     h("div", { class: "targets" },
-      b.phoneApps > 0 && h("span", { class: "target" }, `${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
+      !onBlockPage && b.phoneApps > 0 && h("span", { class: "target" }, `${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
       b.shownSites.map((s) => h("span", { class: "target" }, siteIcon(s), s)),
       b.exceptSites.map((s) => h("span", { class: "target except", title: "Left alone" }, `not ${s}`)),
       b.desktopApps.map((a) => h("span", { class: "target" }, `💻 ${appName(a)}`))),
@@ -262,6 +284,7 @@ function blockCard(b) {
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+// Minutes past midnight from "22:00", "7:30" or "0730"; null for anything else, a half-typed time included.
 const minutesOf = (text) => {
   const m = /^(\d{1,2}):?(\d{2})$/.exec(text.trim());
   return !m || +m[1] > 23 || +m[2] > 59 ? null : +m[1] * 60 + +m[2];
@@ -284,7 +307,6 @@ async function openForm(b) {
         unlockMin: min(b.unlockMs),
         selfPaced: b.selfPaced,
         devices: b.devices,
-// Minutes past midnight from "22:00", "7:30" or "0730"; null for anything else, a half-typed time included.
         dailyOn: !b.hasLimit || b.allowanceMs > 0,
         limitOn: b.hasLimit,
         habitFirst: b.habitFirst,
@@ -619,9 +641,7 @@ function buyView() {
   if (s.overrideRejection) return null;
   if (!s.overrideReadyAtWall) {
     buyNode = null;
-    return h("div", { class: "buy" },
-      h("button", { class: "btn", onclick: () => buy("begin") }, `Take ${minutes} more minutes`),
-      h("span", { class: "note" }, `Wait ${Math.round(state.settings.waitMs / 1000)} s, then type a sentence.`));
+    return h("div", { class: "buy" }, h("button", { class: "quiet", onclick: () => buy("begin") }, `Need it anyway? Take ${minutes} more minutes`));
   }
   if (!buyNode || buyKey !== s.overrideReadyAtWall) {
     buyKey = s.overrideReadyAtWall;
@@ -702,14 +722,17 @@ function alerts() {
 }
 
 function render() {
+  if (pressing) return;
   const app = document.getElementById("app");
   const scrollY = window.scrollY;
   const header = h("header", { class: "bar" }, h("div", { class: "wrap" },
-    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), h("span", { class: "wordmark" }, "xrnrule"), h("small", {}, "laptop"))),
+    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), h("span", { class: "wordmark" }, "xrnrule"), !onBlockPage && h("small", {}, "laptop"))),
     h("span", { class: "spacer" }),
-    state && h("span", { class: "dot" + (!state.syncConfigured ? " idle" : state.sync?.ok === false ? " off" : "") },
-      !state.syncConfigured ? "Local only" : state.sync?.ok === false ? "Offline" : "Synced"),
-    state?.habitsUrl && h("a", { class: "link", href: state.habitsUrl, target: "_blank" }, "Habits")));
+    onBlockPage ? h("a", { class: "link", href: "/" }, "All blocks") : [
+      state && h("span", { class: "dot" + (!state.syncConfigured ? " idle" : state.sync?.ok === false ? " off" : "") },
+        !state.syncConfigured ? "Local only" : state.sync?.ok === false ? "Offline" : "Synced"),
+      state?.habitsUrl && h("a", { class: "link", href: state.habitsUrl, target: "_blank" }, "Habits"),
+    ]));
 
   if (!state) {
     app.replaceChildren(header, h("main", { class: "wrap" }, alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d))));
@@ -718,19 +741,31 @@ function render() {
 
   let blocks = state.blocks;
   let hero = null;
+  let way = null;
+  let rules = null;
   if (onBlockPage) {
-    blocks = blocks.filter((b) => (blockedApp && b.desktopApps.includes(blockedApp)) ||
-      (blockedSite && b.sites.some((s) => siteMatches(blockedSite, s)) && !b.exceptSites.some((s) => siteMatches(blockedSite, s))));
-    const still = state.subject ? state.subject.blocked : blockedApp ? state.blockedApps.includes(blockedApp) : siteBlocked(blockedSite ?? "");
+    const s = state.subject;
+    const still = s ? s.blocked : blockedApp ? state.blockedApps.includes(blockedApp) : siteBlocked(blockedSite ?? "");
+    // Only what's holding this: a block over the same site that's open has nothing to say here.
+    blocks = blocks.filter((b) => s?.blockers.includes(b.id));
     const what = blockedApp ? appName(blockedApp) : blockedSite;
+    const timer = blocks.some((b) => b.reason === "HABIT" && b.state === "ARMED" && (b.trigger === "TIMER" || b.trigger === "COMBINED"));
     if (!still && backUrl && /^https?:/.test(backUrl)) {
       location.replace(backUrl);
       return;
     }
-    hero = h("section", { class: "card hero" + (still ? "" : " open") },
-      h("h2", {}, blockedSite && !blockedApp && siteIcon(blockedSite), still ? `${what} is blocked` : `${what} is open`),
-      h("p", {}, still ? "Here's what opens it. You can wait on this page: a timer habit counts here." : blockedApp ? "You can start it again." : "Go back to it."),
-      still && buyView());
+    hero = h("section", { class: "hero" + (still ? "" : " open") },
+      blockedSite && !blockedApp && siteIcon(blockedSite),
+      h("h2", {}, still ? `${what} is blocked` : `${what} is open`),
+      still && s?.back && h("div", { class: "back" }, s.back),
+      h("p", {}, still ? s?.why ?? "xrnrule is keeping this closed." : blockedApp ? "You can start it again." : "Go back to it."),
+      still && timer && h("p", { class: "note" }, "A timer counts while you wait on this page."));
+    way = still && h("section", { class: "way" },
+      h("div", { class: "actions" }, h("button", { class: "btn primary", onclick: leaveBlockPage }, blockedApp ? "Close this page" : "Leave this site")),
+      buyView());
+    // Time holds these, so they have nothing to do here: only a habit gets its card.
+    rules = blocks.filter((b) => b.reason !== "HABIT").map(ruleLine);
+    blocks = blocks.filter((b) => b.reason === "HABIT");
     document.title = still ? `${what} is blocked · xrnrule` : "xrnrule";
   }
 
@@ -738,7 +773,7 @@ function render() {
     ? h("div", { class: "actions" }, h("span", { class: "note" }, `On a break: ${clock(state.pauseRemainingMs)} left`), h("button", { class: "btn", onclick: () => act({ type: "endPause" }) }, "End it now"))
     : h("button", { class: "btn", disabled: !state.canPause || !!guard, title: state.canPause ? "Lifts SOFT blocks for 15 minutes, once a day" : "Today's break is used", onclick: () => act({ type: "pause" }) }, state.canPause ? "Take a 15-min break" : "Break used today");
 
-  app.replaceChildren(header, h("main", { class: "wrap" },
+  app.replaceChildren(header, h("main", { class: "wrap" + (onBlockPage ? " focus" : "") },
     alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d)),
     hero,
     message && h("div", { class: "alert" }, message),
@@ -749,10 +784,12 @@ function render() {
       pause,
       !form && h("button", { class: "btn primary", onclick: () => openForm(null) }, "+ New block")),
     form && !form.blockId && !onBlockPage && h("section", { class: "card" }, formView(null)),
-    blocks.length ? h("div", { class: "blocks" }, blocks.map(blockCard)) : !form && h("section", { class: "card note" }, onBlockPage ? "No block covers this any more." : "No blocks yet. Make one here, or in xrnrule on the phone."),
+    blocks.length ? h("div", { class: "blocks" }, blocks.map(blockCard)) : !form && !onBlockPage && h("section", { class: "card note" }, "No blocks yet. Make one here, or in xrnrule on the phone."),
     !onBlockPage && settingsView(),
-    h("div", { class: "foot" },
-      onBlockPage ? h("a", { href: "/" }, "All blocks") : h("span", {}, state.loop?.ok === false ? `Habits: ${state.loop.message}` : ""),
+    way,
+    rules,
+    !onBlockPage && h("div", { class: "foot" },
+      h("span", {}, state.loop?.ok === false ? `Habits: ${state.loop.message}` : ""),
       h("span", {}, state.lastContactWall ? `Home server last seen ${time.format(state.lastContactWall)}` : state.sync ? `Last try ${time.format(state.sync.atWallMs)}` : ""))));
   window.scrollTo(0, scrollY);
 }

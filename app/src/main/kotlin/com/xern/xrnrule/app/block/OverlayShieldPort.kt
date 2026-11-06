@@ -33,15 +33,14 @@ import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.BlockOverlayContent
 import com.xern.xrnrule.app.ui.GoalInfo
-import com.xern.xrnrule.app.ui.freeAtWall
 import com.xern.xrnrule.app.ui.goalInfo
 import com.xern.xrnrule.app.web.ExtensionWebsiteMonitor
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEvent
-import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.BlockTexts
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.OverrideRejection
 import com.xern.xrnrule.domain.RejectReason
@@ -145,9 +144,7 @@ class OverlayShieldPort(
         val clock = store.clock
         val blockers = engine.blockersOf(world, foregroundPkg.takeIf { appBlocked }, foregroundSite.takeIf { !appBlocked }, clock)
         val blockerIds = blockers.map { it.id }.toSet()
-        // What a habit can't lift (I22, I44) is the one to explain.
-        val block = blockers.firstOrNull { engine.blockReason(world, it, clock).let { why -> why != null && why != BlockReason.HABIT } }
-            ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
+        val block = BlockTexts.leading(engine, world, blockers, clock)
         val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
         val subject = if (appBlocked) appLabel(foregroundPkg!!) else Sites.hostOf(foregroundSite!!)
         uiState.value = OverlayUi(
@@ -161,16 +158,13 @@ class OverlayShieldPort(
             habitAppLabel = block?.trigger?.habitPackages
                 ?.takeIf { it.isNotEmpty() }
                 ?.joinToString(" or ") { appLabel(it) },
-            freeAtWall = block?.let { freeAtWall(it, world, engine, clock) },
-            freeInMs = block?.let { freeAtWall(it, world, engine, clock) }?.let { it - clock.nowWallMs() },
-            allowanceMs = block?.takeIf { it.hasLimit }?.dailyAllowanceMs,
+            back = block?.let { held -> { BlockTexts.back(engine, world, held, clock) } },
             timerMs = block?.let { world.progress[it.id]?.accumulatedMs } ?: 0,
             timerRunning = block?.let { world.progress[it.id]?.timerRunning } == true,
             redeemRejection = block?.takeIf { it.state == BlockState.EARNED }?.let { engine.redeemRejection(world, it.id, clock) },
             unlockUsedTodayMs = engine.unlockCommittedMs(world, clock), // I9: open unlocks included
             othersOpen = world.sessions.isNotEmpty(),
             dailyCapMs = world.settings.dailyCapMs,
-            rowBreakRemainingMs = block?.let { engine.rowBreakRemainingMs(world, it, clock) } ?: 0,
             goals = block?.let { world.goalInfo(it.id, engine, clock) }.orEmpty(),
             focusHabitId = world.focus?.takeIf { it.running }?.habitId,
             blockerIds = blockerIds,
@@ -360,12 +354,8 @@ class OverlayShieldPort(
         val items: List<ChecklistItem>,
         /** Set when [Block.trigger] has `habitPackages` — the app(s) the timer actually counts in. */
         val habitAppLabel: String? = null,
-        /** Non-HABIT blocks: when the block lets go (wall ms), if known. */
-        val freeAtWall: Long? = null,
-        /** The same, as time from now. */
-        val freeInMs: Long? = null,
-        /** ALLOWANCE blocks: the daily allowance that has been used up. */
-        val allowanceMs: Long? = null,
+        /** Held by time: when it's back and why, what the screen leads with. Asked each second, since time alone moves it. */
+        val back: (() -> BlockTexts.Back?)? = null,
         /** TIMER / COMBINED: time counted so far, and whether the timer is running. */
         val timerMs: Long = 0,
         val timerRunning: Boolean = false,
@@ -375,8 +365,6 @@ class OverlayShieldPort(
         val unlockUsedTodayMs: Long = 0,
         val othersOpen: Boolean = false,
         val dailyCapMs: Long = 0,
-        /** ALLOWANCE with a row rule: what's left of a forced break (I32). */
-        val rowBreakRemainingMs: Long = 0,
         /** The blocks keeping this blocked; buying minutes is for all of them at once (I34). */
         val blockerIds: Set<String> = emptySet(),
         /** Why minutes can't be bought past it, or null if they can. */

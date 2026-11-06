@@ -111,9 +111,23 @@ a:hover { text-decoration: underline; }
 .summary .stat span { font-size: 12.5px; color: var(--muted); }
 .summary .spacer { min-width: 1px; }
 
-.hero { text-align: center; padding: 32px 20px; }
-.hero h2 { font-size: 26px; font-weight: 900; margin: 0 0 6px; }
+/* The block page: one column, in the phone's order: what's blocked, when it's back, leave, the rest. */
+.wrap.focus { max-width: 520px; padding-top: 7vh; }
+.focus .blocks { display: block; margin-top: 18px; }
+.hero { text-align: center; }
+.hero h2 { font-size: 26px; font-weight: 800; margin: 0 0 6px; overflow-wrap: anywhere; }
 .hero p { margin: 0; color: var(--muted); }
+.hero .favicon { display: block; width: 72px; height: 72px; margin: 0 auto 20px; border-radius: 18px; }
+.hero .back { font: 700 34px/1.2 "Geist Mono", ui-monospace, monospace; letter-spacing: -0.02em; margin: 18px 0 6px; }
+.hero .note { margin-top: 6px; }
+.way { margin-top: 26px; text-align: center; }
+.way p { margin: 0; color: var(--muted); }
+.way > .actions { display: flex; justify-content: center; }
+.way > .actions .btn.primary { background: var(--text); color: var(--bg); padding: 12px 30px; font-size: 15px; }
+.quiet { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; padding: 2px 4px; }
+.quiet:hover { color: var(--text); }
+.rule { font-size: 13px; color: var(--muted); text-align: center; margin: 14px 0 0; }
+.rule b { color: var(--text); font-weight: 600; }
 .hero.open h2 { color: var(--open); }
 
 /* A block's card: its icons, its name, then what it is doing as a pill (BlocksScreen's card). */
@@ -146,7 +160,6 @@ a:hover { text-decoration: underline; }
 .target { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); display: inline-flex; align-items: center; }
 /* A site's own icon, on white so a dark one still shows on the dark theme. */
 .favicon { width: 16px; height: 16px; padding: 1px; border-radius: 4px; background: #fff; margin-right: 6px; object-fit: contain; }
-.hero h2 .favicon { width: 26px; height: 26px; vertical-align: -4px; margin-right: 10px; }
 .how { font-size: 13px; color: var(--muted); }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
@@ -207,6 +220,7 @@ a:hover { text-decoration: underline; }
 .form input[type="text"], .form input[type="number"], .form select { border: 0; background: var(--surface-2); border-radius: 12px; padding: 9px 12px; }
 .form input[type="number"] { max-width: 120px; }
 .form input[type="text"] { width: 100%; }
+.form input.clock { max-width: 120px; font-variant-numeric: tabular-nums; }
 .check { display: inline-flex; gap: 10px; align-items: center; font-size: 14px; cursor: pointer; }
 .check.inline { font-size: 11.5px; gap: 6px; }
 .check.inline input[type="checkbox"] { width: 16px; height: 16px; border-width: 1.6px; }
@@ -220,7 +234,6 @@ a:hover { text-decoration: underline; }
 .daypick { display: flex; gap: 8px; flex-wrap: wrap; }
 .daypick label { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 700; cursor: pointer; }
 .daypick label:has(input:checked) { background: var(--day); color: #fff; }
-.form input.clock { max-width: 120px; font-variant-numeric: tabular-nums; }
 .daypick input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
 .daypick label:has(input:focus-visible) { outline: 2px solid var(--day); outline-offset: 2px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

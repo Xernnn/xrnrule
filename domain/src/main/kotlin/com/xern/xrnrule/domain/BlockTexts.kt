@@ -81,9 +81,14 @@ object BlockTexts {
             BlockReason.LOCKDOWN -> return clock.nowWallMs() + engine.lockdownRemainingMs(world, block.id, clock)
             else -> Unit
         }
-        val hoursEnd = if (engine.inBlockedHours(block, clock)) {
+        val breakEnd = engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
+        val limitEnd = now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            .takeIf { engine.limitHolds(world, block, clock) && engine.overrideRemainingMs(world, block.id, clock) == 0L }
+        // Hours are asked about from when the rest lets go: a limit over at midnight frees nothing if hours start then.
+        val after = listOfNotNull(breakEnd, limitEnd).maxOrNull() ?: clock.nowWallMs()
+        val hoursEnd = if (engine.inBlockedHours(block, AtClock(after, zone))) {
             // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
-            val start = now.withSecond(0).withNano(0)
+            val start = Instant.ofEpochMilli(after).atZone(zone).withSecond(0).withNano(0)
             (1..7 * 24 * 60).asSequence()
                 .map { start.plusMinutes(it.toLong()) }
                 .firstOrNull { t -> !engine.inBlockedHours(block, AtClock(t.toInstant().toEpochMilli(), zone)) }
@@ -91,11 +96,46 @@ object BlockTexts {
         } else {
             null
         }
-        val breakEnd = engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
-        val limitEnd = now.toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            .takeIf { engine.limitHolds(world, block, clock) && engine.overrideRemainingMs(world, block.id, clock) == 0L }
         return listOfNotNull(hoursEnd, breakEnd, limitEnd).maxOrNull()
     }
+
+    /** What a block screen leads with for a block held by time: when it's back, and why it isn't now. */
+    data class Back(val at: String, val why: String)
+
+    /** Null while a habit could open [block] or nothing holds it: the screen shows the habits then. */
+    fun back(engine: BlockEngine, world: World, block: Block, clock: Clock): Back? {
+        val why = when (engine.blockReason(world, block, clock)) {
+            null, BlockReason.HABIT -> return null
+            BlockReason.LOCKDOWN -> "Locked down"
+            BlockReason.HOURS -> "Blocked hours"
+            BlockReason.BREAK -> "A break after ${duration(block.sessionMs)} in a row"
+            BlockReason.LIMIT -> if (block.dailyAllowanceMs > 0) "Today's ${duration(block.dailyAllowanceMs)} is used up" else "Today's limit is used up"
+        }
+        val freeAt = freeAtWall(engine, world, block, clock) ?: return Back("Blocked for now", why)
+        return Back(backAt(freeAt, clock), "$why · ${duration(freeAt - clock.nowWallMs())} to go")
+    }
+
+    /** The line under a block screen's headline: why it's held, or what a habit block asks for. */
+    fun why(back: Back?, lead: Block?): String? = back?.why ?: lead?.let {
+        if (it.state == BlockState.EARNED) "Its habits are done: it's ready to open." else "Do its habits to open it."
+    }
+
+    /** "Back at 14:00", "Back at midnight", "Back Fri 14:00". */
+    private fun backAt(wallMs: Long, clock: Clock): String {
+        val at = Instant.ofEpochMilli(wallMs).atZone(clock.zone())
+        val today = Instant.ofEpochMilli(clock.nowWallMs()).atZone(clock.zone()).toLocalDate()
+        return when {
+            at.toLocalDate() == today -> "Back at ${clockTime(wallMs, clock)}"
+            at.toLocalDate() == today.plusDays(1) && at.hour == 0 && at.minute == 0 -> "Back at midnight"
+            else -> "Back ${clockTime(wallMs, clock)}"
+        }
+    }
+
+    /** Which of [blockers] a block screen speaks for: what no habit lifts (I22, I44), the longest first. */
+    fun leading(engine: BlockEngine, world: World, blockers: List<Block>, clock: Clock): Block? =
+        blockers.filter { engine.blockReason(world, it, clock).let { why -> why != null && why != BlockReason.HABIT } }
+            .maxByOrNull { freeAtWall(engine, world, it, clock) ?: Long.MAX_VALUE }
+            ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
 
     /** A clock stopped at [wall], to ask the engine about another moment. */
     private class AtClock(private val wall: Long, private val zone: ZoneId) : Clock {

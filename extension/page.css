@@ -41,3 +41,14 @@ input[type="number"] { width: 120px; padding: 8px 10px; border: 1px solid var(--
 .row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
 .row:first-of-type { border-top: 0; }
 @media (max-width: 480px) { .card { margin: 16px; } }
+
+/* The block page: one column in the middle of the screen, in the order of the app's block screen. */
+[hidden] { display: none !important; }
+body.shield { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.shield main { width: 100%; max-width: 420px; padding: 32px 24px; text-align: center; }
+.shield img { display: block; margin: 0 auto; border-radius: 12px; }
+.shield h1 { font-size: 24px; margin: 20px 0 0; }
+.shield .back { font: 700 32px/1.2 ui-monospace, "Geist Mono", "SFMono-Regular", Menlo, monospace; letter-spacing: -0.02em; color: var(--text); margin: 18px 0 4px; }
+.shield .actions { flex-direction: column; gap: 10px; margin-top: 28px; }
+.shield .btn { width: 100%; padding: 13px 16px; border-radius: 999px; text-align: center; text-decoration: none; font-weight: 600; }
+.shield .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }

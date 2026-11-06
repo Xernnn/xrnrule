@@ -31,6 +31,25 @@
     open.hidden = false;
   }
 
+  const leaveButton = document.getElementById("leave");
+  const quiet = document.getElementById("why").textContent;
+  /** Without xrnrule there's no telling when it's back, only that it stays blocked. */
+  const offline = android
+    ? "xrnrule isn't answering, so this stays blocked. Open it and this page comes back by itself."
+    : "The xrnrule service isn't running on this laptop, so this stays blocked until it does.";
+
+  /** What xrnrule says about the site, or that it says nothing. */
+  function show(v) {
+    const off = !!v.offline;
+    const when = document.getElementById("back");
+    when.textContent = off ? "" : v.back ?? "";
+    when.hidden = !when.textContent;
+    document.getElementById("why").textContent = off ? offline : v.why ?? quiet;
+    // Leaving is the point of this page, unless opening xrnrule is what gets it going again.
+    leaveButton.classList.toggle("primary", !(off && android));
+    open.classList.toggle("primary", off && android);
+  }
+
   let gone = false;
   let staying = null;
 
@@ -52,7 +71,7 @@
     setTimeout(() => location.replace("about:blank"), 300);
   }
 
-  document.getElementById("back").addEventListener("click", leave);
+  leaveButton.addEventListener("click", leave);
   window.addEventListener("pagehide", () => clearTimeout(staying));
   // Back to this page from the history cache (Forward after leaving): it stands in again.
   window.addEventListener("pageshow", (e) => {
@@ -86,7 +105,7 @@
     if (gone || !site || document.visibilityState !== "visible") return;
     ask(document.hasFocus(), (v) => {
       if (!v || gone) return;
-      document.getElementById("offline").hidden = !v.offline;
+      show(v);
       if (v.leave) {
         leave();
       } else if (!v.blocked && !v.offline) {
