@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
 import androidx.compose.ui.Alignment
+import androidx.core.content.edit
 import androidx.core.content.res.ResourcesCompat
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.domain.CornerClock
@@ -18,10 +19,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class ClockCorner(val label: String, val gravity: Int, val alignment: Alignment) {
-    TOP_LEFT("Top left", Gravity.TOP or Gravity.LEFT, Alignment.TopStart),
-    TOP_RIGHT("Top right", Gravity.TOP or Gravity.RIGHT, Alignment.TopEnd),
-    BOTTOM_LEFT("Bottom left", Gravity.BOTTOM or Gravity.LEFT, Alignment.BottomStart),
-    BOTTOM_RIGHT("Bottom right", Gravity.BOTTOM or Gravity.RIGHT, Alignment.BottomEnd),
+    TOP_LEFT("Top left", Gravity.TOP or Gravity.START, Alignment.TopStart),
+    TOP_RIGHT("Top right", Gravity.TOP or Gravity.END, Alignment.TopEnd),
+    BOTTOM_LEFT("Bottom left", Gravity.BOTTOM or Gravity.START, Alignment.BottomStart),
+    BOTTOM_RIGHT("Bottom right", Gravity.BOTTOM or Gravity.END, Alignment.BottomEnd),
 }
 
 enum class ClockSize(val label: String, val sp: Float) {
@@ -60,12 +61,12 @@ object CornerClockLook {
 
     fun set(value: ClockLook) {
         state.value = value
-        prefs?.edit()
-            ?.putBoolean("on", value.on)
-            ?.putString("corner", value.corner.name)
-            ?.putString("size", value.size.name)
-            ?.putFloat("strength", value.strength)
-            ?.apply()
+        prefs?.edit {
+            putBoolean("on", value.on)
+            putString("corner", value.corner.name)
+            putString("size", value.size.name)
+            putFloat("strength", value.strength)
+        }
     }
 }
 
