@@ -62,6 +62,7 @@ class BlockerForegroundService : LifecycleService() {
     private val awake = MutableStateFlow(true)
     private lateinit var overlay: OverlayShieldPort
     private lateinit var settingsGuard: SettingsGuardOverlay
+    private lateinit var cornerClock: CornerClockOverlay
     private lateinit var notifications: Notifications
 
     /** The unlock session already warned about, so the 30 s warning fires once per unlock. */
@@ -117,6 +118,7 @@ class BlockerForegroundService : LifecycleService() {
         )
         container.store.shield = overlay
         settingsGuard = SettingsGuardOverlay(this, container.hardcoreGuard)
+        cornerClock = CornerClockOverlay(this)
 
         startAsForeground()
 
@@ -190,6 +192,7 @@ class BlockerForegroundService : LifecycleService() {
                     container.clockGuard.check()
                 }
                 if (seconds % 5 == 0) checkHealth(container.store.world.value)
+                updateCornerClock()
                 seconds++
                 val today = container.store.world.value.habitDay(container.clock)
                 if (today != habitDay) {
@@ -208,6 +211,7 @@ class BlockerForegroundService : LifecycleService() {
                 .collect { (world, fg, other) ->
                     overlay.render(world, fg.pkg, fg.site, other)
                     settingsGuard.render(fg.pkg, world)
+                    updateCornerClock()
                     notifications.updateStatus(notifications.status(world, container.engine, container.clock))
                 }
         }
@@ -239,7 +243,7 @@ class BlockerForegroundService : LifecycleService() {
                 if (warnedSession == key) return
                 warnedSession = key
                 val name = world.block(effect.blockId)?.name ?: "Your unlock"
-                notifications.alert(Notifications.ALERT_ENDING, "$name locks in ${(effect.remainingMs + 999) / 1000} s", "Finish up.")
+                notifications.alert(Notifications.ALERT_ENDING, "$name locks in ${(effect.remainingMs + 999) / 1000} s", "Finish up.", gone = ALERT_GONE_MS)
             }
             is Effect.TamperDetected -> notifications.alert(
                 Notifications.ALERT_TAMPER,
@@ -343,7 +347,17 @@ class BlockerForegroundService : LifecycleService() {
         }
     }
 
+    /** The time left on the app in front, unless the block screen is over it. Sites have the extension's own clock. */
+    private fun updateCornerClock() {
+        val container = (application as XrnruleApp).container
+        val look = CornerClockLook.look.value
+        val pkg = foreground.value.pkg?.takeIf { look.on && !overlay.visible.value }
+        val left = pkg?.let { container.engine.timeLeft(container.store.world.value, it, null, container.clock) }
+        cornerClock.show(left?.ms?.takeIf { it > 0 }, look)
+    }
+
     override fun onDestroy() {
+        cornerClock.hide()
         unregisterReceiver(screenReceiver)
         val container = (application as XrnruleApp).container
         container.siteUsage.onSite(null)
@@ -411,6 +425,8 @@ class BlockerForegroundService : LifecycleService() {
     }
 
     companion object {
+        /** A warning about the next 30 s is out of date soon: it doesn't stay around. */
+        private const val ALERT_GONE_MS = 10_000L
         /** How long sync may fail before the "not syncing" alert. */
         private const val SYNC_ALERT_MS = 60 * 60 * 1000L
 

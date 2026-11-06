@@ -59,6 +59,9 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Status at a glance.** The notification shows what's open and for how long, warns 30 s
   before an unlock ends, and says so if blocking stops working. On limited sites the extension
   can show a corner clock of what runs out first, and warns at 10, 5, 3 and 1 minutes left.
+- **Corner timer.** Inside an app with a limit or an unlock, the time left sits faintly in a
+  corner. It stands out for a few seconds at 10, 5, 3 and 1 minutes left, and for the last 30
+  seconds. Settings → Corner timer moves it, sizes it, sets how faint it is or turns it off.
 - **App lock.** Opening the app, or coming back to it after 30 seconds away, asks for your
   fingerprint (or the phone's screen-lock PIN). The block screen isn't behind it: that's how you
   get through a block. Settings → App lock turns it off. Android 9 or later.

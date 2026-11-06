@@ -2,6 +2,7 @@ package com.xern.xrnrule.app
 
 import android.app.Application
 import com.xern.xrnrule.app.block.BlockerForegroundService
+import com.xern.xrnrule.app.block.CornerClockLook
 import com.xern.xrnrule.app.block.ServiceWatchdogWorker
 import com.xern.xrnrule.app.data.AppContainer
 import com.xern.xrnrule.app.loop.LoopLinks
@@ -22,6 +23,7 @@ class XrnruleApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Appearance.init(this)
+        CornerClockLook.init(this)
         container = AppContainer(this)
         // xrnloops' habit list shows what each habit unlocks here; tell it when that changes.
         LoopLinks.start(this)

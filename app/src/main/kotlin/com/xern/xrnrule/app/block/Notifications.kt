@@ -126,8 +126,10 @@ class Notifications(private val context: Context) {
     }
 
     /** [tap] opens the app unless it says otherwise (an update's install confirmation). */
-    fun alert(id: Int, title: String, text: String, tap: PendingIntent = openApp()) {
+    /** [gone]: takes itself away after this long, for what's only true for a moment. */
+    fun alert(id: Int, title: String, text: String, tap: PendingIntent = openApp(), gone: Long = 0) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
+            .setTimeoutAfter(gone)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))

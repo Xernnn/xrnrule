@@ -120,10 +120,11 @@
       display: none; align-items: center; gap: 7px; right: 12px; bottom: 12px;
       padding: 5px 10px 5px 8px; border-radius: 999px;
       font-variant-numeric: tabular-nums;
-      opacity: .6; transition: opacity .15s ease;
+      opacity: .5; transition: opacity .3s ease;
       user-select: none;
     }
-    .clock:hover { opacity: 1; }
+    .clock:hover, .clock.strong { opacity: 1; }
+    .strong .t { font-weight: 800; }
     .clock.on { display: inline-flex; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #6f9bf0; flex: none; }
     .warn .dot { background: #e0a44a; }
@@ -184,7 +185,7 @@
       return;
     }
     const tone = left <= 60_000 ? "crit" : left <= 5 * 60_000 ? "warn" : "";
-    node.className = `clock on ${tone}`.trim();
+    node.className = `clock on ${tone} ${X.strongClock(left) ? "strong" : ""}`.replace(/\s+/g, " ").trim();
     node.replaceChildren(el("span", "dot"), el("span", "t", X.mmss(left)), el("span", "lbl", X.CLOCK_LABEL[base.left.kind] ?? ""));
     node.title = base.label ? `${base.label}: ${X.mmss(left)} ${X.CLOCK_LABEL[base.left.kind] ?? ""}` : "";
   }

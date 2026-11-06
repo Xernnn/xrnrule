@@ -5,13 +5,16 @@ import android.content.Intent
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -52,9 +55,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +69,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -74,6 +82,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.R
+import com.xern.xrnrule.app.block.ClockCorner
+import com.xern.xrnrule.app.block.ClockLook
+import com.xern.xrnrule.app.block.ClockSize
+import com.xern.xrnrule.app.block.CornerClockLook
 import com.xern.xrnrule.app.data.AppLock
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.BlocksBackups
@@ -90,6 +102,7 @@ import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
 import com.xern.xrnrule.app.ui.theme.Appearance
 import com.xern.xrnrule.app.ui.theme.Brand
+import com.xern.xrnrule.app.ui.theme.GeistMono
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.ThemeMode
 import com.xern.xrnrule.app.update.AppUpdates
@@ -100,6 +113,7 @@ import com.xern.xrnrule.app.web.outOfDate
 import com.xern.xrnrule.app.web.tracking
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.CornerClock
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.Habit
@@ -109,6 +123,7 @@ import com.xern.xrnrule.domain.withHabit
 import com.xern.xrnrule.domain.withoutHabit
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -119,6 +134,7 @@ enum class SettingsPage(val title: String) {
     UNLOCKS("Unlocks"),
     SECURITY("Security & privacy"),
     APPEARANCE("Appearance"),
+    CORNER_CLOCK("Corner timer"),
     WEBSITES("Browser extension"),
     UPDATES("Updates"),
     BACKUP("Backup"),
@@ -235,6 +251,13 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                 subtitle = appearance.label,
                 first = true,
                 onClick = { onOpen(SettingsPage.APPEARANCE) },
+            )
+            val clock by CornerClockLook.look.collectAsState()
+            GroupRow(
+                title = "Corner timer",
+                icon = Icons.Outlined.AccessTime,
+                subtitle = if (clock.on) clock.corner.label else "Off",
+                onClick = { onOpen(SettingsPage.CORNER_CLOCK) },
             )
             if (deps.updates.isSupported) {
                 val updateReady by deps.updates.ready.collectAsStateWithLifecycle()
@@ -429,6 +452,7 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
                 SettingsPage.UNLOCKS -> UnlocksPage(world, deps)
                 SettingsPage.SECURITY -> SecurityPage(deps)
                 SettingsPage.APPEARANCE -> AppearancePage()
+                SettingsPage.CORNER_CLOCK -> CornerClockPage()
                 SettingsPage.WEBSITES -> WebsitesPage(world, deps)
                 SettingsPage.UPDATES -> UpdatesPage(deps.updates)
                 SettingsPage.BACKUP -> BackupPage(world, deps.store)
@@ -905,6 +929,67 @@ private fun PasswordForm(askCurrent: Boolean, submitLabel: String, onSubmit: (cu
         enabled = new.isNotBlank() && new == repeat && (!askCurrent || current.isNotEmpty()),
         onClick = { error = onSubmit(current, new) },
     )
+}
+
+@Composable
+private fun CornerClockPage() {
+    val look by CornerClockLook.look.collectAsState()
+    GroupCard {
+        SwitchRow("Show it in apps", look.on, { CornerClockLook.set(look.copy(on = it)) }, icon = Icons.Outlined.AccessTime, first = true)
+    }
+    FootNote(
+        "The time left, faintly, in the corner of an app with a limit or an unlock. It stands out for a few seconds at " +
+            CornerClock.MILESTONES_MIN.joinToString(", ") + " minutes left, and for the last ${CornerClock.LAST_MS / 1000} seconds.",
+    )
+    if (!look.on) return
+    SectionLabel("Where")
+    CornerClockPreview(look) { CornerClockLook.set(look.copy(corner = it)) }
+    FootNote("Tap a corner to put it there.")
+    SectionLabel("Size")
+    SegmentSwitch(ClockSize.entries.map { it.label }, look.size.ordinal, onSelect = { CornerClockLook.set(look.copy(size = ClockSize.entries[it])) })
+    SectionLabel("How much shows")
+    Slider(look.strength, onValueChange = { CornerClockLook.set(look.copy(strength = it)) }, valueRange = 0.2f..0.8f)
+    FootNote("While nothing is close. It always stands out at the times above.")
+}
+
+/** The clock over a pretend app, going through what it does there. */
+@Composable
+private fun CornerClockPreview(look: ClockLook, onCorner: (ClockCorner) -> Unit) {
+    var strong by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(3_500)
+            strong = true
+            delay(2_000)
+            strong = false
+        }
+    }
+    val shown by animateFloatAsState(if (strong) 1f else look.strength, label = "corner clock")
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(170.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF34506B), Color(0xFF7A5C8E)))),
+    ) {
+        ClockCorner.entries.forEach { corner ->
+            Box(Modifier.align(corner.alignment).fillMaxWidth(0.5f).fillMaxHeight(0.5f).clickable { onCorner(corner) })
+        }
+        Text(
+            CornerClock.text(14 * 60_000L + 32_000),
+            modifier = Modifier
+                .align(look.corner.alignment)
+                .padding(10.dp)
+                .graphicsLayer { alpha = shown * 0.8f }
+                .clip(RoundedCornerShape(50))
+                .background(Color(0x99000000))
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            color = Color.White,
+            fontFamily = GeistMono,
+            fontWeight = if (strong) FontWeight.Bold else FontWeight.Medium,
+            fontSize = look.size.sp.sp,
+        )
+    }
 }
 
 @Composable

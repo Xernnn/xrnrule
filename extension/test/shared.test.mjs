@@ -109,3 +109,15 @@ test("every element block.js asks for is on the page", () => {
   assert.ok(ids.length > 0);
   for (const id of ids) assert.ok(html.includes(`id="${id}"`), `block.html has no #${id}`);
 });
+
+test("the clock stands out as CornerClock does on the phone", () => {
+  for (const min of [10, 5, 3, 1]) {
+    assert.equal(X.strongClock(min * 60_000 + 1), false);
+    assert.equal(X.strongClock(min * 60_000), true);
+    assert.equal(X.strongClock(min * 60_000 - 5000), true);
+    assert.equal(X.strongClock(min * 60_000 - 6000), false);
+  }
+  assert.equal(X.strongClock(31_000), false);
+  assert.equal(X.strongClock(30_000), true);
+  assert.equal(X.strongClock(0), true);
+});

@@ -8,6 +8,9 @@ self.Xrn = (() => {
   const HEARTBEAT_MS = 2500;
   /** Minutes left at which a page says so, once each. */
   const WARN_AT_MIN = [10, 5, 3, 1];
+  /** The clock stands out this long at each of those, and all through the last 30 s (CornerClock in :domain). */
+  const STRONG_MS = 6000;
+  const LAST_MS = 30_000;
   /** Kinds of "left" that only run down while you're on the site; the others run by the clock. */
   const USE_KINDS = ["LIMIT", "ROW"];
   /** The longest path kept of a page, as the app does. */
@@ -137,6 +140,9 @@ self.Xrn = (() => {
   /** The corner clock's label for a kind of "left". */
   const CLOCK_LABEL = { LIMIT: "left today", ROW: "until a break", UNLOCK: "open", OVERRIDE: "bought", BREAK: "break" };
 
+  const strongClock = (left) => left <= LAST_MS ||
+    WARN_AT_MIN.some((min) => left <= min * 60_000 && left > min * 60_000 - STRONG_MS);
+
   /** The warning at [min] minutes left, in words. */
   function warning(kind, min, label) {
     const what = label || "this site";
@@ -150,5 +156,5 @@ self.Xrn = (() => {
     }
   }
 
-  return { DEFAULT_PORT, HEARTBEAT_MS, WARN_AT_MIN, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, hostOf, locationOf, matches, redirectRules, blockedBy, enginePage, blockUrl, mmss, warning };
+  return { DEFAULT_PORT, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, hostOf, locationOf, matches, redirectRules, blockedBy, enginePage, blockUrl, mmss, warning };
 })();
