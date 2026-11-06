@@ -360,7 +360,9 @@ data class BlockDraft(
     companion object {
         /** The form for [existing] (null: a new block) and its checklist [items]. */
         fun of(existing: Block?, items: List<ChecklistItem>, habits: List<Habit>): BlockDraft {
-            if (existing == null) return BlockDraft(habits = habits)
+            // A new block's unlock counts use, so leaving the app doesn't spend it. Not the field's
+            // default: that would count for every block already made.
+            if (existing == null) return BlockDraft(habits = habits, selfPaced = true)
             val trigger = existing.trigger
             val hadTimer = existing.mode == BlockMode.HABIT && (trigger.type == TriggerType.TIMER || trigger.type == TriggerType.COMBINED)
             val timerMinutes = trigger.requiredAmount / 60_000

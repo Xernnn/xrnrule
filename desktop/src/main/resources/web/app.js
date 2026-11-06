@@ -294,7 +294,7 @@ async function openForm(b) {
   cancelGuard();
   message = "";
   const hours = { days: [1, 2, 3, 4, 5, 6, 7], startMin: 540, endMin: 1020, moreWindows: [] };
-  const base = { limitOn: false, habitFirst: false, hoursOn: false, hoursAllDay: false, hours, checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: false, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
+  const base = { limitOn: false, habitFirst: false, hoursOn: false, hoursAllDay: false, hours, checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: true, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
   form = b
     ? {
       blockId: b.id,

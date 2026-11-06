@@ -263,4 +263,26 @@ class BlockDraftTest {
         assertTrue(gone.blocks.isEmpty())
         assertTrue(gone.checklist.isEmpty() && gone.progress.isEmpty())
     }
+
+    @Test
+    fun aNewBlockCountsUseRatherThanTheClock() {
+        val fresh = BlockDraft.of(null, emptyList(), habits)
+        assertTrue(fresh.selfPaced)
+        val (block, _) = made(habitBlock.copy(selfPaced = fresh.selfPaced))
+        assertTrue(block.selfPaced)
+    }
+
+    @Test
+    fun aNewLimitHasNoUnlockToPace() {
+        val fresh = BlockDraft.of(null, emptyList(), habits).copy(name = "YouTube", sites = setOf("youtube.com"), limitOn = true)
+        assertFalse(fresh.toBlock("b1", "auto").selfPaced)
+    }
+
+    @Test
+    fun aBlockAlreadyMadeKeepsHowItCounts() {
+        val (timer, timerItems) = made(habitBlock)
+        assertFalse(BlockDraft.of(timer, timerItems, habits).selfPaced)
+        val (paced, pacedItems) = made(habitBlock.copy(selfPaced = true))
+        assertTrue(BlockDraft.of(paced, pacedItems, habits).selfPaced)
+    }
 }
