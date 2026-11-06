@@ -9,6 +9,10 @@ import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.appliesHere
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
@@ -352,6 +356,33 @@ object DesktopApps {
 /** Whether [block] has anything to lock on this laptop: the end of a phone game's unlock isn't news here. */
 fun World.locksOnLaptop(block: Block): Boolean =
     appliesHere(block) && (block.targetSites.isNotEmpty() || block.targetDesktopApps.isNotEmpty())
+
+/**
+ * The phone can't say it has stopped, so the laptop watches for it: the server notes every device
+ * that reaches it, and the phone's service checks in whenever the phone is used.
+ */
+object PhoneWatch {
+    /** Longer than a night with the phone asleep. */
+    const val QUIET_MS = 12 * 60 * 60_000L
+    const val CHECK_MS = 10 * 60_000L
+
+    /** The phone's last check-in out of a `GET /devices` answer, or null if there's none. */
+    fun seen(body: String): Long? = runCatching {
+        (Json.parseToJsonElement(body) as? JsonObject)?.get("phone")?.jsonPrimitive?.longOrNull
+    }.getOrNull()
+
+    /**
+     * How long the phone has been quiet, or null while it's fine. An old answer says nothing: a
+     * laptop that just woke up mustn't blame the phone for what it missed while asleep.
+     */
+    fun quietMs(seenWall: Long?, askedWall: Long, nowWall: Long): Long? {
+        if (seenWall == null || nowWall - askedWall > 2 * CHECK_MS) return null
+        return (nowWall - seenWall).takeIf { it >= QUIET_MS }
+    }
+
+    fun text(quietMs: Long): String =
+        "It hasn't reached your home server for ${quietMs / 3_600_000} hours, so xrnrule may have stopped there. Open it on the phone."
+}
 
 /**
  * At most one popup of a kind in [everyMs]. The engine's warnings fire on every tick, so anything

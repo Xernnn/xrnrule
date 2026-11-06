@@ -80,6 +80,7 @@ fun main() = runBlocking {
     var extensionAlerted = false
     var syncFailingSince: Long? = null
     var syncAlerted = false
+    var phoneAlerted = false
     while (true) {
         val now = clock.nowMonotonicMs()
         if (now - lastMono > 10_000) {
@@ -124,6 +125,11 @@ fun main() = runBlocking {
                 )
             }
             syncAlerted = stuck
+
+            // The phone can't report that it has stopped, but the laptop can see it go quiet.
+            val quiet = shared.phoneQuietMs(wall)
+            if (quiet != null && !phoneAlerted) notifier.notify("The phone has gone quiet", PhoneWatch.text(quiet))
+            phoneAlerted = quiet != null
         }
         seconds++
         delay(1_000)

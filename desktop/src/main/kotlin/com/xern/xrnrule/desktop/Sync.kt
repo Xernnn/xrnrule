@@ -87,11 +87,27 @@ class SharedSyncClient(
     var lastContactWall: Long? = null
         private set
 
+    /** The phone's last check-in as the server saw it, and when the server was asked. */
+    @Volatile
+    private var phoneSeen: Pair<Long?, Long>? = null
+
+    /** How long the phone has been quiet, or null while it's fine or nobody can tell. */
+    fun phoneQuietMs(nowWall: Long): Long? = phoneSeen?.let { (seen, asked) -> PhoneWatch.quietMs(seen, asked, nowWall) }
+
     @Serializable
     private data class Base(val etag: String, val state: SharedState)
 
     fun start() {
         if (!config.syncConfigured) return
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                runCatching {
+                    val r = http.send("${config.ruleUrl}/devices")
+                    if (r.statusCode() == 200) phoneSeen = PhoneWatch.seen(r.body()) to System.currentTimeMillis()
+                }
+                delay(PhoneWatch.CHECK_MS)
+            }
+        }
         scope.launch(Dispatchers.IO) {
             for (r in requests) {
                 try {

@@ -494,6 +494,8 @@ class LocalServer(
         val canPause: Boolean,
         /** Whether a break would lift anything: not with every soft block locked (I50). */
         val breakLifts: Boolean,
+        /** Set when the phone has stopped reaching the server. */
+        val phoneQuiet: String?,
         val unlockUsedMs: Long,
         val dailyCapMs: Long,
         val sync: SyncStatus?,
@@ -530,6 +532,7 @@ class LocalServer(
             pauseRemainingMs = engine.pauseRemainingMs(world, clock),
             canPause = engine.canPause(world, clock),
             breakLifts = world.blocks.any { engine.pausable(it, clock) },
+            phoneQuiet = shared.phoneQuietMs(System.currentTimeMillis())?.let(PhoneWatch::text),
             unlockUsedMs = engine.unlockUsedTodayMs(world, clock),
             dailyCapMs = world.settings.dailyCapMs,
             sync = shared.status.value,

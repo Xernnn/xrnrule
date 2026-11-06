@@ -72,7 +72,8 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Backup.** Export your blocks to a file and import them on a new install.
 - **Insights.** Per-app screen time, time per site, habits done, times blocked on apps and sites
   (the laptop's too, with sync on), minutes bought, breaks, emergency unlocks and your streak.
-- Built to survive reboots, process death and OEM battery killers.
+- Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
+  turns its autostart off, which Xiaomi phones do at every install.
 
 ## The browser extension
 

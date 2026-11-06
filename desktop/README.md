@@ -72,6 +72,8 @@ Without a server it blocks on the laptop only, and nothing it does reaches the p
 - **Popups** are few: one at a time, gone by themselves after 10 seconds, and the same one at
   most every 10 minutes. The end of an unlock only pops up if the block has a site or a laptop
   app to lock here.
+- **The phone going quiet** gets a popup and a line on the page: if it hasn't reached your home
+  server for 12 hours, xrnrule may have stopped there.
 - **Opening a blocked site** turns the tab into the block page, before the site loads. Once
   the site is open again, the tab goes back where it was. On limited sites the extension can
   show a corner clock (Settings on the local page) and warns at 10, 5, 3 and 1 minutes left.

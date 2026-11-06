@@ -16,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.xern.xrnrule.app.XrnruleApp
+import com.xern.xrnrule.app.data.OemAutostart
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.isGranted
 import android.os.SystemClock
@@ -298,7 +299,9 @@ class BlockerForegroundService : LifecycleService() {
         container.loop.check()
         val loopStuck = container.loop.serverFailingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
         val loopUnreachable = loopStuck && container.loop.unreachable.value
-        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck|$loopUnreachable"
+        // The phone turns this off at every install, and nothing else shows until a kill goes unrepaired.
+        val autostartOff = world.blocks.isNotEmpty() && OemAutostart.enabled(this) == false
+        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck|$loopUnreachable|$autostartOff"
         if (health == lastHealth) return
         lastHealth = health
 
@@ -319,6 +322,17 @@ class BlockerForegroundService : LifecycleService() {
             )
         } else {
             notifications.cancel(Notifications.ALERT_SYNC_OFF)
+        }
+
+        if (autostartOff) {
+            notifications.alert(
+                Notifications.ALERT_AUTOSTART_OFF,
+                "Autostart is off",
+                "The phone turned it off, so xrnrule may not come back if it's stopped. Tap to turn it on.",
+                tap = OemAutostart.fixIt(this),
+            )
+        } else {
+            notifications.cancel(Notifications.ALERT_AUTOSTART_OFF)
         }
 
         if (missing.isEmpty()) {

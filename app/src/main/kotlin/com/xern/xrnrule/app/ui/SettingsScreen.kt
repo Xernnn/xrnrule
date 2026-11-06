@@ -177,6 +177,7 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
     val appearance by Appearance.themeMode.collectAsState()
     val resume = rememberResumeSignal()
     val granted = remember(resume) { AppPermission.entries.associateWith { it.isGranted(context) } }
+    val autostart = remember(resume) { OemAutostart.enabled(context) }
     val automaticTime = remember(resume) { deps.clockGuard.automaticTime() }
     val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
@@ -193,7 +194,7 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                 }
             }
             if (OemAutostart.isKnownOem()) {
-                PermissionRow("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, granted = null) { OemAutostart.open(context) }
+                PermissionRow("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, granted = autostart) { OemAutostart.open(context) }
             }
             PermissionRow("Automatic date & time", Icons.Outlined.AccessTime, granted = automaticTime) {
                 runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }

@@ -717,6 +717,7 @@ function alerts() {
   if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow the xrnrule extension in incognito on the browser's extensions page."]);
   if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
+  if (state.phoneQuiet) out.push(["The phone has gone quiet", state.phoneQuiet]);
   if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnrule/desktop.properties to share blocks and unlocks with the phone.`]);
   return out;
 }
