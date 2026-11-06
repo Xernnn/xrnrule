@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "xrnrule",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Blocks the sites xrnrule blocks on this device, shows what's left on limited ones, and tells xrnrule which site you're on.",
   "permissions": ["storage", "alarms", "declarativeNetRequest", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],
