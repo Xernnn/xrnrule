@@ -6,6 +6,7 @@ import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.BlockTexts
 import com.xern.xrnrule.domain.startOfLocalDayMs
@@ -429,6 +430,9 @@ class LocalServer(
         val rowBreakMs: Long,
         val rowUsedMs: Long,
         val rowBreakRemainingMs: Long,
+        val opensPerDay: Int,
+        val opensUsed: Int,
+        val openWaitS: Int,
         val perDevice: Boolean,
         /** Bought minutes left on this block (I34), and how many more can be bought today. */
         val overrideRemainingMs: Long,
@@ -468,6 +472,8 @@ class LocalServer(
         /** What the block page leads with: when it's back, and why it isn't now. */
         val back: String? = null,
         val why: String? = null,
+        /** I53: it's only pausing before it opens by itself. */
+        val opening: Boolean = false,
     )
 
     @Serializable
@@ -569,6 +575,7 @@ class LocalServer(
             overrideReadyAtWall = pending?.let { it.sinceWall + world.settings.overrideWaitMs },
             back = back?.at,
             why = BlockTexts.why(back, lead),
+            opening = lead != null && store.engine.blockReason(world, lead, store.clock) == BlockReason.WAIT,
         )
     }
 
@@ -615,6 +622,9 @@ class LocalServer(
             rowBreakMs = b.sessionBreakMs,
             rowUsedMs = engine.rowUsedMs(world, b, clock),
             rowBreakRemainingMs = engine.rowBreakRemainingMs(world, b, clock),
+            opensPerDay = b.opensPerDay,
+            opensUsed = engine.opensUsed(world, b, clock),
+            openWaitS = b.openWaitS,
             perDevice = b.perDevice,
             overrideRemainingMs = engine.overrideRemainingMs(world, b.id, clock),
             overridesLeft = engine.overridesLeftToday(world, b.id, clock),

@@ -48,12 +48,12 @@ data class SharedState(
 
         /** Which of two reports of one device's use of a block wins (§2.4): the later day, more use, the later count. */
         val newerUse: Comparator<AllowanceUse> =
-            compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.atWall }
+            compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.opens }.thenBy { it.atWall }
 
         /** This device's own report of its use of [block]'s limit, with progress [p] (I19, I32, I44). */
         fun ownUse(world: World, block: Block, p: HabitProgress): AllowanceUse {
             val run = world.runs[p.blockId]
-            return AllowanceUse(p.windowStart, p.limitUsed(block), run, run?.lastActiveWall ?: 0)
+            return AllowanceUse(p.windowStart, p.limitUsed(block), run, run?.lastActiveWall ?: 0, p.opens)
         }
 
         /** This device's view of the shared state. */

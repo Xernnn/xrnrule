@@ -75,6 +75,11 @@ data class BlockDraft(
     val rowOn: Boolean = false,
     val rowMinutes: Long = 15,
     val rowBreakMinutes: Long = 15,
+    /** I52: how many times a day it opens. */
+    val opensOn: Boolean = false,
+    val opensPerDay: Int = 3,
+    /** I53: seconds of block screen before each open; 0 = none. */
+    val openWaitS: Int = 0,
     val perDevice: Boolean = false,
     /** I44: with a habit and a daily limit, the habit comes first and the limit holds on top. */
     val habitFirst: Boolean = false,
@@ -128,7 +133,7 @@ data class BlockDraft(
     val hasRules: Boolean get() = habitChosen || limitOn
 
     /** I44: whether "limit first or habit first" means anything here. */
-    val orderMatters: Boolean get() = habitChosen && limitOn && dailyOn
+    val orderMatters: Boolean get() = habitChosen && limitOn && (dailyOn || opensOn)
 
     private val hasHours: Boolean get() = hoursOn && (mode == BlockMode.HABIT || mode == BlockMode.ALLOWANCE)
 
@@ -225,7 +230,7 @@ data class BlockDraft(
         focusOn && timerHabits.isEmpty() -> "Pick or make a timer"
         loopOn && links.isEmpty() -> "Pick at least one habit"
         tagOn && tags.isEmpty() -> "Scan a tag"
-        limitOn && !dailyOn && !rowOn -> "Set minutes a day, minutes in a row, or both"
+        limitOn && !dailyOn && !rowOn && !opensOn -> "Set minutes a day, minutes in a row, or opens a day"
         existing?.mode == BlockMode.HABIT && !hasRules -> "Pick at least one way to unlock it"
         else -> null
     }
@@ -295,6 +300,8 @@ data class BlockDraft(
             dailyAllowanceMs = if (limited && dailyOn) dailyMinutes * 60_000 else 0,
             sessionMs = if (limited && rowOn) rowMinutes * 60_000 else 0,
             sessionBreakMs = if (limited && rowOn) rowBreakMinutes * 60_000 else 0,
+            opensPerDay = if (limited && opensOn) opensPerDay else 0,
+            openWaitS = if (limited) openWaitS else 0,
             perDevice = limited && perDevice,
             habitFirst = limited && mode == BlockMode.HABIT && habitFirst,
             blockedHours = builtHours(),
@@ -405,6 +412,9 @@ data class BlockDraft(
                 combineMode = trigger.combineMode,
                 limitOn = limit != null,
                 dailyOn = limit == null || limit.dailyAllowanceMs > 0,
+                opensOn = limit != null && limit.opensPerDay > 0,
+                opensPerDay = limit?.opensPerDay?.takeIf { it > 0 } ?: 3,
+                openWaitS = limit?.openWaitS ?: 0,
                 dailyMinutes = limit?.dailyAllowanceMs?.takeIf { it > 0 }?.div(60_000) ?: 30,
                 rowOn = limit?.hasRowRule == true,
                 rowMinutes = limit?.takeIf { it.hasRowRule }?.sessionMs?.div(60_000) ?: 15,

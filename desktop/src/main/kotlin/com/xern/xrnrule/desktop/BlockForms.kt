@@ -66,6 +66,10 @@ object BlockForms {
         /** At most this many minutes in a row, then [rowBreakMin] off; 0 is no such rule (I32). */
         val rowMin: Long = 0,
         val rowBreakMin: Long = 15,
+        /** At most this many opens a day; 0 is no such rule (I52). */
+        val opensPerDay: Int = 0,
+        /** Seconds of block screen before each open; 0 is none (I53). */
+        val openWaitS: Int = 0,
         /** Each device gets the whole limit (I33); off, phone and laptop share it. */
         val perDevice: Boolean = false,
         val lockdownMin: Long = 60,
@@ -205,10 +209,12 @@ object BlockForms {
 
     /** A daily limit's numbers: the limit itself, the row rule, shared or per device, and its order (I44). */
     private fun Block.withLimits(form: Form): Block =
-        if (!limited(form.copy(mode = mode))) copy(dailyAllowanceMs = 0, sessionMs = 0, sessionBreakMs = 0, perDevice = false, habitFirst = false) else copy(
+        if (!limited(form.copy(mode = mode))) copy(dailyAllowanceMs = 0, sessionMs = 0, sessionBreakMs = 0, opensPerDay = 0, openWaitS = 0, perDevice = false, habitFirst = false) else copy(
             dailyAllowanceMs = if (form.dailyOn) form.allowanceMin * 60_000 else 0,
             sessionMs = if (form.rowMin > 0) form.rowMin * 60_000 else 0,
             sessionBreakMs = if (form.rowMin > 0) form.rowBreakMin * 60_000 else 0,
+            opensPerDay = form.opensPerDay.coerceAtLeast(0),
+            openWaitS = form.openWaitS.coerceAtLeast(0),
             perDevice = form.perDevice,
             habitFirst = mode == BlockMode.HABIT && form.habitFirst,
         )
@@ -266,7 +272,7 @@ object BlockForms {
             !hasTargets -> "Pick a laptop app or add a website to block"
             !onItsDevices -> "Laptop apps aren't blocked on the phone: add a website, or phone apps on the phone"
             form.name.isBlank() -> "Give the block a name"
-            limited(form) && !form.dailyOn && form.rowMin <= 0 -> "Set minutes a day, minutes in a row, or both"
+            limited(form) && !form.dailyOn && form.rowMin <= 0 && form.opensPerDay <= 0 -> "Set minutes a day, minutes in a row, or opens a day"
             limited(form) && form.dailyOn && form.allowanceMin <= 0 -> "Set how many minutes a day"
             limited(form) && form.rowMin > 0 && form.rowBreakMin <= 0 -> "Set how long the break is"
             form.mode == BlockMode.SCHEDULE && form.days.isEmpty() -> "Pick at least one day"

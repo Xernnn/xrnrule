@@ -52,6 +52,7 @@ class BlockEngine {
         // unlock time-up + 30s warning (G3), lockdown end (I21), break end (I25). Keeping this out of the
         // per-event handlers means a plain Tick and a Redeem both re-evaluate expiry the same way.
         w = sweep(w, clock, effects)
+        if (event is BlockEvent.ForegroundChanged || event is BlockEvent.Tick) w = trackOpens(w, clock) // I52, I53
         // I36: habit items follow the entries, whatever moved them (a log here, the focus timer,
         // the habit server); after the sweep, so a block it just re-armed can earn again.
         w = refreshHabitItems(w, clock, effects)
@@ -83,8 +84,10 @@ class BlockEngine {
     /** Blocked apps: phone packages and laptop apps alike (I29). */
     fun blockedPackages(world: World, clock: Clock): Set<String> {
         val allTargets = world.blocks.flatMapTo(mutableSetOf()) { it.targetApps }
+        // I53: a laptop app's windows get closed, so a wait on the block's site must not reach it.
+        val apps = if (world.deviceKind == DeviceKind.LAPTOP) world.withoutWaits() else world
         return allTargets.filterTo(mutableSetOf()) { pkg ->
-            blockers(world, world.blocks.filter { pkg in it.targetApps }, clock).isNotEmpty()
+            blockers(apps, apps.blocks.filter { pkg in it.targetApps }, clock).isNotEmpty()
         }
     }
 
@@ -128,6 +131,7 @@ class BlockEngine {
 
     /** What keeps [block] blocking whatever its habit's state: nothing but time or bought minutes lift these (I22, I44). */
     private fun holds(world: World, block: Block, clock: Clock): Boolean {
+        if (waitingToOpen(world, block.id)) return true // I53
         val bought = overrideRemainingMs(world, block.id, clock) > 0 // I34
         if (inBlockedHours(block, clock) && !bought) return true
         val onBreak = block.hasLimit && scheduleActive(block, clock) && rowBreakRemainingMs(world, block, clock) > 0
@@ -141,15 +145,19 @@ class BlockEngine {
 
     /** I44: a used-up daily limit that a habit can't get past: all but a HABIT block with its limit first. */
     fun limitHolds(world: World, block: Block, clock: Clock): Boolean =
-        block.hasLimit && !block.limitComesFirst && scheduleActive(block, clock) && dailyLimitReached(world, block, clock)
+        block.hasLimit && !block.limitComesFirst && scheduleActive(block, clock) && limitSpent(world, block, clock)
+
+    /** I19, I52: the day's minutes or opens are gone. */
+    private fun limitSpent(world: World, block: Block, clock: Clock): Boolean =
+        dailyLimitReached(world, block, clock) || opensReached(world, block, clock)
 
     /**
      * I44: whether a HABIT block wants its habit done right now: while its schedule is on, and with
-     * the limit first only once the day's free minutes are gone.
+     * the limit first only once the day's free minutes or opens are gone.
      */
     fun asksForHabit(world: World, block: Block, clock: Clock): Boolean =
         block.mode == BlockMode.HABIT && scheduleActive(block, clock) &&
-            (!block.limitComesFirst || dailyLimitReached(world, block, clock))
+            (!block.limitComesFirst || limitSpent(world, block, clock))
 
     /** I44: inside the hours [block] blocks outright: its [Block.blockedHours], or a SCHEDULE block's schedule. */
     fun inBlockedHours(block: Block, clock: Clock): Boolean =
@@ -160,6 +168,7 @@ class BlockEngine {
     fun blockReason(world: World, block: Block, clock: Clock): BlockReason? = when {
         !isBlocking(world, block, clock) -> null
         block.mode == BlockMode.LOCKDOWN -> BlockReason.LOCKDOWN
+        waitingToOpen(world, block.id) -> BlockReason.WAIT
         inBlockedHours(block, clock) && overrideRemainingMs(world, block.id, clock) == 0L -> BlockReason.HOURS
         block.hasLimit && rowBreakRemainingMs(world, block, clock) > 0 -> BlockReason.BREAK
         limitHolds(world, block, clock) -> BlockReason.LIMIT
@@ -169,6 +178,31 @@ class BlockEngine {
     /** I19: the daily limit is on and used up (0 means no daily limit, only the row rule). */
     fun dailyLimitReached(world: World, block: Block, clock: Clock): Boolean =
         block.dailyAllowanceMs > 0 && allowanceUsedMs(world, block, clock) >= block.dailyAllowanceMs
+
+    /** I52: today's opens of [block], here plus on the other devices unless each has its own (I33). */
+    fun opensUsed(world: World, block: Block, clock: Clock): Int {
+        val p = world.progress[block.id]
+        val here = if (p == null || dayRolled(p, clock)) 0 else p.opens
+        if (block.perDevice) return here
+        val today = clock.startOfLocalDayMs()
+        return here + world.otherAllowance[block.id].orEmpty().values.sumOf { if (it.dayStartWall == today) it.opens else 0 }
+    }
+
+    /** I52: the day's opens are gone and the last one is over: it runs until you've left it. */
+    fun opensReached(world: World, block: Block, clock: Clock): Boolean =
+        block.opensPerDay > 0 && opensUsed(world, block, clock) >= block.opensPerDay && !openRunning(world, block, clock)
+
+    private fun openRunning(world: World, block: Block, clock: Clock): Boolean =
+        world.openRuns[block.id]?.let { it.waitUntilMonotonic == null && live(it, clock) } == true
+
+    private fun live(run: OpenRun, clock: Clock): Boolean = clock.nowWallMs() - run.lastInFrontWall < Defaults.OPEN_GRACE_MS
+
+    /** I53: held until [trackOpens] ends the wait, so that not even its last moment counts as use. */
+    private fun waitingToOpen(world: World, blockId: String) = world.openRuns[blockId]?.waitUntilMonotonic != null
+
+    /** I53: what's left of the wait before [blockId] opens. */
+    fun openWaitRemainingMs(world: World, blockId: String, clock: Clock): Long =
+        ((world.openRuns[blockId]?.waitUntilMonotonic ?: return 0) - clock.nowMonotonicMs()).coerceAtLeast(0)
 
     /**
      * I19: today's used allowance, here plus on the other devices (§2.4) unless each device has
@@ -241,7 +275,8 @@ class BlockEngine {
     }
 
     private fun overridable(world: World, block: Block, clock: Clock): Boolean =
-        block.enforcementTier == EnforcementTier.SOFT && !BlockEdits.locked(block, clock.nowWallMs()) && when (block.mode) {
+        block.enforcementTier == EnforcementTier.SOFT && !BlockEdits.locked(block, clock.nowWallMs()) &&
+            !waitingToOpen(world, block.id) && when (block.mode) { // I50, I53
             BlockMode.SCHEDULE -> true
             BlockMode.ALLOWANCE -> rowBreakRemainingMs(world, block, clock) == 0L
             BlockMode.HABIT, BlockMode.LOCKDOWN -> false
@@ -436,9 +471,10 @@ class BlockEngine {
         var w = accrueTimers(world, clock)
         val pkg = event.pkg
         val site = event.site
+        val blocked = w.withoutWaits() // I53: a wait before opening isn't being blocked
         val met = when {
-            pkg != null && pkg in blockedPackages(w, clock) -> pkg
-            site != null && shieldPlan(w, clock).siteBlocked(site) -> Sites.normalize(site)
+            pkg != null && pkg in blockedPackages(blocked, clock) -> pkg
+            site != null && shieldPlan(blocked, clock).siteBlocked(site) -> Sites.normalize(site)
             else -> null
         }
         if (met != null) {
@@ -452,6 +488,63 @@ class BlockEngine {
         w = w.copy(foregroundPkg = pkg, foregroundSite = site)
         return checkTimerTriggers(w, clock, effects)
     }
+
+    /** I53: this world with nothing waiting to open, for what only cares what really blocks. */
+    private fun World.withoutWaits(): World =
+        if (openRuns.values.none { it.waitUntilMonotonic != null }) this
+        else copy(openRuns = openRuns.mapValues { it.value.copy(waitUntilMonotonic = null) })
+
+    /**
+     * I52, I53: who is opening what. An open is a target coming to the front after being out of
+     * sight for [Defaults.OPEN_GRACE_MS] with nothing else in its way, and it counts only once any
+     * wait before it is over. Blocks with a wait go first: a block without one on the same target
+     * counts once the wait is over, so that leaving during it costs nothing anywhere.
+     */
+    private fun trackOpens(world: World, clock: Clock): World {
+        val tracked = world.blocks.filter { it.hasOpenRule }
+        if (tracked.isEmpty() && world.openRuns.isEmpty()) return world
+        val now = clock.nowWallMs()
+        val nowMono = clock.nowMonotonicMs()
+        val fgPkg = world.foregroundPkg
+        val fgSite = world.foregroundSite
+        val free by lazy { blockersOf(world.withoutWaits(), fgPkg, fgSite, clock).isEmpty() }
+        val runs = world.openRuns.filterKeys { id -> tracked.any { it.id == id } }.toMutableMap()
+        var progress = world.progress
+        fun count(block: Block) {
+            val p = progress[block.id] ?: freshProgress(block.id, clock)
+            progress = progress + (block.id to p.copy(opens = p.opens + 1))
+            runs[block.id] = OpenRun(now)
+        }
+        for (block in tracked.sortedBy { if (waitsHere(world, it, fgSite)) 0 else 1 }) {
+            val run = runs[block.id]
+            if (!world.appliesHere(block) || !block.enabled || !covers(block, fgPkg, fgSite)) {
+                // Left during the wait: nothing spent, and the next time waits again.
+                if (run != null && (run.waitUntilMonotonic != null || !live(run, clock))) runs.remove(block.id)
+                continue
+            }
+            val wait = run?.waitUntilMonotonic
+            when {
+                wait != null -> if (nowMono >= wait) count(block) else runs[block.id] = run.copy(lastInFrontWall = now)
+                run != null && live(run, clock) -> runs[block.id] = run.copy(lastInFrontWall = now)
+                !free || !counts(world, block, clock) -> runs.remove(block.id)
+                waitsHere(world, block, fgSite) -> runs[block.id] = OpenRun(now, nowMono + block.openWaitS * 1_000L)
+                runs.values.any { it.waitUntilMonotonic != null } -> runs.remove(block.id)
+                else -> count(block)
+            }
+        }
+        return world.copy(openRuns = runs, progress = progress)
+    }
+
+    /** I53: a laptop app can't wait: a blocked one has its windows closed. */
+    private fun waitsHere(world: World, block: Block, site: String?): Boolean =
+        block.openWaitS > 0 && (site != null || world.deviceKind != DeviceKind.LAPTOP)
+
+    /** I52: an open while the limit is on and isn't lifted: a break, bought minutes or a habit's unlock make it free. */
+    private fun counts(world: World, block: Block, clock: Clock): Boolean =
+        scheduleActive(block, clock) &&
+            !(pausable(block, clock) && pauseRemainingMs(world, clock) > 0) &&
+            overrideRemainingMs(world, block.id, clock) == 0L &&
+            !(block.limitComesFirst && block.state == BlockState.UNLOCKED)
 
     private fun accrueAndCheckTimers(world: World, clock: Clock, effects: MutableList<Effect>): World {
         val w = accrueTimers(world, clock)
@@ -840,8 +933,8 @@ class BlockEngine {
 
     /** I10 resets the habit's window, but what's used of a limit stays until the day ends (I44). */
     private fun freshProgressKeepingUse(old: HabitProgress?, blockId: String, clock: Clock): HabitProgress {
-        val used = if (old == null || dayRolled(old, clock)) 0 else old.limitUsedMs
-        return freshProgress(blockId, clock).copy(limitUsedMs = used)
+        if (old == null || dayRolled(old, clock)) return freshProgress(blockId, clock)
+        return freshProgress(blockId, clock).copy(limitUsedMs = old.limitUsedMs, opens = old.opens)
     }
 
     // ---- housekeeping sweep --------------------------------------------------------
@@ -1024,7 +1117,8 @@ class BlockEngine {
                 val theirs = byDevice[world.deviceId] ?: continue
                 val p = progress[blockId]
                 if (p != null && SharedState.newerUse.compare(theirs, SharedState.ownUse(world, block, p)) <= 0) continue
-                progress[blockId] = (p ?: freshProgress(blockId, clock)).withLimitUsed(block, theirs.ms).copy(windowStart = theirs.dayStartWall)
+                val opens = if (p?.windowStart == theirs.dayStartWall) maxOf(p.opens, theirs.opens) else theirs.opens
+                progress[blockId] = (p ?: freshProgress(blockId, clock)).withLimitUsed(block, theirs.ms).copy(opens = opens, windowStart = theirs.dayStartWall)
                 if (theirs.run != null) runs[blockId] = theirs.run else runs.remove(blockId)
             }
         }
@@ -1111,6 +1205,7 @@ class BlockEngine {
         val focus = world.focus?.let { f -> f.copy(startedAtMonotonic = nowMono - (nowWall - f.startedAtWall).coerceAtLeast(0)) } // I37
         return sweep(
             world.copy(
+                openRuns = world.openRuns.filterValues { it.waitUntilMonotonic == null }, // I53: a wait counts on the monotonic clock
                 credits = credits, sessions = sessions, lockdowns = lockdowns, pause = pause, progress = progress,
                 overrides = overrides, pendingOverride = pending, focus = focus,
             ),

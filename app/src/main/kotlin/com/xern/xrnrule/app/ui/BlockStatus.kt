@@ -47,7 +47,7 @@ fun blockStatus(block: Block, world: World, engine: BlockEngine, clock: Clock): 
     val blocking = engine.isBlocking(world, block, clock)
     val reason = engine.blockReason(world, block, clock)
     return when (block.mode) {
-        BlockMode.HABIT -> if (reason == BlockReason.LIMIT || reason == BlockReason.BREAK) limitStatus(block, world, engine, clock) else {
+        BlockMode.HABIT -> if (reason == BlockReason.LIMIT || reason == BlockReason.BREAK || reason == BlockReason.WAIT) limitStatus(block, world, engine, clock) else {
             val parts = world.habitParts(block, appLabel = null, engine, clock)
             BlockStatusUi(
                 label = stateVerbose(block.state),
@@ -115,13 +115,17 @@ private fun limitStatus(block: Block, world: World, engine: BlockEngine, clock: 
     val bought = engine.overrideRemainingMs(world, block.id, clock)
     val row = if (block.hasRowRule) "${formatRemaining(block.sessionMs - engine.rowUsedMs(world, block, clock))} of ${formatDuration(block.sessionMs)} in a row left" else null
     val daily = if (allowance > 0) "${formatDuration(used)} of ${formatDuration(allowance)} used today" else null
+    val opensLeft = (block.opensPerDay - engine.opensUsed(world, block, clock)).coerceAtLeast(0)
+    val opens = if (block.opensPerDay > 0 && allowance > 0) "$opensLeft of ${block.opensPerDay} opens left" else null
     return BlockStatusUi(
         label = when {
             rowBreak > 0 -> "On a break"
+            reason == BlockReason.WAIT -> "Opening"
             reason == BlockReason.LIMIT -> "Limit reached"
             blocking -> "Blocking now"
             bought > 0 -> "Bought time"
             allowance > 0 -> "${formatRemaining(allowance - used)} left"
+            block.opensPerDay > 0 -> "$opensLeft of ${block.opensPerDay} opens left"
             else -> "Open"
         },
         icon = if (blocking) Icons.Filled.Lock else Icons.Filled.HourglassBottom,
@@ -129,11 +133,12 @@ private fun limitStatus(block: Block, world: World, engine: BlockEngine, clock: 
         line = when {
             rowBreak > 0 -> "${formatRemaining(rowBreak)} of the break left · ${formatDuration(block.sessionMs)} in a row is the most"
             bought > 0 -> "${formatRemaining(bought)} of bought time left" + (daily?.let { " · $it" } ?: "")
-            else -> listOfNotNull(daily?.let { if (reason == BlockReason.LIMIT) "$it · opens at midnight" else it }, row).joinToString(" · ")
+            else -> listOfNotNull(daily?.let { if (reason == BlockReason.LIMIT) "$it · opens at midnight" else it }, opens, row).joinToString(" · ")
         },
         fraction = when {
             allowance > 0 -> used.toFloat() / allowance
             block.hasRowRule -> engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs
+            block.opensPerDay > 0 -> engine.opensUsed(world, block, clock).toFloat() / block.opensPerDay
             else -> null
         },
     )

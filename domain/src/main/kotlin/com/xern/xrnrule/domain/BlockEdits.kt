@@ -86,6 +86,8 @@ object BlockEdits {
     private fun allowanceLoosens(old: Block, new: Block): Boolean {
         fun bigger(o: Long, n: Long) = o > 0 && (n == 0L || n > o)
         return bigger(old.dailyAllowanceMs, new.dailyAllowanceMs) ||
+            bigger(old.opensPerDay.toLong(), new.opensPerDay.toLong()) || // I52
+            new.openWaitS < old.openWaitS || // I53
             (old.hasRowRule && (!new.hasRowRule || new.sessionMs > old.sessionMs || new.sessionBreakMs < old.sessionBreakMs))
     }
 

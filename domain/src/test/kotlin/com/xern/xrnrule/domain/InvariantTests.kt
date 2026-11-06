@@ -2879,4 +2879,388 @@ class InvariantTests {
         assertEquals(listOf("break ${Defaults.PAUSE_MS}"), logged(taken, clock))
         assertTrue(logged(engine.reduce(taken.world, BlockEvent.StartPause(), clock), clock).isEmpty())
     }
+
+    // ---- opens and the wait before them (I52, I53) -------------------------------------------
+
+    private fun limited(id: String = "o", opens: Int = 0, waitS: Int = 0, targets: Set<String> = setOf("com.target")) =
+        modeBlock(id, BlockMode.ALLOWANCE, targetPackages = targets, targetSites = setOf("target.com")).copy(opensPerDay = opens, openWaitS = waitS)
+
+    /** Keeps one world and sends events through it. */
+    private inner class Phone(block: List<Block>, val clock: FakeClock = FakeClock(), kind: DeviceKind = DeviceKind.PHONE) {
+        var world = buildWorld(block, clock = clock).copy(deviceKind = kind)
+        var plan = world.appliedShield
+        val seen = mutableListOf<String>()
+        fun on(event: BlockEvent) {
+            val out = engine.reduce(world, event, clock)
+            world = out.world
+            plan = out.world.appliedShield
+            seen += logged(out, clock)
+        }
+        fun open(pkg: String? = "com.target") = on(BlockEvent.ForegroundChanged(pkg))
+        fun leave() = on(BlockEvent.ForegroundChanged("com.launcher"))
+        fun pass(ms: Long) {
+            var left = ms
+            while (left > 0) {
+                val step = minOf(left, 1_000)
+                clock.advance(step)
+                on(BlockEvent.Tick)
+                left -= step
+            }
+        }
+        fun opens(id: String = "o") = engine.opensUsed(world, world.block(id)!!, clock)
+        fun blocked(pkg: String = "com.target") = pkg in plan.blockedPackages
+        fun reason(id: String = "o") = engine.blockReason(world, world.block(id)!!, clock)
+    }
+
+    @Test
+    fun i52_anOpenCountsOnceHoweverLongItLasts() {
+        val phone = Phone(listOf(limited(opens = 3)))
+        phone.open()
+        phone.pass(5 * 60_000)
+        assertEquals(1, phone.opens())
+    }
+
+    @Test
+    fun i52_aQuickSwitchIsNotANewOpen() {
+        val phone = Phone(listOf(limited(opens = 3)))
+        phone.open()
+        phone.leave()
+        phone.pass(Defaults.OPEN_GRACE_MS - 1_000)
+        phone.open()
+        assertEquals(1, phone.opens())
+
+        phone.leave()
+        phone.pass(Defaults.OPEN_GRACE_MS)
+        phone.open()
+        assertEquals(2, phone.opens())
+    }
+
+    @Test
+    fun i52_goingBetweenABlocksAppsIsOneOpen() {
+        val phone = Phone(listOf(limited(opens = 3, targets = setOf("com.one", "com.two"))))
+        phone.open("com.one")
+        phone.open("com.two")
+        phone.pass(Defaults.OPEN_GRACE_MS * 2)
+        assertEquals(1, phone.opens())
+    }
+
+    @Test
+    fun i52_theLastOpenRunsUntilYouHaveLeftIt() {
+        val phone = Phone(listOf(limited(opens = 1)))
+        phone.open()
+        phone.pass(10 * 60_000)
+        assertFalse(phone.blocked())
+
+        phone.leave()
+        phone.pass(Defaults.OPEN_GRACE_MS - 1_000)
+        assertFalse(phone.blocked())
+        phone.pass(1_000)
+        assertTrue(phone.blocked())
+        assertEquals(BlockReason.LIMIT, phone.reason())
+    }
+
+    @Test
+    fun i52_aShieldMetIsNotAnOpen() {
+        val phone = Phone(listOf(limited(opens = 1)))
+        phone.open()
+        phone.leave()
+        phone.pass(Defaults.OPEN_GRACE_MS)
+        phone.open()
+        phone.pass(5_000)
+        assertEquals(1, phone.opens())
+        assertTrue(phone.blocked())
+    }
+
+    @Test
+    fun i52_opensComeBackWithTheDay() {
+        val phone = Phone(listOf(limited(opens = 1)))
+        phone.open()
+        phone.leave()
+        phone.clock.advance(DAY_MS)
+        phone.on(BlockEvent.Tick)
+        assertEquals(0, phone.opens())
+        assertFalse(phone.blocked())
+
+        phone.open()
+        assertEquals(1, phone.opens())
+        assertFalse(phone.blocked())
+    }
+
+    @Test
+    fun i52_aBreakOrBoughtMinutesSpendNoOpens() {
+        val resting = Phone(listOf(limited(opens = 1)))
+        resting.on(BlockEvent.StartPause())
+        resting.open()
+        assertEquals(0, resting.opens())
+
+        val buying = Phone(listOf(limited(opens = 1)))
+        buying.open()
+        buying.leave()
+        buying.pass(Defaults.OPEN_GRACE_MS)
+        assertTrue(buying.blocked())
+        buying.on(BlockEvent.BeginOverride(setOf("o")))
+        buying.pass(Defaults.OVERRIDE_WAIT_MS)
+        buying.on(BlockEvent.ClaimOverride(Defaults.OVERRIDE_PHRASE))
+        assertFalse(buying.blocked())
+        buying.open()
+        assertEquals(1, buying.opens())
+    }
+
+    @Test
+    fun i52_outsideItsScheduleNothingCounts() {
+        val clock = FakeClock()
+        val today = clock.localDate().dayOfWeek.value
+        val notToday = Schedule(activeDays = (1..7).toSet() - today, activeWindow = null)
+        val phone = Phone(listOf(limited(opens = 1).copy(schedule = notToday)), clock)
+        phone.open()
+        assertEquals(0, phone.opens())
+    }
+
+    @Test
+    fun i52_aBlockForTheOtherDeviceCountsNothingHere() {
+        val phone = Phone(listOf(limited(opens = 1).copy(devices = Devices.LAPTOP)))
+        phone.open()
+        assertEquals(0, phone.opens())
+    }
+
+    @Test
+    fun i52_aHabitBlockOpensFreeThenAsksForItsHabit() {
+        val clock = FakeClock()
+        val block = checklistBlock("c1").copy(opensPerDay = 1)
+        val phone = Phone(listOf(block), clock)
+        phone.world = phone.world.copy(checklist = mapOf("c1" to items("c1", 1)))
+        phone.on(BlockEvent.Tick)
+        assertTrue(block.limitComesFirst)
+        assertFalse(phone.blocked())
+
+        phone.open()
+        assertEquals(1, phone.opens("c1"))
+        phone.leave()
+        phone.pass(Defaults.OPEN_GRACE_MS)
+        assertTrue(phone.blocked())
+        assertEquals(BlockReason.HABIT, phone.reason("c1"))
+
+        // The habit opens it, and the opens that follow are the unlock's, not the limit's.
+        phone.on(BlockEvent.ToggleChecklistItem("c1-i0", true))
+        phone.on(BlockEvent.Redeem("c1"))
+        phone.open()
+        assertEquals(1, phone.opens("c1"))
+        assertFalse(phone.blocked())
+    }
+
+    @Test
+    fun i52_opensOutliveAHabitsReset() {
+        val clock = FakeClock()
+        val phone = Phone(listOf(checklistBlock("c1").copy(opensPerDay = 2)), clock)
+        phone.world = phone.world.copy(checklist = mapOf("c1" to items("c1", 1)))
+        phone.open()
+        phone.on(BlockEvent.ToggleChecklistItem("c1-i0", true))
+        assertEquals(BlockState.EARNED, phone.world.block("c1")!!.state)
+        phone.on(BlockEvent.UserResetEarned("c1"))
+        assertEquals(1, phone.opens("c1"))
+    }
+
+    @Test
+    fun i52_devicesShareOpensUnlessEachHasItsOwn() {
+        fun together(perDevice: Boolean): Pair<Int, Int> {
+            val server = FakeServer()
+            val clock = FakeClock()
+            val block = limited(opens = 3).copy(perDevice = perDevice)
+            val phone = Device("phone", buildWorld(listOf(block), clock = clock).copy(deviceId = "phone"), clock)
+            val laptop = Device("laptop", buildWorld(listOf(block), clock = clock).copy(deviceId = "laptop"), clock)
+            phone.sync(server)
+            laptop.sync(server)
+            phone.on(BlockEvent.ForegroundChanged("com.target"))
+            phone.sync(server)
+            laptop.sync(server)
+            laptop.on(BlockEvent.ForegroundChanged("com.target"))
+            laptop.sync(server)
+            phone.sync(server)
+            return engine.opensUsed(phone.world, phone.block("o"), clock) to engine.opensUsed(laptop.world, laptop.block("o"), clock)
+        }
+        assertEquals(2 to 2, together(perDevice = false))
+        assertEquals(1 to 1, together(perDevice = true))
+    }
+
+    /** With no minutes to compare, the opens alone have to tell a device's newer report (§2.4). */
+    @Test
+    fun i52_syncRoundsSettleOnALimitOfOpensAlone() {
+        val server = FakeServer()
+        val clock = FakeClock()
+        val block = limited(opens = 3)
+        val phone = Device("phone", buildWorld(listOf(block), clock = clock).copy(deviceId = "phone"), clock)
+        val laptop = Device("laptop", buildWorld(listOf(block), clock = clock).copy(deviceId = "laptop"), clock)
+        phone.sync(server)
+        laptop.sync(server)
+        phone.sync(server)
+        phone.on(BlockEvent.ForegroundChanged("com.target"))
+        assertTrue(phone.sync(server))
+        laptop.sync(server)
+        assertEquals(1, server.state.allowance["o"]!!["phone"]!!.opens)
+        assertFalse("settled", phone.sync(server))
+        assertFalse("settled", laptop.sync(server))
+    }
+
+    @Test
+    fun i52_moreOpensLoosensAndFewerDoesnt() {
+        val block = limited(opens = 3)
+        assertTrue(BlockEdits.loosens(block, block.copy(opensPerDay = 4)))
+        assertTrue(BlockEdits.loosens(block, block.copy(opensPerDay = 0)))
+        assertFalse(BlockEdits.loosens(block, block.copy(opensPerDay = 2)))
+        assertFalse(BlockEdits.loosens(limited(), limited(opens = 3)))
+    }
+
+    @Test
+    fun i53_theWaitHoldsThenOpensByItself() {
+        val phone = Phone(listOf(limited(opens = 3, waitS = 5)))
+        phone.open()
+        assertTrue(phone.blocked())
+        assertEquals(BlockReason.WAIT, phone.reason())
+        assertEquals(0, phone.opens())
+
+        phone.pass(4_000)
+        assertTrue(phone.blocked())
+        phone.pass(1_000)
+        assertFalse(phone.blocked())
+        assertEquals(1, phone.opens())
+    }
+
+    @Test
+    fun i53_leavingDuringTheWaitCostsNothingAndWaitsAgain() {
+        val phone = Phone(listOf(limited(opens = 1, waitS = 5)))
+        phone.open()
+        phone.pass(2_000)
+        phone.leave()
+        assertEquals(0, phone.opens())
+        assertFalse(phone.blocked())
+
+        phone.open()
+        assertEquals(BlockReason.WAIT, phone.reason())
+    }
+
+    @Test
+    fun i53_aQuickSwitchDoesntWaitAgain() {
+        val phone = Phone(listOf(limited(waitS = 5)))
+        phone.open()
+        phone.pass(5_000)
+        phone.leave()
+        phone.pass(10_000)
+        phone.open()
+        assertFalse(phone.blocked())
+    }
+
+    @Test
+    fun i53_theWaitIsntUse() {
+        val block = limited(waitS = 5).copy(dailyAllowanceMs = 30L * 60_000)
+        val phone = Phone(listOf(block))
+        phone.open()
+        phone.pass(5_000)
+        assertEquals(0L, engine.allowanceUsedMs(phone.world, phone.world.block("o")!!, phone.clock))
+        phone.pass(10_000)
+        assertEquals(10_000L, engine.allowanceUsedMs(phone.world, phone.world.block("o")!!, phone.clock))
+    }
+
+    @Test
+    fun i53_theWaitIsntLoggedAsBeingBlocked() {
+        val phone = Phone(listOf(limited(waitS = 5)))
+        phone.open()
+        phone.on(BlockEvent.ForegroundChanged("com.target", "target.com"))
+        phone.pass(5_000)
+        assertTrue(phone.seen.toString(), phone.seen.isEmpty())
+    }
+
+    @Test
+    fun i53_theWaitCantBeBoughtOff() {
+        val phone = Phone(listOf(limited(waitS = 5)))
+        phone.open()
+        assertEquals(OverrideRejection.NOT_OVERRIDABLE, engine.overrideRejection(phone.world, listOf(phone.world.block("o")!!), phone.clock))
+    }
+
+    @Test
+    fun i53_noWaitOnceTheOpensAreGone() {
+        val phone = Phone(listOf(limited(opens = 1, waitS = 5)))
+        phone.open()
+        phone.pass(5_000)
+        phone.leave()
+        phone.pass(Defaults.OPEN_GRACE_MS)
+        phone.open()
+        assertEquals(BlockReason.LIMIT, phone.reason())
+    }
+
+    @Test
+    fun i53_aBreakSkipsTheWait() {
+        val phone = Phone(listOf(limited(waitS = 5)))
+        phone.on(BlockEvent.StartPause())
+        phone.open()
+        assertFalse(phone.blocked())
+    }
+
+    @Test
+    fun i53_aLaptopAppCantWaitButASiteCan() {
+        val app = limited(opens = 3, waitS = 5, targets = emptySet()).copy(targetDesktopApps = setOf("game"))
+        val laptop = Phone(listOf(app), kind = DeviceKind.LAPTOP)
+        laptop.open("game")
+        assertFalse(laptop.blocked("game"))
+        assertEquals(1, laptop.opens())
+        laptop.leave()
+        laptop.pass(Defaults.OPEN_GRACE_MS)
+
+        laptop.on(BlockEvent.ForegroundChanged("browser", "target.com"))
+        assertEquals(BlockReason.WAIT, laptop.reason())
+        assertTrue(laptop.plan.siteBlocked("target.com"))
+    }
+
+    @Test
+    fun i53_aWaitOnASiteLeavesTheBlocksLaptopAppAlone() {
+        val both = limited(waitS = 5, targets = emptySet()).copy(targetDesktopApps = setOf("game"))
+        val laptop = Phone(listOf(both), kind = DeviceKind.LAPTOP)
+        laptop.on(BlockEvent.ForegroundChanged("browser", "target.com"))
+        assertEquals(BlockReason.WAIT, laptop.reason())
+        assertFalse(laptop.blocked("game"))
+    }
+
+    @Test
+    fun i53_aColdStartDropsAWaitButNotAnOpen() {
+        val waiting = Phone(listOf(limited(waitS = 5)))
+        waiting.open()
+        waiting.on(BlockEvent.BootOrColdStart)
+        assertTrue(waiting.world.openRuns.isEmpty())
+
+        val open = Phone(listOf(limited(opens = 1)))
+        open.open()
+        open.on(BlockEvent.BootOrColdStart)
+        assertFalse(open.blocked())
+    }
+
+    @Test
+    fun i53_aBlockOnTheSameTargetCountsOnlyOnceTheWaitIsOver() {
+        val phone = Phone(listOf(limited("a", opens = 1), limited("b", waitS = 5)))
+        phone.open()
+        assertEquals(0, phone.opens("a"))
+        phone.leave()
+        assertEquals(0, phone.opens("a"))
+
+        phone.open()
+        phone.pass(5_000)
+        assertEquals(1, phone.opens("a"))
+        assertFalse(phone.blocked())
+    }
+
+    @Test
+    fun i53_aShorterWaitLoosens() {
+        val block = limited(waitS = 10)
+        assertTrue(BlockEdits.loosens(block, block.copy(openWaitS = 5)))
+        assertTrue(BlockEdits.loosens(block, block.copy(openWaitS = 0)))
+        assertFalse(BlockEdits.loosens(block, block.copy(openWaitS = 30)))
+        assertFalse(BlockEdits.loosens(limited(), limited(waitS = 5)))
+    }
+
+    @Test
+    fun i53_runsDontWriteTheFileEveryTick() {
+        val phone = Phone(listOf(limited(opens = 3)))
+        phone.open()
+        val before = phone.world.withoutBookkeeping()
+        phone.pass(5_000)
+        assertEquals(before, phone.world.withoutBookkeeping())
+    }
 }

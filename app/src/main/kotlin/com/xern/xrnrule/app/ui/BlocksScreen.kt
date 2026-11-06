@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.FreeBreakfast
 import androidx.compose.material.icons.outlined.GppBad
@@ -692,6 +693,16 @@ private fun RuleRows(block: Block, world: World, store: WorldStore) {
                 label = "Time in a row",
                 value = "${formatDuration(engine.rowUsedMs(world, block, clock))} / ${formatDuration(block.sessionMs)}",
                 fraction = engine.rowUsedMs(world, block, clock).toFloat() / block.sessionMs,
+            )
+        }
+        if (block.opensPerDay > 0) {
+            val used = engine.opensUsed(world, block, clock)
+            HabitRow(
+                icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                kind = kinds.limit,
+                label = if (block.perDevice) "Opens today, this phone" else "Opens today",
+                value = "$used / ${block.opensPerDay}",
+                fraction = used.toFloat() / block.opensPerDay,
             )
         }
     }

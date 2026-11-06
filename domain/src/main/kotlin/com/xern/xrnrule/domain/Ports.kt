@@ -172,4 +172,5 @@ fun World.withoutBookkeeping(): World = copy(
     foregroundPkg = null,
     foregroundSite = null,
     backgroundSites = emptySet(),
+    openRuns = emptyMap(), // moves every tick; the opens they add up to stay, and save at once
 )

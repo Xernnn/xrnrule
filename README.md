@@ -28,7 +28,9 @@ youtube.com in both browsers and a laptop app. Each block is one of three kinds:
 1. **Earn it.** Blocked until you do the habit: a checklist, a timer (optionally counted in a
    *different* app, such as a reading app), or both. A checklist item can be linked to a habit
    in [xrnloops](#companion-app-xrnloops), so only a real tick there counts.
-2. **Limit.** N minutes a day, and/or "at most N minutes in a row, then a break". Phone and
+2. **Limit.** N minutes a day, N opens a day, and/or "at most N minutes in a row, then a break".
+   Coming back within a minute is the same open. Optionally a few seconds' pause before each
+   open, showing what's left; it opens by itself, and leaving first costs nothing. Phone and
    laptop share one limit, or each gets its own (a choice per block).
 3. **Set time.** Blocked on a weekly schedule (as many time windows as you like), or locked
    down right now for N minutes.
