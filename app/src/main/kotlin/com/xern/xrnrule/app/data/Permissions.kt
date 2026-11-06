@@ -1,8 +1,10 @@
 package com.xern.xrnrule.app.data
 
+import android.Manifest
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -53,6 +55,11 @@ private fun hasUsageAccess(context: Context): Boolean {
     } else {
         @Suppress("DEPRECATION")
         appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+    }
+    // Default leaves it to the permission, which is how UsageStats itself reads it: asking only
+    // for "allowed" warned that blocking was off while it was working.
+    if (mode == AppOpsManager.MODE_DEFAULT) {
+        return context.checkSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) == PackageManager.PERMISSION_GRANTED
     }
     return mode == AppOpsManager.MODE_ALLOWED
 }
