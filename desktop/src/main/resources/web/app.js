@@ -110,7 +110,7 @@ function siteIcon(site) {
   });
 }
 
-const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const min = (ms) => Math.max(0, Math.round(ms / 60000));
 const clock = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -263,8 +263,8 @@ function blockCard(b) {
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const minutesOf = (text) => {
-  const [hh, mm] = text.split(":").map(Number);
-  return (hh || 0) * 60 + (mm || 0);
+  const m = /^(\d{1,2}):?(\d{2})$/.exec(text.trim());
+  return !m || +m[1] > 23 || +m[2] > 59 ? null : +m[1] * 60 + +m[2];
 };
 
 async function openForm(b) {
@@ -284,6 +284,7 @@ async function openForm(b) {
         unlockMin: min(b.unlockMs),
         selfPaced: b.selfPaced,
         devices: b.devices,
+// Minutes past midnight from "22:00", "7:30" or "0730"; null for anything else, a half-typed time included.
         dailyOn: !b.hasLimit || b.allowanceMs > 0,
         limitOn: b.hasLimit,
         habitFirst: b.habitFirst,
@@ -393,9 +394,14 @@ function buildForm(b) {
   // Days and times, for a schedule or a block's blocked hours.
   const dayPick = (days, set) => h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
     h("input", { type: "checkbox", checked: days.includes(i + 1), onchange: (e) => set(e.target.checked ? [...new Set([...days, i + 1])].sort() : days.filter((x) => x !== i + 1)) }), name)));
-  const times = (w) => h("div", { class: "row" },
-    field("From", h("input", { type: "time", value: hhmm(w.startMin), oninput: (e) => (w.startMin = minutesOf(e.target.value)) })),
-    field("Until", h("input", { type: "time", value: hhmm(w.endMin), oninput: (e) => (w.endMin = minutesOf(e.target.value)) })));
+  // A browser's own time field follows its language and can show am/pm, so this one is plain text.
+  // Until the text is a whole time the last good one stands, and leaving the field shows it again.
+  const timeInput = (w, key) => h("input", {
+    type: "text", class: "clock", maxlength: 5, placeholder: "22:00", value: hhmm(w[key]),
+    oninput: (e) => { const m = minutesOf(e.target.value); if (m != null) w[key] = m; },
+    onblur: (e) => (e.target.value = hhmm(w[key])),
+  });
+  const times = (w) => h("div", { class: "row" }, field("From", timeInput(w, "startMin")), field("Until", timeInput(w, "endMin")));
   const timesEditor = (s, allDay = false) => [
     dayPick(s.days, (days) => (s.days = days)),
     !allDay && times(s),

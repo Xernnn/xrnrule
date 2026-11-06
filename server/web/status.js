@@ -150,8 +150,8 @@ function loginView(message = "") {
 
 // ---- time ----------------------------------------------------------------------------------
 
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
-const whenFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+const timeFmt = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const whenFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 function localDayStartMs(now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();

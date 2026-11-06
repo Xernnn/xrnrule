@@ -2,7 +2,6 @@
 
 package com.xern.xrnrule.app.ui
 
-import android.text.format.DateFormat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,7 +50,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -426,11 +424,10 @@ internal fun TimeTile(label: String, minute: Int, modifier: Modifier, onClick: (
 
 @Composable
 internal fun TimeInputDialog(initialMinute: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
-    val context = LocalContext.current
     val state = rememberTimePickerState(
         initialHour = initialMinute / 60,
         initialMinute = initialMinute % 60,
-        is24Hour = DateFormat.is24HourFormat(context),
+        is24Hour = true,
     )
     AlertDialog(
         onDismissRequest = onDismiss,

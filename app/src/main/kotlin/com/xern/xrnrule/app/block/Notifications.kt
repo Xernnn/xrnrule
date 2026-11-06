@@ -6,17 +6,16 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.text.format.DateFormat
 import androidx.core.app.NotificationCompat
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.MainActivity
+import com.xern.xrnrule.app.ui.formatClockTime
 import com.xern.xrnrule.app.ui.formatRemaining
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.World
-import java.util.Date
 
 /**
  * The service's notifications: the ongoing status line that keeps it in the foreground (what's
@@ -143,8 +142,7 @@ class Notifications(private val context: Context) {
 
     fun cancel(id: Int) = nm.cancel(id)
 
-    private fun clockTime(fromNowMs: Long): String =
-        DateFormat.getTimeFormat(context).format(Date(System.currentTimeMillis() + fromNowMs))
+    private fun clockTime(fromNowMs: Long): String = formatClockTime(System.currentTimeMillis() + fromNowMs)
 
     private fun openFocus(habitId: String): PendingIntent = PendingIntent.getActivity(
         context,
