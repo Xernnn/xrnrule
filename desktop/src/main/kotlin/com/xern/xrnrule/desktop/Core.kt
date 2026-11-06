@@ -210,17 +210,24 @@ class FilePersist(private val file: File, private val clock: Clock) : PersistPor
 
 object NoTelemetry : Telemetry {
     override fun onBlockedImpression(pkg: String, atWallMs: Long) = Unit
+    override fun onSiteBlocked(host: String, atWallMs: Long) = Unit
+    override fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long) = Unit
+    override fun onBreakTaken(ms: Long, atWallMs: Long) = Unit
     override fun onHabitCompleted(blockId: String, atWallMs: Long) = Unit
     override fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long) = Unit
 }
 
 /**
- * The laptop's event log, in the phone's format (`LocalTelemetry`): a blocked app opened, a
- * habit done, an unlock used, one `;`-separated line each. [SharedSyncClient] sends new lines
+ * The laptop's event log, in the phone's format (`LocalTelemetry`): a blocked app or site opened,
+ * a habit done, an unlock used, minutes bought, a break taken, one `;`-separated line each. [SharedSyncClient] sends new lines
  * to the server for the weekly review in the habits web app.
  */
 class FileTelemetry(private val file: File) : Telemetry {
     override fun onBlockedImpression(pkg: String, atWallMs: Long) = append("blocked;$pkg;$atWallMs")
+    override fun onSiteBlocked(host: String, atWallMs: Long) = append("site;$host;$atWallMs")
+    override fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long) =
+        append("bought;${blockIds.joinToString(",")};$ms;$atWallMs")
+    override fun onBreakTaken(ms: Long, atWallMs: Long) = append("break;$ms;$atWallMs")
     override fun onHabitCompleted(blockId: String, atWallMs: Long) = append("habit;$blockId;$atWallMs")
     override fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long) =
         append("unlock;$blockId;$ms;$atWallMs;$startedAtWall")
@@ -247,6 +254,41 @@ class FileTelemetry(private val file: File) : Telemetry {
                     put("at", at)
                     put("target", f[1])
                     put("name", DesktopApps.name(f[1]))
+                }
+            }
+            "site" -> f.getOrNull(2)?.toLongOrNull()?.let { at ->
+                buildJsonObject {
+                    put("t", "blocked")
+                    put("at", at)
+                    put("target", f[1])
+                    put("name", f[1])
+                }
+            }
+            "bought" -> {
+                val ms = f.getOrNull(2)?.toLongOrNull()
+                val at = f.getOrNull(3)?.toLongOrNull()
+                if (ms == null || at == null) {
+                    null
+                } else {
+                    buildJsonObject {
+                        put("t", "bought")
+                        put("at", at)
+                        put("block", f[1])
+                        put("ms", ms)
+                    }
+                }
+            }
+            "break" -> {
+                val ms = f.getOrNull(1)?.toLongOrNull()
+                val at = f.getOrNull(2)?.toLongOrNull()
+                if (ms == null || at == null) {
+                    null
+                } else {
+                    buildJsonObject {
+                        put("t", "break")
+                        put("at", at)
+                        put("ms", ms)
+                    }
                 }
             }
             "habit" -> f.getOrNull(2)?.toLongOrNull()?.let { at ->
@@ -293,7 +335,7 @@ class FileTelemetry(private val file: File) : Telemetry {
     /** When a line's event happened: the third field, or the fourth for an unlock. */
     private fun eventTime(line: String): Long? {
         val f = line.split(';')
-        return (if (f.firstOrNull() == "unlock") f.getOrNull(3) else f.getOrNull(2))?.toLongOrNull()
+        return (if (f.firstOrNull() in setOf("unlock", "bought")) f.getOrNull(3) else f.getOrNull(2))?.toLongOrNull()
     }
 }
 

@@ -339,6 +339,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I48** | `SiteRules.watched`: mọi site của block bật áp dụng ở thiết bị này, trừ lockdown chưa chạy, kể cả đang mở. Engine im lặng hơn 60 s thì extension chặn hết danh sách đó, không chỉ thứ đang bị chặn: tắt xrnrule không còn là cách qua hạn mức. Test: `i48_*` |
 | **I49** | `Settings.blockOtherBrowsers` (mặc định bật; trộn: OR; tắt là nới lỏng): trình duyệt không có extension, khi đã biết một trình duyệt có, bị chặn lúc có block website áp dụng ở đây, sau 10 s ở trước mặt. Trình duyệt có extension thì không bao giờ bị chặn trên điện thoại, kẻo không còn đường sửa extension. Test: `i49_*`, `BrowserWatchTest` |
 | **I50** | Block đang khóa (I39) không có lối tắt: Pause (I25) không nhấc nó (`pausable(block, clock)`), override không mua được (`overrideRejection` = `NOT_OVERRIDABLE`, xét lại lúc `ClaimOverride`, không tốn lượt), và phút đã mua trước đó không tính trong lúc khóa (`overrideRemainingMs` = 0). Làm habit vẫn mở block như cũ (I39). Xét theo từng lúc, không xóa gì: hết khóa hay mở khẩn cấp (I40) thì phút đã mua còn hạn lại tính và Pause đang chạy lại nhấc. Test: `i50_*` |
+| **I51** | Nhật ký ghi đủ những lần gặp shield và những lần đi đường tắt: `ForegroundChanged` tới app bị chặn phát `BlockedImpression`, tới site bị chặn phát `SiteBlocked` (host đã `Sites.normalize`). Cùng một target trong vòng `Defaults.BLOCKED_AGAIN_MS` (30 s) chỉ tính một lần (`World.lastBlocked`, riêng từng máy, không chung), để một lần chớp tắt không đếm hai. `OverrideGranted` và `BreakTaken` (từ `StartPause` thật sự có hiệu lực) cũng vào nhật ký. Mở khẩn cấp thì đã có `emergencyLog` (I40). Test: `i51_*` |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 
@@ -376,6 +377,9 @@ interface ShieldPort {
 
 interface Telemetry {                            // cho Insights; khi bật sync, còn gửi lên server của người dùng (trang Review)
     fun onBlockedImpression(pkg: String, atWallMs: Long)
+    fun onSiteBlocked(host: String, atWallMs: Long)   // I51
+    fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long)   // I51
+    fun onBreakTaken(ms: Long, atWallMs: Long)   // I51
     fun onHabitCompleted(blockId: String, atWallMs: Long)
     fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long)  // startedAtWall: tên phiên (I28), các thiết bị cùng phiên ghi cùng một tên
 }
@@ -464,6 +468,6 @@ sealed interface BlockEvent {
 ## 7. Ghi chú test
 
 - `:domain` dùng `FakeClock`, `InMemoryPersist`, `RecordingShield` — không JUnit-Android, không Robolectric.
-- Mỗi bất biến I1–I50 có ít nhất một test đặt tên `i01_...` ... `i50_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
+- Mỗi bất biến I1–I51 có ít nhất một test đặt tên `i01_...` ... `i51_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
 - Acceptance của brainstorm §1 map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
   chạy chuỗi sự kiện end-to-end trên engine.

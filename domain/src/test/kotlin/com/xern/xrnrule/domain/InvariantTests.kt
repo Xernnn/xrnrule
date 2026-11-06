@@ -2796,4 +2796,87 @@ class InvariantTests {
         clock.advance(60_000)
         assertFalse(engine.pausable(world.block("s")!!, clock))
     }
+
+    /** Sends [outcome] through to the log, as the store does. */
+    private fun logged(outcome: Outcome, clock: Clock): List<String> {
+        val telemetry = RecordingTelemetry()
+        applyOutcome(outcome, InMemoryPersist(outcome.world), RecordingShield(mutableListOf()), telemetry, clock.nowWallMs())
+        return telemetry.lines
+    }
+
+    private fun siteBlock() = modeBlock("s", BlockMode.SCHEDULE, targetPackages = emptySet(), targetSites = setOf("reddit.com"))
+
+    @Test
+    fun i51_aBlockedSiteIsLogged() {
+        val clock = FakeClock()
+        val world = buildWorld(listOf(siteBlock()), clock = clock)
+        val out = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "old.reddit.com"), clock)
+        assertEquals(listOf("site old.reddit.com"), logged(out, clock))
+    }
+
+    @Test
+    fun i51_aSiteLeftOpenIsNotLogged() {
+        val clock = FakeClock()
+        val world = buildWorld(listOf(siteBlock()), clock = clock)
+        assertTrue(logged(engine.reduce(world, BlockEvent.ForegroundChanged("browser", "example.com"), clock), clock).isEmpty())
+    }
+
+    @Test
+    fun i51_aFlickerCountsOnce() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(siteBlock()), clock = clock)
+        var seen = emptyList<String>()
+        fun show(site: String?) {
+            val out = engine.reduce(world, BlockEvent.ForegroundChanged("browser", site), clock)
+            world = out.world
+            seen = seen + logged(out, clock)
+        }
+        show("reddit.com")
+        show(null)
+        clock.advance(Defaults.BLOCKED_AGAIN_MS - 1)
+        show("reddit.com")
+        assertEquals(1, seen.size)
+
+        show(null)
+        clock.advance(1)
+        show("reddit.com")
+        assertEquals(2, seen.size)
+    }
+
+    @Test
+    fun i51_anotherTargetCountsAtOnce() {
+        val clock = FakeClock()
+        val other = modeBlock("t", BlockMode.SCHEDULE, targetPackages = emptySet(), targetSites = setOf("x.com"))
+        var world = buildWorld(listOf(siteBlock(), other), clock = clock)
+        val first = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "reddit.com"), clock)
+        world = first.world
+        val second = engine.reduce(world, BlockEvent.ForegroundChanged("browser", "x.com"), clock)
+        assertEquals(listOf("site reddit.com"), logged(first, clock))
+        assertEquals(listOf("site x.com"), logged(second, clock))
+    }
+
+    @Test
+    fun i51_aBlockedAppStillCountsAsAnApp() {
+        val clock = FakeClock()
+        val world = buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock)
+        val out = engine.reduce(world, BlockEvent.ForegroundChanged("com.target"), clock)
+        assertEquals(listOf("app com.target"), logged(out, clock))
+    }
+
+    @Test
+    fun i51_boughtMinutesAreLogged() {
+        val clock = FakeClock()
+        val waiting = engine.reduce(buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock), BlockEvent.BeginOverride(setOf("s")), clock).world
+        clock.advance(Defaults.OVERRIDE_WAIT_MS)
+        assertEquals(listOf("bought [s] ${Defaults.OVERRIDE_GRANT_MS}"), logged(claim(waiting, clock), clock))
+    }
+
+    @Test
+    fun i51_aBreakIsLoggedOnlyWhenTaken() {
+        val clock = FakeClock()
+        val world = buildWorld(listOf(modeBlock("s", BlockMode.SCHEDULE)), clock = clock)
+        val taken = engine.reduce(world, BlockEvent.StartPause(), clock)
+        assertEquals(listOf("break ${Defaults.PAUSE_MS}"), logged(taken, clock))
+        assertTrue(logged(engine.reduce(taken.world, BlockEvent.StartPause(), clock), clock).isEmpty())
+    }
 }

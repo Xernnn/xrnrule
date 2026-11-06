@@ -45,9 +45,12 @@ interface ShieldPort {
 
 interface Telemetry {
     fun onBlockedImpression(pkg: String, atWallMs: Long)
+    fun onSiteBlocked(host: String, atWallMs: Long)
     fun onHabitCompleted(blockId: String, atWallMs: Long)
     /** [startedAtWall] names the session (I28): devices sharing it each log it, under one name. */
     fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long)
+    fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long)
+    fun onBreakTaken(ms: Long, atWallMs: Long)
 }
 
 /**
@@ -109,6 +112,8 @@ data class TimeLeft(val ms: Long, val kind: ClockKind, val blockId: String? = nu
 
 sealed interface Effect {
     data class BlockedImpression(val pkg: String) : Effect
+    data class SiteBlocked(val host: String) : Effect
+    data class BreakTaken(val ms: Long) : Effect
     data class HabitCompleted(val blockId: String) : Effect
     data class UnlockConsumed(val blockId: String, val ms: Long, val startedAtWall: Long = 0) : Effect
     data class UnlockEndingSoon(val blockId: String, val remainingMs: Long) : Effect
@@ -144,12 +149,14 @@ fun applyOutcome(
     outcome.effects.forEach { effect ->
         when (effect) {
             is Effect.BlockedImpression -> telemetry.onBlockedImpression(effect.pkg, nowWallMs)
+            is Effect.SiteBlocked -> telemetry.onSiteBlocked(effect.host, nowWallMs)
+            is Effect.BreakTaken -> telemetry.onBreakTaken(effect.ms, nowWallMs)
+            is Effect.OverrideGranted -> telemetry.onMinutesBought(effect.blockIds, effect.ms, nowWallMs)
             is Effect.HabitCompleted -> telemetry.onHabitCompleted(effect.blockId, nowWallMs)
             is Effect.UnlockConsumed -> telemetry.onUnlockConsumed(effect.blockId, effect.ms, nowWallMs, effect.startedAtWall)
             is Effect.UnlockEndingSoon,
             is Effect.TamperDetected,
             is Effect.RedeemRejected,
-            is Effect.OverrideGranted,
             is Effect.OverrideRejected -> Unit // routed to notifications / UI by the caller
         }
     }

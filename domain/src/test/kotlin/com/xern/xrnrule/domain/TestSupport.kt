@@ -69,8 +69,22 @@ class RecordingShield(private val log: MutableList<String>) : ShieldPort {
 
 object NoopTelemetry : Telemetry {
     override fun onBlockedImpression(pkg: String, atWallMs: Long) = Unit
+    override fun onSiteBlocked(host: String, atWallMs: Long) = Unit
     override fun onHabitCompleted(blockId: String, atWallMs: Long) = Unit
     override fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long) = Unit
+    override fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long) = Unit
+    override fun onBreakTaken(ms: Long, atWallMs: Long) = Unit
+}
+
+/** What reached the log, one line each. */
+class RecordingTelemetry : Telemetry {
+    val lines = mutableListOf<String>()
+    override fun onBlockedImpression(pkg: String, atWallMs: Long) { lines += "app $pkg" }
+    override fun onSiteBlocked(host: String, atWallMs: Long) { lines += "site $host" }
+    override fun onHabitCompleted(blockId: String, atWallMs: Long) { lines += "habit $blockId" }
+    override fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long) { lines += "unlock $blockId $ms" }
+    override fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long) { lines += "bought ${blockIds.sorted()} $ms" }
+    override fun onBreakTaken(ms: Long, atWallMs: Long) { lines += "break $ms" }
 }
 
 // ---- builders -------------------------------------------------------------------------

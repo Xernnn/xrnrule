@@ -219,8 +219,8 @@ class SharedSync(
     }
 
     /**
-     * This phone's event log newer than what the server has (blocked, habit done, unlock used),
-     * for the weekly review in the habits web app. Apps go with their names, which the server
+     * This phone's event log newer than what the server has (blocked, habit done, unlock used,
+     * minutes bought, a break), for the weekly review in the habits web app. Apps go with their names, which the server
      * can't look up.
      */
     private fun sendEvents() {
@@ -240,6 +240,20 @@ class SharedSync(
                                 put("target", e.pkg)
                                 put("name", names.getOrPut(e.pkg) { InstalledApps.labelFor(context, e.pkg) })
                             }
+                            is TelemetryEvent.SiteBlocked -> {
+                                put("t", "blocked")
+                                put("target", e.host)
+                                put("name", e.host)
+                            }
+                            is TelemetryEvent.MinutesBought -> {
+                                put("t", "bought")
+                                put("block", e.blockIds)
+                                put("ms", e.ms)
+                            }
+                            is TelemetryEvent.BreakTaken -> {
+                                put("t", "break")
+                                put("ms", e.ms)
+                            }
                             is TelemetryEvent.HabitDone -> {
                                 put("t", "habit")
                                 put("block", e.blockId)
@@ -258,6 +272,14 @@ class SharedSync(
             settings.eventsSentUntil = fresh.maxOf { it.atWallMs }
         }
         telemetrySizeSent = size
+    }
+
+    /** What other devices logged since [sinceMs], for Insights; nothing with sync off or out of reach. Blocking. */
+    fun eventsElsewhere(sinceMs: Long): List<TelemetryEvent> {
+        if (!settings.isConfigured) return emptyList()
+        return runCatching {
+            eventsFromElsewhere(Api(settings.url, settings.user, settings.password).events(sinceMs), DEVICE)
+        }.getOrDefault(emptyList())
     }
 
     private fun loadBase(): Base? = try {
@@ -343,13 +365,23 @@ class SharedSync(
             }
         }
 
+        fun events(sinceMs: Long): String {
+            val conn = open("GET", "?since=$sinceMs", "/events")
+            try {
+                check(conn, conn.responseCode)
+                return conn.inputStream.use { it.readBytes().decodeToString() }
+            } finally {
+                conn.disconnect()
+            }
+        }
+
         private fun open(method: String, query: String = "", path: String = "/state"): HttpURLConnection =
             (URL("$baseUrl$path$query").openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = TIMEOUT_MS
                 readTimeout = TIMEOUT_MS
                 setRequestProperty("Authorization", auth)
-                setRequestProperty("X-Device", "phone")
+                setRequestProperty("X-Device", DEVICE)
             }
 
         private fun check(conn: HttpURLConnection, code: Int) {
@@ -362,6 +394,7 @@ class SharedSync(
     }
 
     private companion object {
+        const val DEVICE = "phone"
         const val CHANGE_DEBOUNCE_MS = 1_000L
         const val PERIOD_MS = 60_000L
         const val MAX_TRIES = 4

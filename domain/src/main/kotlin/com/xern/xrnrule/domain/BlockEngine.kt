@@ -27,7 +27,7 @@ class BlockEngine {
             is BlockEvent.UserResetEarned -> onUserReset(world, event.blockId, clock)
             is BlockEvent.TimerControl -> onTimerControl(world, event, clock)
             is BlockEvent.StartLockdown -> world.withLockdownStarted(event.blockId, clock) // I21
-            is BlockEvent.StartPause -> onStartPause(world, event, clock)
+            is BlockEvent.StartPause -> onStartPause(world, event, clock, effects)
             is BlockEvent.EndPause -> world.copy(pause = null)
             is BlockEvent.SharedStateMerged ->
                 adoptShared(world, SharedState.merge(event.base, SharedState.of(world), event.remote), clock) // I26
@@ -435,10 +435,21 @@ class BlockEngine {
         // Accrue time for the *previous* foreground app/site up to now, then switch.
         var w = accrueTimers(world, clock)
         val pkg = event.pkg
-        if (pkg != null && pkg in blockedPackages(w, clock)) {
-            effects += Effect.BlockedImpression(pkg)
+        val site = event.site
+        val met = when {
+            pkg != null && pkg in blockedPackages(w, clock) -> pkg
+            site != null && shieldPlan(w, clock).siteBlocked(site) -> Sites.normalize(site)
+            else -> null
         }
-        w = w.copy(foregroundPkg = pkg, foregroundSite = event.site)
+        if (met != null) {
+            val last = w.lastBlocked
+            val now = clock.nowWallMs()
+            if (last?.target != met || now - last.atWall >= Defaults.BLOCKED_AGAIN_MS) { // I51
+                effects += if (met == pkg) Effect.BlockedImpression(met) else Effect.SiteBlocked(met)
+                w = w.copy(lastBlocked = LastBlocked(met, now))
+            }
+        }
+        w = w.copy(foregroundPkg = pkg, foregroundSite = site)
         return checkTimerTriggers(w, clock, effects)
     }
 
@@ -768,8 +779,9 @@ class BlockEngine {
         return (if (updated == items) world else world.copy(checklist = world.checklist + (blockId to updated))) to undone
     }
 
-    private fun onStartPause(world: World, event: BlockEvent.StartPause, clock: Clock): World {
+    private fun onStartPause(world: World, event: BlockEvent.StartPause, clock: Clock, effects: MutableList<Effect>): World {
         if (!canPause(world, clock) || event.durationMs <= 0) return world // I25: one a day
+        effects += Effect.BreakTaken(event.durationMs)
         val pause = Pause(clock.nowMonotonicMs(), clock.nowWallMs(), event.durationMs)
         return world.copy(pause = pause, lastPauseEpochDay = clock.epochDay())
     }

@@ -95,6 +95,7 @@ object Defaults {
     const val UNLOCK_WARNING_MS = 30_000L                // G3
     const val DEFAULT_UNLOCK_MS = 5L * 60 * 1000
     const val PAUSE_MS = 15L * 60 * 1000                 // I25
+    const val BLOCKED_AGAIN_MS = 30_000L                 // I51
     const val EMERGENCY_UNLOCKS = 5                      // I40: in all, never given back
     const val ALL_ITEMS = -1L                            // trigger.requiredAmount sentinel (I11)
     const val OVERRIDE_PHRASE = "I choose to keep scrolling" // I34
@@ -525,6 +526,10 @@ data class Settings(
     val blockOtherBrowsers: Boolean = true,
 )
 
+/** I51: which app or site the shield last met here, and when. */
+@Serializable
+data class LastBlocked(val target: String, val atWall: Long)
+
 /**
  * The whole persisted world. `:app` loads it on boot and saves it back after every [Outcome]
  * (save must complete before the shield is touched — I7).
@@ -568,6 +573,8 @@ data class World(
     val overrideEpochDay: Long = 0,
     /** I40: every emergency unlock ever, "blockId@wall" -> wall; shared, only ever added to. */
     val emergencyLog: Map<String, Long> = emptyMap(),
+    /** I51: the last target the shield met here, so a flicker is logged once. Device-local. */
+    val lastBlocked: LastBlocked? = null,
     /** An override waiting out its delay here (I34). */
     val pendingOverride: PendingOverride? = null,
     /**

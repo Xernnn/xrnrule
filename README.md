@@ -70,7 +70,8 @@ parts of a site alone (music.youtube.com under youtube.com).
   the Blocks tab say it's ready and take you to Settings → Updates, where it installs when you tap
   Install. See [Updates](#updates).
 - **Backup.** Export your blocks to a file and import them on a new install.
-- **Insights.** Per-app screen time, time per site, habits done, times blocked and your streak.
+- **Insights.** Per-app screen time, time per site, habits done, times blocked on apps and sites
+  (the laptop's too, with sync on), minutes bought, breaks, emergency unlocks and your streak.
 - Built to survive reboots, process death and OEM battery killers.
 
 ## The browser extension

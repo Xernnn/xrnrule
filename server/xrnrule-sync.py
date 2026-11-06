@@ -16,7 +16,7 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               503 if the stored file can't be read: never an empty document, which
                               a device would take as everything deleted (contract I45)
     GET  /devices             when each device last checked in (X-Device), for the status page
-    POST /events              {"events": [{"t": "blocked"|"habit"|"unlock", "at": ms, ...}]} from a
+    POST /events              {"events": [{"t": "blocked"|"habit"|"unlock"|"bought"|"break", "at": ms, ...}]} from a
                               device's local log (X-Device); duplicates are dropped. 120 days kept
     GET  /events?since=MS     those events, for the weekly review in the habits web app
     POST /session             with Basic auth: sets the web pages' login cookie (below)
@@ -65,7 +65,7 @@ FAIL_LIMIT = 10  # wrong logins from one address within FAIL_WINDOW_S, then 429 
 FAIL_WINDOW_S = 15 * 60
 SEEN_WRITE_S = 60  # devices.json is rewritten at most this often per user
 EVENTS_KEEP_DAYS = 120
-EVENT_TYPES = {"blocked", "habit", "unlock"}
+EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
 # are public, since a browser's updater sends no login; the app is the private repo's code.
