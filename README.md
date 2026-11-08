@@ -1,4 +1,8 @@
-# xrnrule
+<p align="center">
+  <img src="desktop/src/main/resources/web/icon.svg" width="72" height="72" alt="">
+</p>
+
+<h1 align="center">xrnrule</h1>
 
 Rules for your phone and your laptop. Distracting apps and websites stay behind a block until
 you've done a habit, used up today's minutes, or are inside the hours you set; then they open
