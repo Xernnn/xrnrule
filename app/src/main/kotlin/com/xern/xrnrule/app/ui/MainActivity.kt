@@ -1,5 +1,7 @@
 package com.xern.xrnrule.app.ui
 
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.CheckCircle
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -43,8 +45,12 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavController
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -209,7 +215,7 @@ private fun XrnruleScreens(container: AppContainer) {
     val settingsDeps = remember {
         SettingsDeps(
             store, hardcoreGuard, container.websites, container.loop, container.clockGuard, container.shared,
-            container.habits, container.updates, container.appLock,
+            container.habits, container.updates, container.appLock, container.reminders,
         )
     }
 
@@ -219,6 +225,13 @@ private fun XrnruleScreens(container: AppContainer) {
         focusLink?.let { id ->
             AppLinks.focus.value = null
             nav.navigate("focus/$id") { launchSingleTop = true }
+        }
+    }
+    val habitLink by AppLinks.habit.collectAsStateWithLifecycle()
+    LaunchedEffect(habitLink) {
+        habitLink?.let { (id, day) ->
+            AppLinks.habit.value = null
+            nav.navigate("habit/$id?amount=$day") { launchSingleTop = true }
         }
     }
     val openFocus: (String, Boolean) -> Unit = { id, start ->
@@ -279,8 +292,21 @@ private fun XrnruleScreens(container: AppContainer) {
                     onFocus = openFocus,
                 )
             }
+            composable(Tab.Habits.route) {
+                HabitsScreen(world, store, onOpenHabit = { nav.navigate("habit/$it") })
+            }
+            composable(
+                "habit/{id}?amount={amount}",
+                arguments = listOf(navArgument("amount") { type = NavType.LongType; defaultValue = -1L }),
+            ) { entry ->
+                HabitScreen(
+                    world, store, hardcoreGuard, entry.arguments?.getString("id").orEmpty(),
+                    askAmountOn = entry.arguments?.getLong("amount")?.takeIf { it >= 0 },
+                    onBack = { nav.leave(entry) },
+                )
+            }
             composable("focus/{habitId}") { entry ->
-                FocusScreen(store, entry.arguments?.getString("habitId").orEmpty(), onClose = { nav.popBackStack() })
+                FocusScreen(store, entry.arguments?.getString("habitId").orEmpty(), onClose = { nav.leave(entry) })
             }
             composable(Tab.Insights.route) {
                 InsightsScreen(world, container.websites, container.siteUsage, container.telemetry)
@@ -291,16 +317,16 @@ private fun XrnruleScreens(container: AppContainer) {
             composable("settings/{page}") { entry ->
                 val page = SettingsPage.entries.firstOrNull { it.name == entry.arguments?.getString("page") }
                 if (page == null) {
-                    LaunchedEffect(Unit) { nav.popBackStack() }
+                    LaunchedEffect(Unit) { nav.leave(entry) }
                 } else {
-                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.popBackStack() })
+                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.leave(entry) })
                 }
             }
-            composable("createBlock") {
+            composable("createBlock") { entry ->
                 NewBlockScreen(
                     store = store,
                     websites = container.websites,
-                    onDone = { nav.popBackStack() },
+                    onDone = { nav.leave(entry) },
                 )
             }
             composable("block/{id}") { entry ->
@@ -309,11 +335,20 @@ private fun XrnruleScreens(container: AppContainer) {
                     websites = container.websites,
                     guard = hardcoreGuard,
                     blockId = entry.arguments?.getString("id").orEmpty(),
-                    onDone = { nav.popBackStack() },
+                    onDone = { nav.leave(entry) },
                 )
             }
         }
     }
+}
+
+/**
+ * Leaves [entry]'s screen, once: only while it is the top of the stack. A page also leaves by
+ * itself when its block or habit is gone, and a deletion lands while the page is still animating
+ * out; a plain pop then would take the screen under it too.
+ */
+private fun NavController.leave(entry: NavBackStackEntry) {
+    if (currentBackStackEntry?.id == entry.id) popBackStack()
 }
 
 /** Links into a screen of the app from outside it: the block screen, the notification. */
@@ -328,15 +363,32 @@ object AppLinks {
             .putExtra(EXTRA_FOCUS, habitId)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
+    private const val EXTRA_HABIT = "com.xern.xrnrule.app.HABIT"
+    private const val EXTRA_AMOUNT_DAY = "com.xern.xrnrule.app.AMOUNT_DAY"
+
+    /** A habit's page to open (and the day to ask its amount for, or -1), until the screens pick it up. */
+    val habit = MutableStateFlow<Pair<String, Long>?>(null)
+
+    /** A reminder's way into [habitId]'s page, asking for the amount on [amountDay] if given. */
+    fun habitIntent(context: Context, habitId: String, amountDay: Long?): Intent =
+        Intent(context, MainActivity::class.java)
+            // Its own data, so each habit's (and each button's) PendingIntent is its own.
+            .setData(android.net.Uri.fromParts("xrnrule-habit", habitId, amountDay?.toString()))
+            .putExtra(EXTRA_HABIT, habitId)
+            .putExtra(EXTRA_AMOUNT_DAY, amountDay ?: -1L)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
     fun handle(intent: Intent?) {
         intent?.getStringExtra(EXTRA_FOCUS)?.let { focus.value = it }
+        intent?.getStringExtra(EXTRA_HABIT)?.let { habit.value = it to intent.getLongExtra(EXTRA_AMOUNT_DAY, -1L) }
     }
 }
 
 sealed class Tab(val route: String, val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
     data object Blocks : Tab("blocks", "Blocks", Icons.Outlined.Shield, Icons.Filled.Shield)
+    data object Habits : Tab("habits", "Habits", Icons.Outlined.CheckCircle, Icons.Filled.CheckCircle)
     data object Insights : Tab("insights", "Insights", Icons.Outlined.BarChart, Icons.Filled.BarChart)
     data object Settings : Tab("settings", "Settings", Icons.Outlined.Settings, Icons.Filled.Settings)
 }
 
-private val Tabs = listOf(Tab.Blocks, Tab.Insights, Tab.Settings)
+private val Tabs = listOf(Tab.Blocks, Tab.Habits, Tab.Insights, Tab.Settings)

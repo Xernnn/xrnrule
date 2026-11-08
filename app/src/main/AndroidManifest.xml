@@ -14,6 +14,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Habit reminders on the minute (remind/HabitReminders.kt); without it they come a little late. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -83,6 +85,11 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <!-- Habit reminders' alarms and buttons: only our own PendingIntents reach it. -->
+        <receiver
+            android:name=".remind.ReminderReceiver"
+            android:exported="false" />
 
         <!-- Loop pushes this after every habit change; only our Loop build can send it. -->
         <receiver

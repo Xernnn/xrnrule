@@ -188,9 +188,11 @@ Amounts logged on two devices at once add up; nothing needs to be installed next
 
 xrnloops is being folded into xrnrule (from November 2026): xrnrule takes over Loop's habit
 screens, reminders and widgets, with Loop's rules for scores, streaks and automatic ticks ported
-into `:domain`. Until that's done, both apps run side by side: xrnloops still tells xrnrule the
-moment something is ticked in it (a signature-protected broadcast, so both apps must be signed
-with the same key).
+into `:domain`. The Habits tab (Loop's list and habit screen) and reminders are in; widgets come
+next. Until that's done, both apps run side by side: xrnloops still tells xrnrule the moment
+something is ticked in it (a signature-protected broadcast, so both apps must be signed with the
+same key), and while it is installed it keeps doing the reminding, unless Settings → Habit
+reminders is turned on, so nothing rings twice.
 
 ## Project layout
 

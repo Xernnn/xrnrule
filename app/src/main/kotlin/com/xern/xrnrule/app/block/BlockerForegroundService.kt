@@ -91,8 +91,12 @@ class BlockerForegroundService : LifecycleService() {
                 Intent.ACTION_TIME_CHANGED -> {
                     container.clockGuard.check()
                     container.store.dispatch(BlockEvent.Tick)
+                    container.reminders.scheduleAll()
                 }
-                Intent.ACTION_TIMEZONE_CHANGED -> container.store.dispatch(BlockEvent.Tick)
+                Intent.ACTION_TIMEZONE_CHANGED -> {
+                    container.store.dispatch(BlockEvent.Tick)
+                    container.reminders.scheduleAll()
+                }
             }
         }
     }

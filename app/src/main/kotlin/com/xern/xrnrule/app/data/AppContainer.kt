@@ -4,6 +4,7 @@ import android.content.Context
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.hardcore.createHardcoreGuard
 import com.xern.xrnrule.app.loop.LoopHabits
+import com.xern.xrnrule.app.remind.HabitReminders
 import com.xern.xrnrule.app.update.AppUpdates
 import com.xern.xrnrule.app.update.createAppUpdates
 import com.xern.xrnrule.app.web.ExtensionServer
@@ -58,6 +59,9 @@ class AppContainer(context: Context) {
     /** xrnloops, our Loop fork (`../xrnloops`), while both apps are in use: its ticks reach us through the habit server. */
     val loop = LoopHabits(context, habits, appScope)
 
+    /** Habit reminders, as Loop's; while xrnloops is installed, it reminds instead. */
+    val reminders = HabitReminders(context, store, habits, loop, appScope)
+
     /** New versions of the app from the same home server — real in `sideload`, a no-op in `play`. */
     val updates: AppUpdates = createAppUpdates(context, shared.settings, appScope)
 
@@ -74,5 +78,6 @@ class AppContainer(context: Context) {
         habits.start()
         extensionServer.start()
         updates.start()
+        reminders.start()
     }
 }

@@ -298,6 +298,15 @@ class LoopRulesTest {
         assertEquals("a day not logged isn't kept", listOf(LoopRules.Streak(day(0), day(0))), atMost)
     }
 
+    @Test
+    fun aTapCyclesLikeLoop() {
+        val (auto, yes, no, skip, unknown) = listOf(HabitEntry.YES_AUTO, HabitEntry.YES_MANUAL, HabitEntry.NO, HabitEntry.SKIP, HabitEntry.UNKNOWN)
+        assertEquals(listOf(yes, skip, no, yes), listOf(auto, yes, skip, no).map { LoopRules.nextToggleValue(it) })
+        assertEquals(yes, LoopRules.nextToggleValue(unknown))
+        assertEquals(no, LoopRules.nextToggleValue(yes, skip = false))
+        assertEquals(unknown, LoopRules.nextToggleValue(no, questionMarks = true))
+    }
+
     private companion object {
         const val E = 1e-6
     }

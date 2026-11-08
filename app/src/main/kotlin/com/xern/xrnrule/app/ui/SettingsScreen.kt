@@ -80,6 +80,9 @@ import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
+import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.NotificationsActive
+import com.xern.xrnrule.app.remind.HabitReminders
 import com.xern.xrnrule.app.ui.theme.Appearance
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.ThemeMode
@@ -104,7 +107,6 @@ import kotlinx.coroutines.withContext
 /** The pages under Settings, each its own route (`settings/<name>`). */
 enum class SettingsPage(val title: String) {
     SYNC("Home server"),
-    HABITS("Habits"),
     UNLOCKS("Unlocks"),
     SECURITY("Security & privacy"),
     APPEARANCE("Appearance"),
@@ -124,6 +126,7 @@ class SettingsDeps(
     val habits: HabitSync,
     val updates: AppUpdates,
     val appLock: AppLock,
+    val reminders: HabitReminders,
 )
 
 // =====================================================================================
@@ -178,6 +181,40 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
             )
         }
 
+        SectionLabel("Reminders")
+        GroupCard {
+            val remindersChanged by deps.reminders.changed.collectAsState()
+            val remindOn = remember(resume, remindersChanged) { deps.reminders.enabled }
+            val exact = remember(resume) { deps.reminders.exact() }
+            val withReminder = world.habits.count { it.reminder != null && !it.archived }
+            val loopInstalled = loopStatus != LoopStatus.NOT_INSTALLED
+            SwitchRow(
+                title = "Habit reminders",
+                checked = remindOn,
+                onCheckedChange = { deps.reminders.setEnabled(it) },
+                icon = Icons.Outlined.NotificationsActive,
+                subtitle = when {
+                    !remindOn && loopInstalled && !deps.reminders.chosen -> "Off: xrnloops reminds you while it's installed"
+                    !remindOn -> "Off"
+                    loopInstalled -> "xrnloops may remind you too: turn its reminders off"
+                    withReminder == 0 -> "None set yet: add one to a habit"
+                    withReminder == 1 -> "1 habit, at its time unless it's done"
+                    else -> "$withReminder habits, at their times unless they're done"
+                },
+                first = true,
+            )
+            // exact() is only false from Android 12 on, where this settings page exists.
+            if (remindOn && !exact && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PermissionRow("Alarms on the minute", Icons.Outlined.Alarm, granted = false) {
+                    runCatching {
+                        context.startActivity(
+                            Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse("package:${context.packageName}")),
+                        )
+                    }
+                }
+            }
+        }
+
         SectionLabel("Integrations")
         GroupCard {
             val kinds = LocalKinds.current
@@ -216,18 +253,8 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
         SectionLabel("Advanced")
         GroupCard {
             GroupRow(
-                title = "Habits",
-                icon = Icons.Outlined.TaskAlt,
-                subtitle = when (world.habits.size) {
-                    0 -> "None yet: make one when a block asks for it"
-                    1 -> "1 habit, shared with your laptop"
-                    else -> "${world.habits.size} habits, shared with your laptop"
-                },
-                first = true,
-                onClick = { onOpen(SettingsPage.HABITS) },
-            )
-            GroupRow(
                 title = "Unlocks",
+                first = true,
                 icon = Icons.Outlined.LockOpen,
                 subtitle = "Up to ${formatDuration(world.settings.dailyCapMs)} a day" +
                     if (world.settings.overridesPerDay > 0) " · buying minutes on" else "",
@@ -391,7 +418,6 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
         ) {
             when (page) {
                 SettingsPage.SYNC -> SyncPage(deps.shared, deps.habits)
-                SettingsPage.HABITS -> HabitsPage(world, deps)
                 SettingsPage.UNLOCKS -> UnlocksPage(world, deps)
                 SettingsPage.SECURITY -> SecurityPage(deps)
                 SettingsPage.APPEARANCE -> AppearancePage()
@@ -405,113 +431,6 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
 }
 
 /** Every habit, today's amount of each, and their editor (contract I35/I36). */
-@Composable
-private fun HabitsPage(world: World, deps: SettingsDeps) {
-    val store = deps.store
-    var editing by remember { mutableStateOf<Habit?>(null) }
-    var making by remember { mutableStateOf(false) }
-    var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
-    var confirmDelete by remember { mutableStateOf<Habit?>(null) }
-    if (world.focus?.running == true) rememberTicker()
-
-    PageIntro(
-        "Blocks ask for these. They're the same habits as in xrnloops and the web app, kept on " +
-            "your home server. A day's share of a goal opens each block that asks for it once.",
-    )
-    Gap(16)
-    if (world.habits.isNotEmpty()) {
-        GroupCard {
-            world.habits.filterNot { it.archived }.sortedBy { it.position }.forEachIndexed { i, habit ->
-                if (i > 0) Hairline(Modifier.padding(start = 72.dp))
-                val day = world.habitDay(store.clock)
-                val today = if (habit.numerical) store.engine.habitAmount(world, habit.id, day, store.clock) else store.engine.checkValue(world, habit, day)
-                val used = world.blocksUsing(habit.id)
-                Row(
-                    Modifier.fillMaxWidth().clickable { editing = habit }.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    HabitTile(habit)
-                    WGap(14)
-                    Column(Modifier.weight(1f)) {
-                        Text(habit.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            listOfNotNull(
-                                habitGoalText(habit),
-                                "today " + dayEntryText(habit, today),
-                                when (used.size) { 0 -> null; 1 -> used.first().name; else -> "${used.size} blocks" },
-                            ).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-        Gap(14)
-    }
-    OutlinePill("New habit", onClick = { making = true }, icon = Icons.Filled.Add)
-
-    fun guarded(habit: Habit, title: String, detail: String, apply: () -> Unit) {
-        val blocks = world.blocksUsing(habit.id)
-        if (blocks.any { BlockEdits.guardNeeded(store.engine, world, it, store.clock) }) {
-            loosen = LoosenRequest(title, detail, hardcore = blocks.any { it.enforcementTier == EnforcementTier.HARDCORE }, apply = apply)
-        } else {
-            apply()
-        }
-    }
-
-    if (making) {
-        HabitEditorSheet(
-            existing = null,
-            kinds = HabitKind.entries,
-            onSave = { h -> store.edit { it.withHabit(h, store.clock.nowWallMs()) }; making = false },
-            onDismiss = { making = false },
-        )
-    }
-    editing?.let { old ->
-        HabitEditorSheet(
-            existing = old,
-            kinds = HabitKind.entries,
-            onSave = { h ->
-                editing = null
-                val apply = { store.edit { it.withHabit(h, store.clock.nowWallMs()) } }
-                if (BlockEdits.habitLoosens(old, h)) {
-                    guarded(old, "Make ${old.name} easier?", "Blocks that ask for it open with less.") { apply() }
-                } else {
-                    apply()
-                }
-            },
-            onDismiss = { editing = null },
-            onDelete = {
-                editing = null
-                confirmDelete = old
-            },
-        )
-    }
-    loosen?.let { LoosenGuardDialog(it, deps.guard, onDismiss = { loosen = null }) }
-    confirmDelete?.let { habit ->
-        AlertDialog(
-            onDismissRequest = { confirmDelete = null },
-            title = { Text("Delete ${habit.name}?") },
-            text = {
-                val used = world.blocksUsing(habit.id)
-                Text(
-                    "It goes from xrnloops and the web app too, with its history." +
-                        if (used.isEmpty()) "" else " ${andList(used.map { it.name })} can't open until you edit ${if (used.size == 1) "it" else "them"}.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = null
-                    store.edit { it.withoutHabit(habit.id, store.clock.nowWallMs()) }
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
-        )
-    }
-}
-
 @Composable
 private fun PageIntro(text: String) {
     Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

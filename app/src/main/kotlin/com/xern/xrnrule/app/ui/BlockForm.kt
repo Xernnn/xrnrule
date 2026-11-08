@@ -1076,7 +1076,7 @@ private fun MinutesDialog(initial: Long, max: Long, onDismiss: () -> Unit, onCon
 private fun describeDays(days: Set<Int>): String = describeSchedule(Schedule(days, null)).substringBefore(" · ")
 
 @Composable
-private fun DayCircles(days: Set<Int>, onChange: (Set<Int>) -> Unit) {
+internal fun DayCircles(days: Set<Int>, onChange: (Set<Int>) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         (1..7).forEach { day ->
             val on = day in days
@@ -1123,7 +1123,7 @@ private fun TimeRange(start: Int, end: Int, onStart: (Int) -> Unit, onEnd: (Int)
 }
 
 @Composable
-private fun TimeTile(label: String, minute: Int, modifier: Modifier, onClick: () -> Unit) {
+internal fun TimeTile(label: String, minute: Int, modifier: Modifier, onClick: () -> Unit) {
     Column(
         modifier
             .clip(RoundedCornerShape(12.dp))
@@ -1137,7 +1137,7 @@ private fun TimeTile(label: String, minute: Int, modifier: Modifier, onClick: ()
 }
 
 @Composable
-private fun TimeInputDialog(initialMinute: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+internal fun TimeInputDialog(initialMinute: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
     val context = LocalContext.current
     val state = rememberTimePickerState(
         initialHour = initialMinute / 60,

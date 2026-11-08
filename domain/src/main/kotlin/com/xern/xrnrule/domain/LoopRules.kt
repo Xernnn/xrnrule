@@ -229,4 +229,17 @@ object LoopRules {
         val from = (computed.keys.minOrNull() ?: today).coerceAtMost(to)
         return from..to
     }
+
+    /**
+     * Loop's `Entry.nextToggleValue`: what a tap on a check makes of [value]. A tick Loop filled
+     * in becomes a manual one; done → skipped (when [skip]) → not done → (a question mark, when
+     * [questionMarks]) → done.
+     */
+    fun nextToggleValue(value: Long, skip: Boolean = true, questionMarks: Boolean = false): Long = when (value) {
+        HabitEntry.YES_AUTO -> HabitEntry.YES_MANUAL
+        HabitEntry.YES_MANUAL -> if (skip) HabitEntry.SKIP else HabitEntry.NO
+        HabitEntry.SKIP -> HabitEntry.NO
+        HabitEntry.NO -> if (questionMarks) HabitEntry.UNKNOWN else HabitEntry.YES_MANUAL
+        else -> HabitEntry.YES_MANUAL
+    }
 }

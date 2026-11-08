@@ -1,5 +1,8 @@
 package com.xern.xrnrule.app.ui
 
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -67,6 +70,8 @@ import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.HabitEntry
 import com.xern.xrnrule.domain.HabitKind
+import com.xern.xrnrule.domain.Reminder
+import com.xern.xrnrule.domain.Reminders
 import com.xern.xrnrule.domain.TargetType
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -193,10 +198,33 @@ fun HabitTile(habit: Habit?, modifier: Modifier = Modifier, size: Int = 40) {
     }
 }
 
+/** Loop's ways to repeat a check: (times, in days). */
+private enum class Repeat(val label: String) { DAILY("Every day"), WEEK("A week"), MONTH("A month"), DAYS("Every N days") }
+
+private fun repeatOf(num: Int, den: Int): Repeat = when {
+    num >= den -> Repeat.DAILY
+    den == 7 -> Repeat.WEEK
+    den == 30 || den == 31 -> Repeat.MONTH
+    num == 1 -> Repeat.DAYS
+    else -> Repeat.WEEK
+}
+
+/** "−  3  +" with what the number means beside it. */
+@Composable
+private fun CountStepper(value: Int, range: IntRange, label: String, onChange: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        RoundIconButton(Icons.Filled.Remove, "Fewer", onClick = { onChange((value - 1).coerceIn(range)) }, size = 40.dp)
+        Text(value.toString(), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.width(48.dp))
+        RoundIconButton(Icons.Filled.Add, "More", onClick = { onChange((value + 1).coerceIn(range)) }, size = 40.dp)
+        WGap(12)
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 /**
- * The sheet for making or changing a habit: a name, what it measures and how much, a colour and
- * an icon. [kinds] are the kinds on offer (a timer card offers timers only). What it doesn't show
- * (frequency, reminder, question, notes) is kept as it was.
+ * The sheet for making or changing a habit: a name, what it measures, how often or how much, a
+ * reminder, a colour and an icon. [kinds] are the kinds on offer (a timer card offers timers
+ * only). What it doesn't show (question, notes) is kept as it was.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -221,8 +249,25 @@ fun HabitEditorSheet(
         HabitKind.COUNT -> parseAmount(count)?.takeIf { it > 0 }
         HabitKind.TIMER -> minutes.takeIf { it > 0 }?.times(1000)
     }
-    val ready = name.isNotBlank() && goal != null
-    val den = existing?.freqDen ?: 1
+    // A check: freqNum times in freqDen days. A count or timer: its goal per freqDen days (Loop's way).
+    var repeat by remember { mutableStateOf(existing?.takeIf { !it.numerical }?.let { repeatOf(it.freqNum, it.freqDen) } ?: Repeat.DAILY) }
+    var times by remember { mutableIntStateOf(existing?.takeIf { !it.numerical && it.freqDen in setOf(7, 30, 31) }?.freqNum ?: 3) }
+    var everyDays by remember { mutableIntStateOf(existing?.takeIf { !it.numerical && it.freqNum == 1 && it.freqDen !in setOf(1, 7, 30, 31) }?.freqDen ?: 2) }
+    var period by remember { mutableIntStateOf(existing?.takeIf { it.numerical }?.freqDen?.takeIf { it in setOf(1, 7, 30) } ?: 1) }
+    var atMost by remember { mutableStateOf(existing?.targetType == TargetType.AT_MOST) }
+    var reminder by remember { mutableStateOf(existing?.reminder) }
+    // What "On" brings back after "Off", within this sheet.
+    var lastReminder by remember { mutableStateOf(existing?.reminder ?: Reminder(20, 0)) }
+    var pickingTime by remember { mutableStateOf(false) }
+    val (freqNum, freqDen) = when {
+        kind != HabitKind.CHECK -> 1 to period
+        repeat == Repeat.DAILY -> 1 to 1
+        repeat == Repeat.WEEK -> times.coerceIn(1, 6) to 7
+        repeat == Repeat.MONTH -> times.coerceIn(1, 29) to 30
+        else -> 1 to everyDays
+    }
+    val ready = name.isNotBlank() && goal != null && reminder?.days != 0
+    val den = freqDen
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.92f).imePadding()) {
@@ -248,6 +293,10 @@ fun HabitEditorSheet(
                                     },
                                     paletteColor = color,
                                     icon = icon,
+                                    freqNum = freqNum,
+                                    freqDen = freqDen,
+                                    targetType = if (kind != HabitKind.CHECK && atMost) TargetType.AT_MOST else TargetType.AT_LEAST,
+                                    reminder = reminder,
                                 ),
                             )
                         }
@@ -274,12 +323,26 @@ fun HabitEditorSheet(
                         onSelect = { kind = kinds[it] },
                     )
                 }
-                SectionLabel(if (kind == HabitKind.CHECK) "How often" else periodText(den).replaceFirstChar { it.uppercase() })
+                if (kind != HabitKind.CHECK) {
+                    SectionLabel("Goal")
+                    SegmentSwitch(options = listOf("At least", "At most"), selected = if (atMost) 1 else 0, onSelect = { atMost = it == 1 })
+                    Gap(10)
+                    SegmentSwitch(options = listOf("A day", "A week", "A month"), selected = listOf(1, 7, 30).indexOf(period).coerceAtLeast(0), onSelect = { period = listOf(1, 7, 30)[it] })
+                    Gap(10)
+                } else {
+                    SectionLabel("How often")
+                    SegmentSwitch(options = Repeat.entries.map { it.label }, selected = repeat.ordinal, onSelect = { repeat = Repeat.entries[it] })
+                    when (repeat) {
+                        Repeat.DAILY -> {}
+                        Repeat.WEEK -> CountStepper(times.coerceIn(1, 6), 1..6, if (times == 1) "time a week" else "times a week") { times = it }
+                        Repeat.MONTH -> CountStepper(times.coerceIn(1, 29), 1..29, if (times == 1) "time a month" else "times a month") { times = it }
+                        Repeat.DAYS -> CountStepper(everyDays, 2..365, "days apart") { everyDays = it }
+                    }
+                    Gap(6)
+                    Note("${frequencyText(freqNum, freqDen)}. Done once you tick it." + if (freqNum < freqDen) " Days in between fill in on their own, as in Loop." else "")
+                }
                 when (kind) {
-                    HabitKind.CHECK -> Note(
-                        existing?.takeIf { !it.numerical }?.let { "${frequencyText(it.freqNum, it.freqDen)}. Done once you tick it." }
-                            ?: "Every day. Done once you tick it.",
-                    )
+                    HabitKind.CHECK -> {}
                     HabitKind.COUNT -> Row(verticalAlignment = Alignment.CenterVertically) {
                         FieldBox(
                             count,
@@ -297,9 +360,36 @@ fun HabitEditorSheet(
                 if (kind != HabitKind.CHECK) {
                     KindNote(
                         when {
-                            existing?.targetType == TargetType.AT_MOST -> "An \"at most\" habit never opens a block."
+                            atMost -> "An \"at most\" habit never opens a block."
                             kind == HabitKind.TIMER -> "Counted with the focus timer. Each block that asks for it opens once per day's share of the goal."
                             else -> "Add to it as you go. Each block that asks for it opens once per day's share of the goal."
+                        },
+                    )
+                }
+                SectionLabel("Reminder")
+                SegmentSwitch(
+                    options = listOf("Off", "On"),
+                    selected = if (reminder == null) 0 else 1,
+                    onSelect = { reminder = if (it == 0) null else lastReminder },
+                )
+                reminder?.let { r ->
+                    Gap(10)
+                    TimeTile("At", r.hour * 60 + r.minute, Modifier.fillMaxWidth()) { pickingTime = true }
+                    Gap(12)
+                    DayCircles(reminderIsoDays(r.days)) { days -> reminder = r.copy(days = reminderDays(days)).also { lastReminder = it } }
+                    KindNote(
+                        if (r.days == 0) "Pick at least one day."
+                        else "A notification at ${minuteText(r.hour * 60 + r.minute)}, unless it's done by then. Shared with xrnloops and the web app.",
+                    )
+                }
+                if (pickingTime) {
+                    val r = reminder ?: lastReminder
+                    TimeInputDialog(
+                        initialMinute = r.hour * 60 + r.minute,
+                        onDismiss = { pickingTime = false },
+                        onConfirm = { m ->
+                            reminder = r.copy(hour = m / 60, minute = m % 60).also { lastReminder = it }
+                            pickingTime = false
                         },
                     )
                 }
@@ -515,3 +605,10 @@ fun GoalRow(
         },
     )
 }
+
+/** A reminder's days ([Reminder.days], Loop's packing) as ISO weekdays, Monday = 1. */
+fun reminderIsoDays(days: Int): Set<Int> =
+    (1..7).filter { days and (1 shl Reminders.dayIndex(java.time.DayOfWeek.of(it))) != 0 }.toSet()
+
+/** ISO weekdays back into [Reminder.days]. */
+fun reminderDays(isoDays: Set<Int>): Int = isoDays.sumOf { 1 shl Reminders.dayIndex(java.time.DayOfWeek.of(it)) }
