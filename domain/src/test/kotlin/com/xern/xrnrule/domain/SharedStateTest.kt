@@ -114,6 +114,33 @@ class SharedStateTest {
     }
 
     @Test
+    fun blocks_aLooseningEditMadeUnawareOfALockIsRefused() {
+        val minutes = 60_000L
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30 * minutes).copy(editedAtWall = t)
+        val base = SharedState(blocks = mapOf("a1" to block))
+        val lock = BlockLock(untilWall = t + 7 * DAY_MS, setAtWall = t + 1_000)
+        val lockedThere = SharedState(blocks = mapOf("a1" to block.copy(lock = lock, editedAtWall = t + 1_000)))
+        fun here(edit: Block) = SharedState(blocks = mapOf("a1" to edit))
+
+        // Offline here, after the lock was set there: an hour a day instead of half an hour.
+        val loosened = merge(base, here(block.copy(dailyAllowanceMs = 60 * minutes, editedAtWall = t + 2_000)), lockedThere).blocks.getValue("a1")
+        assertEquals(30 * minutes, loosened.dailyAllowanceMs)
+        assertEquals(lock, loosened.lock)
+        assertEquals("the same either way round", loosened, merge(base, lockedThere, here(block.copy(dailyAllowanceMs = 60 * minutes, editedAtWall = t + 2_000))).blocks.getValue("a1"))
+
+        // A stricter one made the same way stands, under the lock.
+        val tightened = merge(base, here(block.copy(dailyAllowanceMs = 20 * minutes, editedAtWall = t + 2_000)), lockedThere).blocks.getValue("a1")
+        assertEquals(20 * minutes, tightened.dailyAllowanceMs)
+        assertEquals(lock, tightened.lock)
+
+        // After an emergency unlock here (I40) the lock ended: a loosening edit stands.
+        val agreed = lockedThere
+        val unlockedHere = here(agreed.blocks.getValue("a1").copy(lock = BlockLock(t + 3_000, t + 3_000), dailyAllowanceMs = 60 * minutes, editedAtWall = t + 3_000))
+        val renamedThere = SharedState(blocks = mapOf("a1" to agreed.blocks.getValue("a1").copy(name = "renamed", editedAtWall = t + 2_500)))
+        assertEquals(60 * minutes, merge(agreed, unlockedHere, renamedThere).blocks.getValue("a1").dailyAllowanceMs)
+    }
+
+    @Test
     fun blocks_keepThisDevicesOrder() {
         val a = checklistBlock("a")
         val b = checklistBlock("b")

@@ -221,7 +221,7 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | credit | kiếm sớm hơn; một bên xóa (đã dùng / hết hạn) → xóa |
 | lockdown | kết thúc muộn hơn; một bên xóa → bên còn |
 | pause | bắt đầu sớm hơn; một bên null → bên còn; `lastPauseEpochDay` lấy lớn hơn |
-| block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn) |
+| block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn). Bản muộn hơn mà nới lỏng (`BlockEdits.loosens`), làm lúc khóa của bên kia đang giữ (`setAtWall ≤ editedAtWall < untilWall`) mà máy sửa chưa biết khóa đó (offline) → bị từ chối như lúc sửa có khóa, bản bên kia đứng (I39) |
 | checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ |
 | settings | từng trường: `dailyCapMs`, `skewToleranceMs`, `overrideGrantMs`, `overridesPerDay` lấy nhỏ hơn; `unlockWarningMs`, `overrideWaitMs` lấy lớn hơn; `overridePhrase` lấy cái dài hơn; `showClock` lấy `false` |
 | `unlockLog` | ngày lớn hơn thắng cả; cùng ngày → hợp, mỗi khóa lấy max |

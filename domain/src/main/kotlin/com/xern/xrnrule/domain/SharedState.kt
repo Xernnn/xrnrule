@@ -193,9 +193,8 @@ data class SharedState(
                     when {
                         l == null -> r // edited beats deleted: the stricter side
                         r == null -> l
-                        // I39: the lock goes by when it was set, whichever edit wins.
-                        r.editedAtWall >= l.editedAtWall -> r.copy(lock = laterLock(l.lock, r.lock))
-                        else -> l.copy(lock = laterLock(l.lock, r.lock))
+                        r.editedAtWall >= l.editedAtWall -> laterEdit(r, l)
+                        else -> laterEdit(l, r)
                     }
                 },
                 items = mergeMaps(b.items, local.items, remote.items) { l, r ->
@@ -286,6 +285,20 @@ data class SharedState(
                 },
                 emergencyLog = local.emergencyLog + remote.emergencyLog, // I40: only ever added to
             )
+        }
+
+        /**
+         * Of two edits of a block, the [later] one wins, with the lock set last whichever it is
+         * (I39). Unless that lock came from the [earlier] side and held when [later] was made:
+         * its device hadn't heard of it yet (offline), and an edit making the block easier is one
+         * the lock refuses, so [earlier] stands. An edit made knowing the lock went through that
+         * device's own check, by its own clock; an emergency unlock (I40) set a lock already ended.
+         */
+        private fun laterEdit(later: Block, earlier: Block): Block {
+            val lock = laterLock(later.lock, earlier.lock)
+            val unheardOf = lock != null && lock != later.lock && lock.setAtWall <= later.editedAtWall && later.editedAtWall < lock.untilWall
+            val refused = unheardOf && BlockEdits.loosens(earlier, later.copy(lock = earlier.lock))
+            return (if (refused) earlier else later).copy(lock = lock)
         }
 
         private fun laterLock(a: BlockLock?, b: BlockLock?): BlockLock? = when {
