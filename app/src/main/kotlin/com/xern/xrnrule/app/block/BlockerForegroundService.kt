@@ -98,7 +98,11 @@ class BlockerForegroundService : LifecycleService() {
                     container.clockGuard.check()
                     container.store.dispatch(BlockEvent.Tick)
                 }
-                Intent.ACTION_TIMEZONE_CHANGED -> container.store.dispatch(BlockEvent.Tick)
+                // A zone the phone set itself is taken; one picked by hand isn't (ZoneGuard).
+                Intent.ACTION_TIMEZONE_CHANGED -> {
+                    container.clockGuard.check()
+                    container.store.dispatch(BlockEvent.Tick)
+                }
             }
         }
     }

@@ -17,7 +17,8 @@ class AndroidClock : Clock {
 
 /**
  * The engine's clock: wall time with manual clock changes taken back out, so pushing the date
- * forward doesn't reset a daily limit and moving the time doesn't step around a schedule.
+ * forward doesn't reset a daily limit and moving the time doesn't step around a schedule. The
+ * same goes for the time zone: one picked by hand is left out ([ZoneGuard]).
  *
  * Wall minus monotonic time only moves when the clock is set. While Android's automatic time is
  * off, every such jump is a manual change and is added to [skewMs], which [nowWallMs] takes back
@@ -34,17 +35,23 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
     var skewMs: Long = prefs.getLong(KEY_SKEW, 0)
         private set
 
+    private val zones = ZoneGuard(prefs.getString(KEY_ZONE, null)) { prefs.edit().putString(KEY_ZONE, it).apply() }
+
     init {
         check()
     }
 
     override fun nowMonotonicMs(): Long = raw.nowMonotonicMs()
     override fun nowWallMs(): Long = raw.nowWallMs() - skewMs
-    override fun zone(): ZoneId = raw.zone()
+    override fun zone(): ZoneId = zones.zone(raw.zone())
 
-    /** Call on `ACTION_TIME_CHANGED` and now and then: books any clock jump since the last look. */
+    /** The phone's own time zone, when it was picked by hand and blocks keep going by [zone] instead. */
+    val handPickedZone: ZoneId? get() = raw.zone().takeIf { it != zone() }
+
+    /** Call on `ACTION_TIME_CHANGED`, `ACTION_TIMEZONE_CHANGED` and now and then: books any clock jump since the last look. */
     @Synchronized
     fun check() {
+        zones.check(raw.zone(), automaticTimeZone())
         val mono = raw.nowMonotonicMs()
         val offset = raw.nowWallMs() - mono
         val lastMono = prefs.getLong(KEY_MONO, Long.MAX_VALUE)
@@ -72,7 +79,11 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
     fun automaticTime(): Boolean =
         Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME, 1) == 1
 
+    fun automaticTimeZone(): Boolean =
+        Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME_ZONE, 1) == 1
+
     private companion object {
+        const val KEY_ZONE = "zone"
         const val KEY_SKEW = "skew"
         const val KEY_OFFSET = "offset"
         const val KEY_MONO = "mono"

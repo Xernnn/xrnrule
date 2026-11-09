@@ -383,7 +383,7 @@ focusBreakMs       = 5 * 60 * 1000           // I37, nút "Nghỉ 5 phút"
 interface Clock {
     fun nowMonotonicMs(): Long     // SystemClock.elapsedRealtime()
     fun nowWallMs(): Long          // System.currentTimeMillis()
-    fun zone(): ZoneId
+    fun zone(): ZoneId             // điện thoại: múi giờ máy tự đặt; múi giờ chọn tay không tính, như giờ chỉnh tay (ClockGuard)
 }
 
 interface PersistPort {
