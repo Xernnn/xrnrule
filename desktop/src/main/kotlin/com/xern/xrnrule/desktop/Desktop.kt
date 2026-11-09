@@ -177,8 +177,18 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
  * The laptop's shield: blocked apps are closed through the compositor's [WindowSystem] (and their process stopped if the
  * window doesn't go), blocked sites are the extension's job (it asks [isSiteBlocked]).
  */
-class Enforcer(private val store: Store, private val notifier: Notifier, private val config: Config) : ShieldPort, DesktopBus {
-    private val windows = ConcurrentHashMap<Long, AppWindow>()
+class Enforcer(
+    private val store: Store,
+    private val notifier: Notifier,
+    private val config: Config,
+    /** How long a closed window has to go before its process is stopped. */
+    private val trayGraceMs: Long = 4_000,
+) : ShieldPort, DesktopBus {
+    /**
+     * The apps each process has windows of. One process can show several: Chromium and the web
+     * apps it opens (Omarchy's YouTube), each with an id of its own.
+     */
+    private val windows = ConcurrentHashMap<Long, Set<String>>()
     lateinit var foreground: Foreground
 
     /** Who reports windows and closes them: KWin's script, or Hyprland's sockets. */
@@ -202,15 +212,16 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
     /** Runs inside the store's lock (I7), so the slow part goes to [worker]. */
     override fun apply(plan: ShieldPlan) {
         // Unlocks ending, lockdowns and schedules starting: close what just became blocked.
-        val doomed = windows.values.filter { it.appId in plan.blockedPackages }
+        val doomed = windows.filterValues { apps -> apps.any { it in plan.blockedPackages } }
         if (doomed.isEmpty()) return
         worker.execute {
-            val ids = doomed.map { it.appId }.toSet()
+            val ids = doomed.values.flatten().filterTo(mutableSetOf()) { it in plan.blockedPackages }
             windowSystem.closeWindowsOf(ids)
             ids.forEach { notifier.blocked(it) }
-            Thread.sleep(4_000)
+            Thread.sleep(trayGraceMs)
             // Closing a window may only hide it to the tray (Steam, Discord): then stop the process.
-            for (w in doomed) ProcessHandle.of(w.pid).ifPresent { if (it.isAlive && w.appId in plan().blockedPackages) it.destroy() }
+            val shown = doomed.mapValues { (pid, apps) -> apps + windows[pid].orEmpty() }
+            for (pid in toStop(shown, plan().blockedPackages)) ProcessHandle.of(pid).ifPresent { if (it.isAlive) it.destroy() }
         }
     }
 
@@ -220,7 +231,7 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
         reported()
         val id = DesktopApps.resolve(appId, resourceClass) ?: return null
         val w = AppWindow(id, resourceClass, pid.toLongOrNull() ?: 0)
-        if (w.pid > 0) windows[w.pid] = w
+        if (w.pid > 0) windows.merge(w.pid, setOf(id)) { apps, new -> apps + new }
         return w
     }
 
@@ -248,6 +259,15 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
     companion object {
         const val BUS_NAME = "com.xern.xrnrule"
         const val OBJECT_PATH = "/Desktop"
+
+        /**
+         * The processes to stop once their blocked windows were closed, out of the apps each
+         * showed: only those showing nothing but blocked apps. One that also shows an app that
+         * isn't blocked is that app too: stopping a browser to close its blocked web app would
+         * close every other window of it.
+         */
+        fun toStop(shown: Map<Long, Set<String>>, blocked: Set<String>): Set<Long> =
+            shown.filterValues { apps -> apps.isNotEmpty() && apps.all { it in blocked } }.keys
     }
 }
 
@@ -441,7 +461,7 @@ class PopupLimit(private val everyMs: Long = 10 * 60_000L) {
 }
 
 /** Desktop notifications (`notify-send`), and the block page in the browser. */
-class Notifier(private val config: Config, private val limit: PopupLimit = PopupLimit()) {
+open class Notifier(private val config: Config, private val limit: PopupLimit = PopupLimit()) {
     private val lastShown = ConcurrentHashMap<String, Long>()
 
     /** The popup on screen: the next one takes its place rather than stacking on it. */
@@ -451,7 +471,7 @@ class Notifier(private val config: Config, private val limit: PopupLimit = Popup
      * Gone by itself after 10 s, at normal urgency because Plasma keeps a critical one up until it's
      * dismissed. [urgent] only leaves it in the notification history, for what shouldn't be missed.
      */
-    fun notify(title: String, body: String, urgent: Boolean = false) {
+    open fun notify(title: String, body: String, urgent: Boolean = false) {
         if (!limit.allows(title, System.currentTimeMillis())) return
         val command = mutableListOf("notify-send", "-a", "xrnrule", "-i", "changes-prevent", "-t", "$POPUP_MS", "-p")
         if (!urgent) command += "-e"
@@ -468,7 +488,7 @@ class Notifier(private val config: Config, private val limit: PopupLimit = Popup
     }
 
     /** A blocked app was closed: the block page says why (at most once a minute per app), else a popup does. */
-    fun blocked(appId: String) {
+    open fun blocked(appId: String) {
         val now = System.currentTimeMillis()
         val last = lastShown.put(appId, now)
         if (last != null && now - last < 60_000) return
