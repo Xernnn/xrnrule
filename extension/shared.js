@@ -19,6 +19,8 @@ self.Xrn = (() => {
   const MAX_RULES = 999;
   /** How long xrnrule may be gone before everything with a rule is blocked (I48). */
   const FAIL_CLOSED_MS = 60_000;
+  /** The manifest's host_permissions: every web page, and xrnrule's own address on 127.0.0.1. */
+  const SITE_ORIGINS = ["http://*/*", "https://*/*"];
 
   /** "https://www.YouTube.com/watch" -> "youtube.com"; null for anything that isn't a web page. */
   function hostOf(url) {
@@ -156,5 +158,5 @@ self.Xrn = (() => {
     }
   }
 
-  return { DEFAULT_PORT, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, hostOf, locationOf, matches, redirectRules, blockedBy, enginePage, blockUrl, mmss, warning };
+  return { DEFAULT_PORT, SITE_ORIGINS, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, hostOf, locationOf, matches, redirectRules, blockedBy, enginePage, blockUrl, mmss, warning };
 })();

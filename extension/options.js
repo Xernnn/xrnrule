@@ -21,8 +21,13 @@ const UPDATE_RESULT = {
   update_available: (r) => `Version ${r.version} found: installing. This page closes when it's in; open it again.`,
   no_update: () => "Up to date.",
   throttled: () => "The browser looked a moment ago and won't again yet. It also looks on its own every few hours.",
-  no_update_url: () => "This copy has no update address: install the .crx from your home server instead.",
+  no_update_url: () => (GECKO
+    ? "This copy has no update address: Firefox and Zen take new versions from wherever the .xpi came from."
+    : "This copy has no update address: install the .crx from your home server instead."),
+  unsupported: () => "This browser can't be asked to look now; it looks for new versions on its own.",
 };
+/** Firefox and its forks (Zen) have browser.runtime.getBrowserInfo; Chromium has neither. */
+const GECKO = typeof browser !== "undefined" && !!browser.runtime?.getBrowserInfo;
 
 (async () => {
   const blurb = document.getElementById("update-blurb");
@@ -30,8 +35,12 @@ const UPDATE_RESULT = {
   const button = document.getElementById("update-check");
   const { version, update_url: updateUrl } = chrome.runtime.getManifest();
   const installType = await chrome.management?.getSelf().then((s) => s.installType, () => null);
-  if (installType === "development") {
+  if (installType === "development" && GECKO) {
+    blurb.textContent = `Version ${version}, loaded as a temporary add-on. It reloads itself when its folder gets a new version, and the browser removes it when it closes: install a signed .xpi to keep it.`;
+  } else if (installType === "development") {
     blurb.textContent = `Version ${version}, loaded unpacked from a folder. It reloads itself when that folder gets a new version.`;
+  } else if (GECKO && !updateUrl) {
+    blurb.textContent = `Version ${version}, installed from an .xpi. Install a newer .xpi the same way to update it.`;
   } else if (updateUrl) {
     blurb.textContent = `Version ${version}, from ${new URL(updateUrl).host}. New versions install themselves: the browser looks every few hours, and Check now looks straight away.`;
   } else {

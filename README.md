@@ -105,6 +105,15 @@ it has nothing to go back to, so the rest of the browser stays yours.
 - **Laptop (Helium or another Chromium browser):** extensions page → Developer mode → Load
   unpacked → `extension/`. It reloads itself whenever that folder's `manifest.json` names a new
   version (a pull, or a release).
+- **Laptop (Zen, Firefox 140 or newer):** `about:debugging` → **This Firefox** → **Load Temporary
+  Add-on…** → `extension/manifest.json` (or the `.zip` from `scripts/pack-extension.sh`; Firefox
+  takes it as an `.xpi`). Firefox drops a temporary add-on when it closes; to keep it, sign the
+  zip with an unlisted upload to addons.mozilla.org, or, in a build that allows unsigned add-ons,
+  set `xpinstall.signatures.required` to `false` in `about:config` and install the file. If the
+  toolbar popup says xrnrule isn't allowed on websites, click **Allow on all sites** (Firefox can
+  withhold or revoke an extension's site access in `about:addons`). There is no self-update
+  there: a temporary add-on still reloads when its folder's version changes, an installed `.xpi`
+  updates by installing a newer one.
 - **Phone (Quetta):** open `https://<your server>/xrnrule/update/xrnrule.crx` in Quetta →
   **Download anyway** → **OK** (or hand the file to its extensions page: Developer mode → "(from
   .zip/.crx/.user.js)"). From then on it fetches each new version from your server by itself.

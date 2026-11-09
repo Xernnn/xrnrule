@@ -10,7 +10,9 @@
 //     page, since xrnrule's can't load then), and the toolbar icon shows "!"; after a minute of
 //     that, everything with a rule is blocked, so stopping xrnrule isn't a way past a limit.
 
-importScripts("shared.js");
+// Chromium runs this as a service worker and needs importScripts; Firefox (Zen) runs it as an event
+// page, with shared.js listed before it in the manifest's background.scripts, and has no importScripts.
+if (typeof importScripts === "function" && !self.Xrn) importScripts("shared.js");
 
 const { DEFAULT_PORT, FAIL_CLOSED_MS, locationOf, redirectRules, blockedBy, enginePage, blockUrl } = self.Xrn;
 const OWN_PAGE = chrome.runtime.getURL("block.html");
@@ -275,6 +277,8 @@ async function checkForUpdate() {
     return { status: "reloading", version: onDisk, installType };
   }
   if (!running.update_url) return { status: "no_update_url", version: running.version, installType };
+  // Firefox has no requestUpdateCheck: it reads gecko.update_url on its own schedule.
+  if (typeof chrome.runtime.requestUpdateCheck !== "function") return { status: "unsupported", version: running.version, installType };
   try {
     // "update_available" (onUpdateAvailable follows once it's downloaded), "no_update", or
     // "throttled" when asked too often.
