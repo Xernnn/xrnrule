@@ -142,7 +142,8 @@ class HyprlandTest {
         val dir = File(runtime, "hypr/$sig").apply { mkdirs() }
         @Volatile var clients = "[]"
         @Volatile var active = "{}"
-        val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        /** Safe to read while the server thread adds to it (a synchronized list isn't, iterated). */
+        val requests: MutableList<String> = CopyOnWriteArrayList()
         private val listeners = CopyOnWriteArrayList<SocketChannel>()
         private val servers = listOf(".socket.sock", ".socket2.sock").map { name ->
             ServerSocketChannel.open(StandardProtocolFamily.UNIX).apply { bind(UnixDomainSocketAddress.of(File(dir, name).toPath())) }
@@ -239,6 +240,64 @@ class HyprlandTest {
             hypr.dropListeners()
             waitFor("the second listing") { connections == 2 && bus.calls.size >= 3 }
             assertEquals(listOf("Activated  0", "Added zen 10", "Activated zen 10"), bus.calls.toList())
+        } finally {
+            hypr.stop()
+            runtime.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aBrokenDesktopFileStopsNeitherTheListingNorTheWatch() {
+        val runtime = Files.createTempDirectory("xrnrule-hypr").toFile()
+        // An app uninstalled under a link that stayed behind, as ~/.local/share/applications collects.
+        val applications = File(runtime, "applications").apply { mkdirs() }
+        File(applications, "xrnruletest.desktop").writeText("[Desktop Entry]\nType=Application\nName=Test\n")
+        Files.createSymbolicLink(File(applications, "gone.desktop").toPath(), File(runtime, "nowhere.desktop").toPath())
+        val hypr = FakeHyprland(runtime, "sig")
+        try {
+            hypr.clients = """[{"address": "0xbbb", "class": "xrnruletest", "pid": 20}]"""
+            hypr.active = """{"address": "0xbbb", "class": "xrnruletest", "pid": 20}"""
+            val bus = Calls()
+            var connections = 0
+            val env = mapOf("XDG_RUNTIME_DIR" to runtime.path, "HYPRLAND_INSTANCE_SIGNATURE" to "sig")
+            HyprlandWindows(Hyprland.Sockets(env)) { DesktopApps.scan(listOf(applications)) }.start(bus) { connections++ }
+
+            waitFor("the listing") { bus.calls.size >= 2 }
+            assertEquals(listOf("Added xrnruletest 20", "Activated xrnruletest 20"), bus.calls.toList())
+            waitFor("the close") { hypr.requests.any { it.startsWith("dispatch") } }
+            Thread.sleep(1_500) // longer than the pause before reconnecting
+            assertEquals("still on the first connection", 1, connections)
+
+            // And what opens next is still watched.
+            hypr.clients = """[{"address": "0xccc", "class": "xrnruletest", "pid": 30}]"""
+            hypr.emit("openwindow>>ccc,1,xrnruletest,foot")
+            waitFor("the second close") { hypr.requests.any { it.contains("address:0xccc") } }
+            assertEquals(1, connections)
+        } finally {
+            hypr.stop()
+            runtime.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aFailedListingKeepsTheConnection() {
+        val runtime = Files.createTempDirectory("xrnrule-hypr").toFile()
+        val hypr = FakeHyprland(runtime, "sig")
+        try {
+            hypr.clients = """[{"address": "0xbbb", "class": "xrnruletest", "pid": 20}]"""
+            val bus = Calls()
+            var connections = 0
+            var lists = 0
+            val env = mapOf("XDG_RUNTIME_DIR" to runtime.path, "HYPRLAND_INSTANCE_SIGNATURE" to "sig")
+            // Whatever goes wrong naming the windows open at the start, reconnecting would only go wrong again.
+            HyprlandWindows(Hyprland.Sockets(env)) { if (lists++ == 0) throw java.io.IOException("no") else emptyList() }
+                .start(bus) { connections++ }
+
+            waitFor("the connection") { connections == 1 && hypr.listening == 1 }
+            hypr.emit("openwindow>>bbb,1,xrnruletest,foot")
+            waitFor("the close") { hypr.requests.any { it.startsWith("dispatch") } }
+            Thread.sleep(1_500)
+            assertEquals(1, connections)
         } finally {
             hypr.stop()
             runtime.deleteRecursively()

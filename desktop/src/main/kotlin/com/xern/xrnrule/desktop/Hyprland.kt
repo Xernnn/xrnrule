@@ -177,7 +177,11 @@ object Hyprland {
  * front, Removed when one closes), and closes those it answers "block" for through `.socket.sock`.
  * Reconnects whenever Hyprland goes away, and lists what's open again when it's back.
  */
-class HyprlandWindows(private val sockets: Hyprland.Sockets) : WindowSystem {
+class HyprlandWindows(
+    private val sockets: Hyprland.Sockets,
+    /** The installed apps, to name windows by (tests give their own). */
+    private val apps: () -> List<DesktopApps.App> = DesktopApps::all,
+) : WindowSystem {
     override val name = "hyprland"
 
     @Volatile private var dir: File? = null
@@ -219,7 +223,9 @@ class HyprlandWindows(private val sockets: Hyprland.Sockets) : WindowSystem {
             try {
                 channel.use {
                     connected()
-                    relist()
+                    // Like an event's, a listing's failure is logged and the watch goes on: going
+                    // round again would fail the same way, every second, with nothing blocked.
+                    runCatching { relist() }.onFailure { System.err.println("Listing Hyprland's windows: $it") }
                     val reader = Channels.newReader(channel, Charsets.UTF_8).buffered()
                     while (true) {
                         val line = reader.readLine() ?: break
@@ -271,7 +277,7 @@ class HyprlandWindows(private val sockets: Hyprland.Sockets) : WindowSystem {
     }
 
     private fun report(method: String, c: Hyprland.Client) {
-        val appId = Hyprland.appId(c, DesktopApps.all()) ?: return
+        val appId = Hyprland.appId(c, apps()) ?: return
         val answer = when (method) {
             "Activated" -> bus.Activated(appId, c.resourceClass, c.pid.toString())
             else -> bus.Added(appId, c.resourceClass, c.pid.toString())
@@ -291,11 +297,11 @@ class HyprlandWindows(private val sockets: Hyprland.Sockets) : WindowSystem {
     override fun closeWindowsOf(appIds: Set<String>) {
         if (appIds.isEmpty()) return
         val lower = appIds.map { it.lowercase() }.toSet()
-        val apps = DesktopApps.all()
+        val installed = apps()
         val all = request("j/clients")?.let(Hyprland::parseClients).orEmpty().filter { it.relevant }
         for (c in all) {
             // As the KWin close script: by `.desktop` id, or by WM class in any case.
-            if (Hyprland.appId(c, apps) in appIds || c.resourceClass.lowercase() in lower) close(c.address)
+            if (Hyprland.appId(c, installed) in appIds || c.resourceClass.lowercase() in lower) close(c.address)
         }
     }
 

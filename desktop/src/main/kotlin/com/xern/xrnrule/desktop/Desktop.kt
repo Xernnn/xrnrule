@@ -18,6 +18,7 @@ import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.interfaces.DBusInterface
 import java.io.File
+import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -314,30 +315,43 @@ object DesktopApps {
         "/var/lib/flatpak/exports/share/applications",
         "$home/.local/share/flatpak/exports/share/applications",
         "$home/.local/share/applications",
-    )
+    ).map(::File)
 
     @Volatile private var cache: Pair<Long, List<App>>? = null
 
     fun all(): List<App> {
         cache?.let { (at, apps) -> if (System.currentTimeMillis() - at < 60_000) return apps }
-        val found = LinkedHashMap<String, App>()
-        for (dir in dirs) {
-            File(dir).listFiles { f -> f.name.endsWith(".desktop") }?.forEach { f ->
-                parse(f)?.let { found[it.id] = it } // later dirs (the user's own) win
-            }
-        }
-        val apps = found.values.sortedBy { it.name.lowercase() }
+        val apps = scan(dirs)
         cache = System.currentTimeMillis() to apps
         return apps
     }
 
+    /** The apps whose `.desktop` files are in [dirs], by name; a later dir's file wins over an earlier one's. */
+    fun scan(dirs: List<File>): List<App> {
+        val found = LinkedHashMap<String, App>()
+        for (dir in dirs) {
+            dir.listFiles { f -> f.name.endsWith(".desktop") }?.forEach { f ->
+                parse(f)?.let { found[it.id] = it } // later dirs (the user's own) win
+            }
+        }
+        return found.values.sortedBy { it.name.lowercase() }
+    }
+
     private fun parse(f: File): App? {
+        // A link left behind by an uninstalled app, a directory, a file we may not read: no app,
+        // and not the end of the list, which names every window the daemon is told about.
+        if (!f.isFile) return null
+        val lines = try {
+            f.readLines()
+        } catch (_: IOException) {
+            return null
+        }
         var inEntry = false
         var name: String? = null
         var wmClass: String? = null
         var hidden = false
         var type: String? = null
-        for (line in f.readLines()) {
+        for (line in lines) {
             if (line.startsWith("[")) {
                 inEntry = line.trim() == "[Desktop Entry]"
                 continue

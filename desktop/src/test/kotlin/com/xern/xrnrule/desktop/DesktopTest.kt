@@ -117,6 +117,20 @@ class DesktopTest {
     }
 
     @Test
+    fun aDesktopFileThatCantBeReadIsSkipped() {
+        val dir = Files.createTempDirectory("xrnrule-apps").toFile()
+        try {
+            File(dir, "org.kde.kcalc.desktop").writeText("[Desktop Entry]\nType=Application\nName=KCalc\nStartupWMClass=kcalc\n")
+            Files.createSymbolicLink(File(dir, "gone.desktop").toPath(), File(dir, "nowhere").toPath()) // dangling
+            File(dir, "folder.desktop").mkdirs()
+            File(dir, "secret.desktop").apply { writeText("[Desktop Entry]\nType=Application\nName=Secret\n") }.setReadable(false)
+            assertEquals(listOf(DesktopApps.App("org.kde.kcalc", "KCalc", "kcalc")), DesktopApps.scan(listOf(dir, File(dir, "missing"))))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun telemetryHandsOutOnlyNewerEventsAndForgetsOldOnes() {
         val log = FileTelemetry(File(Files.createTempDirectory("xrnrule").toFile(), "telemetry.log"))
         val day = 86_400_000L
