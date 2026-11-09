@@ -50,9 +50,10 @@ fun main() = runBlocking {
     val shared = SharedSyncClient(config, store, telemetry, scope)
     val habits = HabitClient(config, store, scope)
 
-    windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
-    LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope), telemetry).start()
-    store.dispatch(BlockEvent.BootOrColdStart) // I8, and the first shield plan
+    store.coldStart {
+        windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
+        LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope), telemetry).start()
+    }
     shared.start()
     habits.start()
     Runtime.getRuntime().addShutdownHook(Thread { persist.flush() })

@@ -387,6 +387,17 @@ class Store(
 
     suspend fun dispatchAndGet(event: BlockEvent): World = dispatchOutcome(event).world
 
+    /**
+     * I8 at a start, done before [feed] starts what reports to the engine (the window system, the
+     * extension's door). The world as loaded holds the monotonic stamps of before the daemon
+     * stopped: the first window or page reported would otherwise charge all the time it was
+     * stopped to whatever was in front then, to a limit or to a habit app's timer.
+     */
+    suspend fun coldStart(feed: () -> Unit) {
+        dispatchAndGet(BlockEvent.BootOrColdStart) // and the first shield plan
+        feed()
+    }
+
     /** As [dispatchAndGet], with the effects too: the caller wants to know how it went. */
     suspend fun dispatchOutcome(event: BlockEvent): Outcome = mutex.withLock {
         val outcome = engine.reduce(_world.value, event, clock)
