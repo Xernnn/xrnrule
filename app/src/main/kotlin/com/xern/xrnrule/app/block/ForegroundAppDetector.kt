@@ -47,14 +47,11 @@ class UsageStatsDetector(
 ) : ForegroundAppDetector {
 
     private val usm = context.getSystemService(UsageStatsManager::class.java)
-
-    // Seeded from the last minute so the very first poll already knows the current app.
-    private var cursor = System.currentTimeMillis() - 60_000L
-    private var current: String? = null
+    private val tracker = ForegroundTracker(::resumes)
 
     override val foregroundPackage: Flow<String?> = flow {
         while (true) {
-            emit(poll())
+            emit(tracker.poll())
             delay(if (fast()) fastPollMs else slowPollMs)
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
@@ -63,27 +60,69 @@ class UsageStatsDetector(
      * The app in front is a browser showing a Custom Tab: some other app's login or payment page.
      * It has no address bar, so it's no way around a block, and it mustn't be taken for one (I49).
      */
-    @Volatile
-    var customTab: Boolean = false
-        private set
+    val customTab: Boolean get() = tracker.customTab
 
-    @Synchronized
-    private fun poll(): String? {
-        val now = System.currentTimeMillis()
-        // Overlap the previous window slightly so an event landing between polls is not lost.
-        val events = usm.queryEvents((cursor - 1_000L).coerceAtLeast(0L), now)
+    private fun resumes(from: Long, to: Long): List<ForegroundTracker.Resume> {
+        val events = usm.queryEvents(from, to)
         val event = UsageEvents.Event()
+        val out = mutableListOf<ForegroundTracker.Resume>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             // Same value: ACTIVITY_RESUMED (API 29) renamed MOVE_TO_FOREGROUND, which minSdk 26 still needs.
             if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
                 event.eventType == @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_FOREGROUND
             ) {
-                current = event.packageName
-                customTab = event.className?.contains("customtabs", ignoreCase = true) == true
+                out += ForegroundTracker.Resume(event.packageName, event.className)
             }
+        }
+        return out
+    }
+}
+
+/**
+ * [UsageStatsDetector]'s reading of the events, pure so it can be tested without a phone:
+ * [resumes] gives the apps brought to the front in a span of wall time, oldest first.
+ *
+ * The first look finds the app in front however long ago it came there. It may well be hours:
+ * an OEM battery killer stops xrnrule in the middle of a video, and when it starts again the
+ * video app's resume is long past. Looking back a minute only, nothing was in front then, so
+ * there was no block screen and no minutes counted until the next switch. The spans grow, so a
+ * usual start still reads a minute of events. After that, each look reads what came since the last.
+ */
+class ForegroundTracker(
+    private val resumes: (from: Long, to: Long) -> List<Resume>,
+    private val now: () -> Long = System::currentTimeMillis,
+) {
+    data class Resume(val pkg: String, val className: String?)
+
+    private var cursor: Long? = null
+    private var current: String? = null
+
+    @Volatile
+    var customTab: Boolean = false
+        private set
+
+    @Synchronized
+    fun poll(): String? {
+        val now = now()
+        val since = cursor
+        if (since == null) {
+            FIRST_LOOK_MS.firstNotNullOfOrNull { span -> resumes((now - span).coerceAtLeast(0L), now).lastOrNull() }?.let(::take)
+        } else {
+            // Overlap the previous window slightly so an event landing between polls is not lost.
+            resumes((since - 1_000L).coerceAtLeast(0L), now).forEach(::take)
         }
         cursor = now
         return current
+    }
+
+    private fun take(r: Resume) {
+        current = r.pkg
+        customTab = r.className?.contains("customtabs", ignoreCase = true) == true
+    }
+
+    private companion object {
+        /** A minute, then ten, an hour, six, a day, a week. */
+        val FIRST_LOOK_MS = listOf(60_000L, 600_000L, 3_600_000L, 21_600_000L, 86_400_000L, 604_800_000L)
     }
 }
