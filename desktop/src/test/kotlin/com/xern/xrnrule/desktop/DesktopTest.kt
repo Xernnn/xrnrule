@@ -94,6 +94,30 @@ class DesktopTest {
     }
 
     @Test
+    fun i49_aBrowserIsKnownByAWordOfItsIdNotByPartOfOne() {
+        val clock = TestClock()
+        // Zen has the extension: a browser without it goes after 10 s in front.
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val fg = Foreground(Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined)), known)
+        fun closedAfterAWhile(appId: String): Boolean {
+            fg.active = AppWindow(appId, appId, 10)
+            clock.mono += BrowserWatch.OTHER_GRACE_MS + 1
+            return fg.browsers.toClose(clock.mono) == appId
+        }
+        // Steam's prompts are zenity's, and other names only hold a browser's.
+        for (app in listOf("zenity", "org.gnome.Zenity", "org.kde.knowledge", "operator", "chromatic", "steam")) {
+            assertFalse(app, closedAfterAWhile(app))
+        }
+        for (app in listOf(
+            "chromium", "google-chrome", "org.chromium.Chromium", "com.brave.Browser", "vivaldi-stable", "microsoft-edge",
+            "opera", "firefox", "org.mozilla.firefox", "firefoxdeveloperedition", "app.zen_browser.zen", "zen-twilight",
+            "librewolf", "one.ablaze.floorp", "thorium-browser", "helium-browser",
+        )) {
+            assertTrue(app, closedAfterAWhile(app))
+        }
+    }
+
+    @Test
     fun configReadsPasswordFileAndDerivesUrls() {
         val dir = Files.createTempDirectory("xrnrule").toFile()
         val pw = File(dir, "pw").apply { writeText("secret\n") }

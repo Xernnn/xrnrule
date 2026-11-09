@@ -150,14 +150,26 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         return isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
     }
 
-    private fun isBrowser(appId: String): Boolean = appId.lowercase().let { id -> BROWSERS.any { id.contains(it) } }
-
     companion object {
         const val FRESH_MS = 6_000L
 
         /** The extension asks for its rules once a minute, even on a page where it can't run. */
         const val EXTENSION_SILENCE_MS = 75_000L
-        val BROWSERS = listOf("helium", "chrom", "brave", "vivaldi", "edge", "opera", "firefox", "zen", "librewolf", "floorp", "thorium")
+
+        /** Browsers, as a word of their app id. */
+        val BROWSERS = setOf(
+            "helium", "chrome", "chromium", "brave", "vivaldi", "edge", "opera", "firefox", "firefoxdeveloperedition",
+            "zen", "librewolf", "floorp", "thorium",
+        )
+
+        /**
+         * A word of [appId] (split at `.`, `-`, `_`) is a browser's name: `app.zen_browser.zen`,
+         * `org.chromium.Chromium`. Never part of a word, which would take zenity (Steam's prompts)
+         * for Zen and close it after 10 s as a browser without the extension (I49).
+         */
+        fun isBrowser(appId: String): Boolean = appId.lowercase().split(NOT_A_WORD).any { it in BROWSERS }
+
+        private val NOT_A_WORD = Regex("[^a-z0-9]+")
     }
 }
 
