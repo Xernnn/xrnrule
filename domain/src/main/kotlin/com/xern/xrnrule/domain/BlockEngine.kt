@@ -945,6 +945,11 @@ class BlockEngine {
         if (today != w.dailyUsageEpochDay) {
             w = w.copy(dailyUnlockUsedMs = 0, unlockLog = emptyMap(), dailyUsageEpochDay = today)
         }
+        // I13: every block has its window, or its day never ends. A block made here or adopted
+        // from another device had none until a timer or an unlock gave it one: its ticks carried
+        // on past midnight, and finished the next day what was begun the day before.
+        val windowless = w.blocks.filter { it.id !in w.progress }
+        if (windowless.isNotEmpty()) w = w.copy(progress = w.progress + windowless.associate { it.id to freshProgress(it.id, clock) })
 
         // I21: drop lockdowns that have run out (or whose block is gone / no longer LOCKDOWN).
         val liveLockdowns = w.lockdowns.filter { (id, _) ->

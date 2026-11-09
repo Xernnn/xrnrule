@@ -250,6 +250,21 @@ class InvariantTests {
     }
 
     @Test
+    fun i13_aNewBlocksTicksEndWithTheDay() {
+        val clock = FakeClock(wall = Instant.parse("2026-01-15T20:00:00Z").toEpochMilli())
+        // Made in the app or adopted from the other device: no progress of its own yet.
+        var world = World(blocks = listOf(checklistBlock("c1")), checklist = mapOf("c1" to items("c1", 2)), dailyUsageEpochDay = clock.epochDay())
+        world = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-i0", true), clock).world
+        assertTrue(world.items("c1").first().done)
+
+        clock.advance(5L * 60 * 60_000) // past midnight
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        assertFalse("yesterday's tick is gone", world.items("c1").first().done)
+        world = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-i1", true), clock).world
+        assertEquals("one of two today isn't the whole list", BlockState.ARMED, world.block("c1")!!.state)
+    }
+
+    @Test
     fun i13_dayRolloverResetsArmedProgress() {
         val zone = ZoneId.of("UTC")
         val clock = FakeClock(
