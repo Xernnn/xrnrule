@@ -19,6 +19,12 @@ self.Xrn = (() => {
   const MAX_RULES = 999;
   /** How long xrnrule may be gone before everything with a rule is blocked (I48). */
   const FAIL_CLOSED_MS = 60_000;
+  /**
+   * How long a call to xrnrule may take before it counts as not answered. It answers on the same
+   * device within milliseconds; one that takes the call and never answers (stopped, or hung) is
+   * as gone as one that isn't there.
+   */
+  const CALL_TIMEOUT_MS = 5_000;
   /** The manifest's host_permissions: every web page, and xrnrule's own address on 127.0.0.1. */
   const SITE_ORIGINS = ["http://*/*", "https://*/*"];
 
@@ -174,5 +180,5 @@ self.Xrn = (() => {
     }
   }
 
-  return { DEFAULT_PORT, SITE_ORIGINS, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, hostOf, locationOf, matches, redirectRules, failClosed, blockedBy, enginePage, blockUrl, mmss, warning };
+  return { DEFAULT_PORT, SITE_ORIGINS, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, CALL_TIMEOUT_MS, hostOf, locationOf, matches, redirectRules, failClosed, blockedBy, enginePage, blockUrl, mmss, warning };
 })();
