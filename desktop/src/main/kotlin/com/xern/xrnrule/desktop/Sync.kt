@@ -179,12 +179,14 @@ class SharedSyncClient(
             if (got.statusCode() == 304) return "Up to date"
             check(got.statusCode() == 200) { "server answered ${got.statusCode()}" }
             val etag = got.headers().firstValue("ETag").orElse("")
-            val remote = json.decodeFromString(SharedState.serializer(), got.body())
             val against = SharedState.baseFor(base?.state, base?.etag, etag) // I45
+            // What a device on an older xrnrule left out of the copy, it didn't change (§2.4).
+            val remote = SharedState.fromServer(got.body(), against, local, json)
             val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, remote))
             saveBase(Base(etag, remote)) // it's all in here now; a retry mustn't undo the other side
             val merged = SharedState.of(world)
-            if (merged == remote) return "Up to date"
+            // Compared with the copy as it is, so the server gets back what such a device left out.
+            if (merged == json.decodeFromString(SharedState.serializer(), got.body())) return "Up to date"
             val put = withContext(Dispatchers.IO) {
                 http.send("${config.ruleUrl}/state", "PUT", json.encodeToString(SharedState.serializer(), merged), mapOf("If-Match" to etag))
             }

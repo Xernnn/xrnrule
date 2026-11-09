@@ -261,6 +261,15 @@ trước mọi lần ghi, base bị bỏ theo, và lần trộn đầu chạy nh
 block trên server quay về máy này. Không vậy thì vòng đầu coi mọi block thiếu ở đây là đã xóa, cả
 block đang khóa (I39), rồi xóa chúng ở mọi máy.
 
+**Thiết bị chạy bản cũ hơn.** Thiết bị đọc bản của server bỏ qua trường nó không biết rồi ghi lại cả
+tài liệu, nên máy chạy xrnrule cũ hơn ghi lại mà thiếu các trường mới. Một bản ghi trong bản của
+server (block, mục checklist, `settings`, lượt dùng của một máy...) thiếu trường nào thì người ghi
+không biết trường đó, nên không đổi nó: `SharedState.fromServer` lấy trường đó từ base, base không có
+bản ghi ấy thì từ bản của máy này. Đọc thành giá trị mặc định thì lần trộn coi đó là sửa: mất khóa
+(I39), giới hạn số lần mở về 0 (I52). Bản ghi có mốc bắt đầu (`startedAtWall`, `earnedAtWall`,
+`dayStartWall`, `setAtWall`) mà mốc khác thì là bản ghi khác, không lấy gì từ bản cũ. Mục thiếu trong
+một map vẫn là đã xóa. Bản của server thiếu những gì máy này biết thì máy ghi lại.
+
 ### 2.5 Habit server: danh sách habit chung
 
 Habit và entry đi qua **habit server** (`xrnloops-sync`, trước là server của xrnloops), không qua

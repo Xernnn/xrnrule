@@ -207,10 +207,13 @@ class SharedSync(
             val cheap = base != null && base.state == local
             val remote = api.get(if (cheap) base!!.etag else null) ?: return "Up to date"
             val against = SharedState.baseFor(base?.state, base?.etag, remote.etag) // I45
-            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, remote.state))
-            saveBase(Base(remote.etag, remote.state))
+            // What a device on an older xrnrule left out of the copy, it didn't change (§2.4).
+            val state = SharedState.fromServer(remote.text, against, local, json)
+            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, state))
+            saveBase(Base(remote.etag, state))
             val merged = SharedState.of(world)
-            if (merged == remote.state) return "Up to date"
+            // Compared with the copy as it is, so the server gets back what such a device left out.
+            if (merged == json.decodeFromString(SharedState.serializer(), remote.text)) return "Up to date"
             val etag = api.put(merged, remote.etag) ?: return@repeat // 412: someone wrote first
             saveBase(Base(etag, merged))
             return "Sent"
@@ -309,7 +312,8 @@ class SharedSync(
 
     private class AuthException : IOException("login refused")
 
-    private class Remote(val etag: String, val state: SharedState)
+    /** The server's copy as it came: read with [SharedState.fromServer]. */
+    private class Remote(val etag: String, val text: String)
 
     /** xrnrule-sync's `/state`. Blocking; called on [Dispatchers.IO]. */
     private inner class Api(private val baseUrl: String, user: String, password: String) {
@@ -329,7 +333,8 @@ class SharedSync(
                 check(conn, code)
                 if (code == HttpURLConnection.HTTP_NOT_MODIFIED) return null
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
-                return Remote(conn.getHeaderField("ETag").orEmpty(), json.decodeFromString(SharedState.serializer(), text))
+                json.parseToJsonElement(text) // not JSON: the round fails here, as before
+                return Remote(conn.getHeaderField("ETag").orEmpty(), text)
             } finally {
                 conn.disconnect()
             }
