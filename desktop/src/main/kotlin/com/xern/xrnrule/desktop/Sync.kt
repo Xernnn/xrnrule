@@ -75,7 +75,7 @@ class SharedSyncClient(
     private val scope: CoroutineScope,
 ) {
     private val http = Http(config.user, config.password)
-    private val baseFile = File(config.dataDir, "shared-base.json")
+    private val baseFile = File(config.dataDir, BASE_FILE)
     private val eventsSentFile = File(config.dataDir, "events-sent")
     private var telemetrySizeSent = -1L
     private val requests = Channel<Unit>(Channel.CONFLATED)
@@ -161,6 +161,11 @@ class SharedSyncClient(
 
     fun request() {
         requests.trySend(Unit)
+    }
+
+    companion object {
+        /** In the data dir, beside the world (see [FilePersist]). */
+        const val BASE_FILE = "shared-base.json"
     }
 
     private suspend fun round(): String {

@@ -31,7 +31,7 @@ fun main() = runBlocking {
     runCatching { Files.setPosixFilePermissions(config.dataDir.toPath(), PosixFilePermissions.fromString("rwx------")) }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = DesktopClock()
-    val persist = FilePersist(File(config.dataDir, "world.json"), clock)
+    val persist = FilePersist(File(config.dataDir, "world.json"), clock, File(config.dataDir, SharedSyncClient.BASE_FILE))
     val telemetry = FileTelemetry(File(config.dataDir, "telemetry.log")).also { it.prune(clock.nowWallMs()) }
     val store = Store(BlockEngine(), persist, clock, scope, telemetry)
     if (store.world.value.deviceId.isEmpty()) {

@@ -93,7 +93,7 @@ class SharedSync(
     val settings = SyncSettings(context)
 
     private val build by lazy { PackageInfoCompat.getLongVersionCode(context.packageManager.getPackageInfo(context.packageName, 0)) }
-    private val baseFile = AtomicFile(File(context.filesDir, "shared-base.json"))
+    private val baseFile = AtomicFile(File(context.filesDir, BASE_FILE))
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -393,13 +393,15 @@ class SharedSync(
         }
     }
 
-    private companion object {
-        const val DEVICE = "phone"
-        const val CHANGE_DEBOUNCE_MS = 1_000L
-        const val PERIOD_MS = 60_000L
-        const val MAX_TRIES = 4
-        const val TIMEOUT_MS = 15_000
-        const val WATCH_WAIT_S = 25
-        const val WATCH_RETRY_MS = 5_000L
+    companion object {
+        /** In the app's files, beside the world (see [FilePersistPort]). */
+        const val BASE_FILE = "shared-base.json"
+        private const val DEVICE = "phone"
+        private const val CHANGE_DEBOUNCE_MS = 1_000L
+        private const val PERIOD_MS = 60_000L
+        private const val MAX_TRIES = 4
+        private const val TIMEOUT_MS = 15_000
+        private const val WATCH_WAIT_S = 25
+        private const val WATCH_RETRY_MS = 5_000L
     }
 }

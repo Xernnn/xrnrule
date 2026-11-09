@@ -28,7 +28,7 @@ class AppContainer(context: Context) {
     val clock: Clock = clockGuard
 
     val engine = BlockEngine()
-    private val worldFile = FilePersistPort(File(context.filesDir, "world.json"))
+    private val worldFile = FilePersistPort(File(context.filesDir, "world.json"), File(context.filesDir, SharedSync.BASE_FILE))
     val persist = ThrottledPersist(worldFile, clock)
     val telemetry = LocalTelemetry(File(context.filesDir, "telemetry.jsonl"))
 

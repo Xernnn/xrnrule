@@ -255,6 +255,12 @@ giờ** trả tài liệu rỗng thay cho file không đọc được: `state.js
 chỉ file thật sự chưa có mới là version 0. Server giữ 14 bản sao theo ngày trong `backups/` cạnh
 `state.json`; xóa file hỏng thì các thiết bị tự ghi lại, khỏi cần khôi phục tay.
 
+**Thiết bị mất world.** Base chỉ có nghĩa bên cạnh world đã đồng ý với nó. World của máy này không
+còn hay không đọc được (hỏng, hay bản app cũ hơn không đọc nổi) thì máy không xóa gì cả: lúc nạp,
+trước mọi lần ghi, base bị bỏ theo, và lần trộn đầu chạy như thiết bị chưa từng đồng bộ, nên mọi
+block trên server quay về máy này. Không vậy thì vòng đầu coi mọi block thiếu ở đây là đã xóa, cả
+block đang khóa (I39), rồi xóa chúng ở mọi máy.
+
 ### 2.5 Habit server: danh sách habit chung
 
 Habit và entry đi qua **habit server** (`xrnloops-sync`, trước là server của xrnloops), không qua

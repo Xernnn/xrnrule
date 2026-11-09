@@ -123,8 +123,11 @@ val json = Json {
  * Saves that only move timer bookkeeping forward are held back for up to 30 s, as on the phone:
  * the 1 s tick would otherwise write the disk every second. An unreadable file is kept aside
  * rather than overwritten.
+ *
+ * [sharedBase] is the base of the shared state ([SharedSyncClient]), which means something only
+ * beside the world that agreed on it: when the world is gone or unreadable, it goes too (§2.4).
  */
-class FilePersist(private val file: File, private val clock: Clock) : PersistPort {
+class FilePersist(private val file: File, private val clock: Clock, private val sharedBase: File? = null) : PersistPort {
     private var saved: World? = null
     private var savedAtMono = 0L
     private var pending: World? = null
@@ -136,11 +139,17 @@ class FilePersist(private val file: File, private val clock: Clock) : PersistPor
 
     @Synchronized
     override fun loadWorld(): World {
-        var world = if (!file.exists()) World() else try {
-            json.decodeFromString(World.serializer(), file.readText())
-        } catch (e: Exception) {
-            keepUnreadable(file, e)
+        var world = if (!file.exists()) {
+            forgetSharedBase()
             World()
+        } else {
+            try {
+                json.decodeFromString(World.serializer(), file.readText())
+            } catch (e: Exception) {
+                forgetSharedBase()
+                keepUnreadable(file, e)
+                World()
+            }
         }
         val entries = if (!entriesFile.exists()) null else try {
             json.decodeFromString(entriesSerializer, entriesFile.readText())
@@ -157,6 +166,17 @@ class FilePersist(private val file: File, private val clock: Clock) : PersistPor
         saved = world
         savedAtMono = clock.nowMonotonicMs()
         return world
+    }
+
+    /**
+     * Starting without the world, this laptop deleted nothing. Against the old base, the first
+     * round would take every block missing here for deleted, the locked ones too, and send that
+     * to every device; without one, it merges as a first sync and the server's blocks come back.
+     */
+    private fun forgetSharedBase() {
+        val base = sharedBase?.takeIf { it.exists() } ?: return
+        if (base.delete()) System.err.println("Starting without the world, so ${base.name} went too: the next sync takes the server's blocks")
+        else System.err.println("Couldn't delete ${base.name}: the next sync may take the lost world's blocks for deleted")
     }
 
     private fun keepUnreadable(f: File, e: Exception) {
