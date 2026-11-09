@@ -724,7 +724,10 @@ function alerts() {
   const out = [];
   if (failed) out.push(["The laptop app isn't answering", "Is xrnrule-desktop running? systemctl --user status xrnrule-desktop"]);
   if (!state) return out;
-  if (state.kwinSeenAgoMs == null) out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
+  if (state.kwinSeenAgoMs == null) {
+    if (state.windowSystem === "hyprland") out.push(["Desktop apps aren't being watched", "Hyprland's sockets haven't answered. Is HYPRLAND_INSTANCE_SIGNATURE in the service's environment? systemctl --user show-environment"]);
+    else out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
+  }
   if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering. Turn it on in the browser's extensions page."]);
   if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow the xrnrule extension in incognito on the browser's extensions page."]);
   if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);

@@ -1,7 +1,8 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // The laptop half of xrnrule: the same engine (:domain) enforcing the same shared blocks on
-// websites (through desktop/extension) and desktop apps (through the KWin script in desktop/kwin).
+// websites (through extension/) and desktop apps (through the KWin script in desktop/kwin, or
+// Hyprland's sockets).
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)

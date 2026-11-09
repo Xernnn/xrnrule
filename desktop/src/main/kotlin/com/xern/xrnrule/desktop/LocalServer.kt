@@ -509,6 +509,8 @@ class LocalServer(
         val syncConfigured: Boolean,
         val habitsUrl: String?,
         val kwinSeenAgoMs: Long?,
+        /** What reports the windows: "kwin" or "hyprland". */
+        val windowSystem: String = "kwin",
         val extensionMissing: Boolean,
         /** The extension's version, and the one this daemon was built with when it's older. */
         val summary: String? = null,
@@ -546,6 +548,7 @@ class LocalServer(
             syncConfigured = config.syncConfigured,
             habitsUrl = if (config.syncConfigured) "${config.loopUrl}/" else null,
             kwinSeenAgoMs = enforcer.kwinSeenAtMs.takeIf { it > 0 }?.let { System.currentTimeMillis() - it },
+            windowSystem = enforcer.windowSystem.name,
             extensionMissing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() },
             summary = BlockTexts.summary(engine, world, clock),
             today = today(world),

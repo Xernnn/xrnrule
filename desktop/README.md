@@ -1,6 +1,6 @@
 # xrnrule on the laptop
 
-The same blocks as the phone, enforced on a Linux laptop running KDE Plasma 6. Websites are
+The same blocks as the phone, enforced on a Linux laptop running KDE Plasma 6 or Hyprland. Websites are
 blocked in the browser, and desktop apps (Steam, Discord, …) are closed. With sync set up,
 everything is shared: an unlock redeemed on either device opens the block on both until the
 same moment, daily limits count both devices' use (unless a block gives each its own), and
@@ -11,6 +11,7 @@ bought minutes, the daily unlock limit, the 15-minute break and lockdowns are sh
    ├─ syncs the shared state with xrnrule-sync     (server/xrnrule-sync.py)
    ├─ shares habits and ticks with xrnloops-sync   (../xrnloops/server)
    ├─ D-Bus  ← KWin script (kwin/): which window is in front; closes blocked ones
+   │   (on Hyprland: its own sockets instead, see below)
    └─ http://127.0.0.1:47321
         ├─ the local page: blocks, unlocks, laptop apps & sites per block
         ├─ /block: where blocked apps and sites land, with what unlocks them
@@ -19,16 +20,16 @@ bought minutes, the daily unlock limit, the 15-minute break and lockdowns are sh
 
 ## Install
 
-Needs JDK 17 or newer to build (it targets Java 17, like the Android app), plus KDE Plasma 6 with
-`qdbus6`, `kwriteconfig6`, `notify-send` and `xdg-open`.
+Needs JDK 17 or newer to build (it targets Java 17, like the Android app), plus `notify-send` and
+`xdg-open`, and either KDE Plasma 6 with `qdbus6` and `kwriteconfig6`, or Hyprland.
 
 ```sh
 desktop/install.sh
 ```
 
 It builds the daemon, installs it to `~/.local/share/xrnrule-desktop`, installs and turns on
-the KWin script, and starts the systemd user service `xrnrule-desktop`. Run it again to
-update.
+the KWin script (not on Hyprland), and starts the systemd user service `xrnrule-desktop`. Run
+it again to update.
 
 Then load the browser extension once. The browser's extensions page (`chrome://extensions`
 in Chromium browsers, including Helium) → Developer mode → **Load unpacked** → `extension/`
@@ -38,6 +39,24 @@ allow it in incognito windows, or incognito tabs aren't blocked.
 Moving from xrnhabit: `install.sh` stops `xrnhabit-desktop`, removes its KWin script, and
 moves `~/.config/xrnhabit` and `~/.local/share/xrnhabit` over, so the blocks and this
 laptop's device id carry on.
+
+### On Hyprland
+
+Found at start from `HYPRLAND_INSTANCE_SIGNATURE` (or `XDG_CURRENT_DESKTOP=Hyprland`); anywhere
+else it's the KWin path. Instead of the KWin script, the daemon follows Hyprland's event socket
+(`$XDG_RUNTIME_DIR/hypr/<signature>/.socket2.sock`: `openwindow`, `activewindowv2`,
+`closewindow`) and asks `.socket.sock` for `j/clients`, so it hears the same things in the same
+order as the script would say them. A window's class (`initialClass` if it has none) is turned
+into the `.desktop` id KWin would have given: a `.desktop` file of that name, else the one whose
+`StartupWMClass` it is (Steam, Flatpak Discord), else the class in lower case. Blocked windows
+are closed over the same socket with `hl.dsp.window.close` (Hyprland 0.56's Lua dispatch), or
+`closewindow` on older versions. A locked screen is a monitor reporting `LOCK` in
+`solitaryBlockedBy`. If Hyprland restarts, the daemon reconnects (to the newest instance if the
+old signature is gone) and lists the windows again.
+
+The service needs `HYPRLAND_INSTANCE_SIGNATURE` in the user manager's environment. Omarchy puts it
+there at login (`systemctl --user show-environment` shows it); `install.sh` imports it if not.
+`XRNRULE_DEBUG=1` logs each window reported and the daemon's answer.
 
 ### Sync with the phone
 
@@ -100,10 +119,10 @@ visible instead:
 
 - it notifies **"Website blocking is off"** when a browser is in front but the extension
   isn't answering;
-- the local page warns when the KWin script hasn't reported in, or sync is failing.
+- the local page warns when the KWin script (or Hyprland) hasn't reported in, or sync is failing.
 
 Desktop apps are matched by their `.desktop` id (what KWin calls `desktopFileName`), or by
-WM class when a window has none.
+WM class when a window has none (on Hyprland, see above).
 
 ## Troubleshooting
 
@@ -111,6 +130,7 @@ WM class when a window has none.
 systemctl --user status xrnrule-desktop      # running?
 journalctl --user -u xrnrule-desktop -n 50   # what it said
 qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.isScriptLoaded xrnrule   # KWin script loaded?
+systemctl --user show-environment | grep HYPRLAND      # Hyprland: can the service find it?
 curl -s http://127.0.0.1:47321/api/state | head -c 400
 ```
 

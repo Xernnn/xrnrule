@@ -23,11 +23,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-/** One window as KWin reports it: the `.desktop` id when it has one, else its WM class. */
+/** One window as KWin (or Hyprland) reports it: the `.desktop` id when it has one, else its WM class. */
 data class AppWindow(val appId: String, val resourceClass: String, val pid: Long)
 
 /**
- * What the KWin script (`desktop/kwin`) calls over D-Bus. Arguments are strings: a JS number
+ * What the KWin script (`desktop/kwin`) calls over D-Bus, and [HyprlandWindows] calls directly. Arguments are strings: a JS number
  * reaches D-Bus as a double, which wouldn't match an `i` argument.
  */
 @DBusInterfaceName("com.xern.xrnrule.Desktop")
@@ -161,15 +161,24 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
 }
 
 /**
- * The laptop's shield: blocked apps are closed through KWin (and their process stopped if the
+ * The laptop's shield: blocked apps are closed through the compositor's [WindowSystem] (and their process stopped if the
  * window doesn't go), blocked sites are the extension's job (it asks [isSiteBlocked]).
  */
 class Enforcer(private val store: Store, private val notifier: Notifier, private val config: Config) : ShieldPort, DesktopBus {
     private val windows = ConcurrentHashMap<Long, AppWindow>()
     lateinit var foreground: Foreground
 
+    /** Who reports windows and closes them: KWin's script, or Hyprland's sockets. */
+    var windowSystem: WindowSystem = KWin
+
+    /** When the window system last reported in (the name is from when it could only be KWin). */
     @Volatile var kwinSeenAtMs = 0L
         private set
+
+    /** The window system is there and watching, even with no window open yet. */
+    fun reported() {
+        kwinSeenAtMs = System.currentTimeMillis()
+    }
 
     private fun plan(): ShieldPlan = store.world.value.appliedShield
 
@@ -184,7 +193,7 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
         if (doomed.isEmpty()) return
         worker.execute {
             val ids = doomed.map { it.appId }.toSet()
-            KWin.closeWindowsOf(ids)
+            windowSystem.closeWindowsOf(ids)
             ids.forEach { notifier.blocked(it) }
             Thread.sleep(4_000)
             // Closing a window may only hide it to the tray (Steam, Discord): then stop the process.
@@ -195,7 +204,7 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
     private val worker = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "enforcer").apply { isDaemon = true } }
 
     private fun seen(appId: String, resourceClass: String, pid: String): AppWindow? {
-        kwinSeenAtMs = System.currentTimeMillis()
+        reported()
         val id = DesktopApps.resolve(appId, resourceClass) ?: return null
         val w = AppWindow(id, resourceClass, pid.toLongOrNull() ?: 0)
         if (w.pid > 0) windows[w.pid] = w
@@ -230,8 +239,13 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
 }
 
 /** Talking to KWin: export [DesktopBus] for our script, and run one-off scripts to close windows. */
-object KWin {
+object KWin : WindowSystem {
     private var connection: DBusConnection? = null
+
+    override val name = "kwin"
+
+    /** Exports [DesktopBus] and restarts our script, so it lists the open windows again. */
+    override fun start(bus: DesktopBus, connected: () -> Unit): Boolean = export(bus).also { if (it) reloadScript() }
 
     fun export(bus: DesktopBus): Boolean = try {
         val conn = DBusConnectionBuilder.forSessionBus().build()
@@ -250,7 +264,7 @@ object KWin {
         qdbus("org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
     }
 
-    fun closeWindowsOf(appIds: Set<String>) {
+    override fun closeWindowsOf(appIds: Set<String>) {
         if (appIds.isEmpty()) return
         // As JSON strings, which are JS strings: quotes, backslashes and control characters all escaped.
         val list = appIds.joinToString(",") { json.encodeToString(String.serializer(), it) }
@@ -284,7 +298,7 @@ object KWin {
     }
 
     /** Whether the screen locker is up (KDE's, through the freedesktop ScreenSaver interface). */
-    fun screenLocked(): Boolean =
+    override fun screenLocked(): Boolean =
         qdbus("org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver.GetActive")?.trim() == "true"
 }
 
