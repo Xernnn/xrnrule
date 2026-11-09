@@ -49,7 +49,7 @@ class PersistTest {
 
     /** The first round after starting with [world]: the server's copy, merged against the base if one is left. */
     private fun firstRound(world: World, base: File, server: SharedState): SharedState =
-        SharedState.merge(if (base.isFile) server else null, SharedState.of(world), server)
+        SharedState.merge(if (base.isFile) server else null, SharedState.of(world), server, TestClock.nowWallMs())
 
     @Test
     fun aWorldThatCantBeReadDropsTheBase_soTheServersBlocksComeBack() {

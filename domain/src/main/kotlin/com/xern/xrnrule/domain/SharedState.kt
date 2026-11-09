@@ -51,9 +51,15 @@ data class SharedState(
 
     companion object {
 
-        /** Which of two reports of one device's use of a block wins (§2.4): the later day, more use, the later count. */
-        val newerUse: Comparator<AllowanceUse> =
-            compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.opens }.thenBy { it.atWall }
+        /**
+         * Which of two reports of one device's use of a block wins (§2.4): the later day, more use,
+         * the later count. A day that hasn't begun by [nowWall] is from a clock that ran ahead (a
+         * laptop booted from another system before NTP): it loses to any day that has, or it would
+         * win every round until that day came, and the use counted today would never count.
+         */
+        fun newerUse(nowWall: Long): Comparator<AllowanceUse> =
+            compareBy<AllowanceUse> { it.dayStartWall <= nowWall }
+                .thenBy { it.dayStartWall }.thenBy { it.ms }.thenBy { it.opens }.thenBy { it.atWall }
 
         /** This device's own report of its use of [block]'s limit, with progress [p] (I19, I32, I44). */
         fun ownUse(world: World, block: Block, p: HabitProgress): AllowanceUse {
@@ -174,8 +180,10 @@ data class SharedState(
             }
         }
 
-        fun merge(base: SharedState?, local: SharedState, remote: SharedState): SharedState {
+        /** [nowWall]: this device's clock, which says what day it is for the use reports ([newerUse]). */
+        fun merge(base: SharedState?, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
             val b = base ?: SharedState()
+            val newer = newerUse(nowWall)
             val unlockSameDay = local.unlockEpochDay == remote.unlockEpochDay
             val overrideSameDay = local.overrideEpochDay == remote.overrideEpochDay
             fun <T> field(get: (Settings) -> T, resolve: (T, T) -> T): T =
@@ -259,7 +267,7 @@ data class SharedState(
                     val l = local.allowance[blockId].orEmpty()
                     val r = remote.allowance[blockId].orEmpty()
                     (l.keys + r.keys).associateWith { device ->
-                        listOfNotNull(l[device], r[device]).maxWith(newerUse)
+                        listOfNotNull(l[device], r[device]).maxWith(newer)
                     }
                 },
                 overrides = mergeMaps(b.overrides, local.overrides, remote.overrides) { l, r ->

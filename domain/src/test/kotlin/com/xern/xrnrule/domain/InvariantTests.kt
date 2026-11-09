@@ -707,6 +707,40 @@ class InvariantTests {
         assertEquals(4L * 60_000, engine.allowanceUsedMs(phone.world, phone.block("a1"), phone.clock))
     }
 
+    @Test
+    fun i19_aDayThatHasNotBegunIsAClockThatRanAhead() {
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000)
+        val (phone, laptop, server) = twoDevices(listOf(block))
+
+        laptop.on(BlockEvent.ForegroundChanged("com.target"))
+        advanceAll(20L * 60_000, phone, laptop)
+        laptop.on(BlockEvent.Tick)
+        laptop.on(BlockEvent.ForegroundChanged(null))
+        settle(phone, laptop, server)
+
+        // Booted from another system 13 h ahead, into tomorrow, the laptop syncs once before NTP
+        // puts its clock back: it reports tomorrow, with nothing used.
+        laptop.clock.advanceWallOnly(13L * 60 * 60_000)
+        laptop.on(BlockEvent.BootOrColdStart)
+        laptop.sync(server)
+        laptop.clock.advanceWallOnly(-13L * 60 * 60_000)
+        laptop.on(BlockEvent.Tick)
+
+        settle(phone, laptop, server) // not a write each round until tomorrow
+        assertEquals("today's use comes back", 20L * 60_000, engine.allowanceUsedMs(laptop.world, laptop.block("a1"), laptop.clock))
+
+        // 25 more minutes: 45 against a 30-minute limit.
+        laptop.on(BlockEvent.ForegroundChanged("com.target"))
+        repeat(25) {
+            advanceAll(60_000, phone, laptop)
+            laptop.on(BlockEvent.Tick)
+            if (it % 5 == 0) settle(phone, laptop, server)
+        }
+        assertTrue(engine.isBlocking(laptop.world, laptop.block("a1"), laptop.clock))
+        settle(phone, laptop, server)
+        assertTrue(engine.isBlocking(phone.world, phone.block("a1"), phone.clock))
+    }
+
     // ---- several rules on one block (contract §2.2) ----------------------------------------
 
     private val tenMinutes = 10L * 60_000

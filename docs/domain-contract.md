@@ -225,7 +225,7 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ |
 | settings | từng trường: `dailyCapMs`, `skewToleranceMs`, `overrideGrantMs`, `overridesPerDay` lấy nhỏ hơn; `unlockWarningMs`, `overrideWaitMs` lấy lớn hơn; `overridePhrase` lấy cái dài hơn; `showClock` lấy `false` |
 | `unlockLog` | ngày lớn hơn thắng cả; cùng ngày → hợp, mỗi khóa lấy max |
-| allowance (mọi block `hasLimit`, I44) | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32) |
+| allowance (mọi block `hasLimit`, I44) | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32). Ngày chưa bắt đầu theo đồng hồ máy đang trộn (`dayStartWall > now_wall`: đồng hồ máy kia chạy trước) thua mọi ngày đã bắt đầu |
 | override | kết thúc muộn hơn; một bên xóa → bên còn (như lockdown) |
 | `overrideLog` | như `unlockLog`: ngày lớn hơn thắng; cùng ngày → hợp |
 | `settings.blockOtherBrowsers` | OR: bên chặt hơn (I49) |
@@ -236,9 +236,12 @@ Bản ghi allowance chỉ được thêm, không bị xóa khi trộn, nên máy
 máy **luôn** chiếu bản ghi của chính nó cho mọi block `hasLimit` có `progress`, kể cả khi chưa dùng
 (0 ms), để ngày mới của nó thắng bản của hôm trước mà máy kia còn giữ. Khi nhận, bản ghi của chính
 máy này trên server mà "lớn hơn" bản của nó (cùng thứ tự như bảng trên: ngày, `ms`, `atWall`; ví dụ
-dữ liệu máy này bị mất) thì được nhận vào `progress` và `runs` của nó. Hai điều này để hai máy luôn
+dữ liệu máy này bị mất) thì được nhận vào `progress` và `runs` của nó, trừ bản của một ngày chưa bắt
+đầu ở đây (đồng hồ máy này từng chạy trước). Hai điều này để hai máy luôn
 thống nhất được: không bao giờ có một bản ghi mà một máy cứ thêm lại và máy kia cứ bỏ đi, đẩy qua
-lại mãi (đã xảy ra ngày 2026-11-05 với bản ghi 0 ms của laptop).
+lại mãi (đã xảy ra ngày 2026-11-05 với bản ghi 0 ms của laptop; và với bản ghi "ngày mai" của một
+laptop khởi động với đồng hồ nhanh 11 giờ, thắng mọi vòng tới tận ngày đó, nên phần đã dùng hôm nay
+không bao giờ được tính).
 
 Nhận kết quả (I27): credit/session/lockdown/pause mới được neo monotonic theo wall; `state` của
 block suy ra lại (có session → `UNLOCKED`, có credit → `EARNED`, không → `ARMED`; mode khác HABIT

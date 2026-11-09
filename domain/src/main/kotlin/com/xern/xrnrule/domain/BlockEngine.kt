@@ -30,7 +30,7 @@ class BlockEngine {
             is BlockEvent.StartPause -> onStartPause(world, event, clock, effects)
             is BlockEvent.EndPause -> world.copy(pause = null)
             is BlockEvent.SharedStateMerged ->
-                adoptShared(world, SharedState.merge(event.base, SharedState.of(world), event.remote), clock) // I26
+                adoptShared(world, SharedState.merge(event.base, SharedState.of(world), event.remote, clock.nowWallMs()), clock) // I26
             is BlockEvent.BeginOverride -> onBeginOverride(world, event, clock)
             is BlockEvent.CancelOverride -> world.copy(pendingOverride = null)
             is BlockEvent.ClaimOverride -> onClaimOverride(world, event, clock, effects)
@@ -1115,8 +1115,10 @@ class BlockEngine {
             for ((blockId, byDevice) in shared.allowance) {
                 val block = shared.blocks[blockId]?.takeIf { it.hasLimit } ?: continue
                 val theirs = byDevice[world.deviceId] ?: continue
+                // A day that hasn't begun here is this clock having run ahead, not use it forgot.
+                if (theirs.dayStartWall > clock.nowWallMs()) continue
                 val p = progress[blockId]
-                if (p != null && SharedState.newerUse.compare(theirs, SharedState.ownUse(world, block, p)) <= 0) continue
+                if (p != null && SharedState.newerUse(clock.nowWallMs()).compare(theirs, SharedState.ownUse(world, block, p)) <= 0) continue
                 val opens = if (p?.windowStart == theirs.dayStartWall) maxOf(p.opens, theirs.opens) else theirs.opens
                 progress[blockId] = (p ?: freshProgress(blockId, clock)).withLimitUsed(block, theirs.ms).copy(opens = opens, windowStart = theirs.dayStartWall)
                 if (theirs.run != null) runs[blockId] = theirs.run else runs.remove(blockId)

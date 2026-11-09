@@ -46,7 +46,7 @@ class PersistenceTest {
 
     /** The first round after starting with [world]: the server's copy, merged against the base if one is left. */
     private fun firstRound(s: Synced, world: World): SharedState =
-        SharedState.merge(if (s.base.exists()) s.server else null, SharedState.of(world), s.server)
+        SharedState.merge(if (s.base.exists()) s.server else null, SharedState.of(world), s.server, now)
 
     @Test
     fun aWorldThatCantBeReadDropsTheBase_soTheServersBlocksComeBack() {

@@ -18,7 +18,7 @@ class SharedStateTest {
     private fun session(id: String, start: Long, ms: Long = 5L * 60_000) = UnlockSession(id, 0, start, ms)
     private fun lockdown(id: String, start: Long, ms: Long) = Lockdown(id, 0, start, ms)
 
-    private fun merge(base: SharedState?, local: SharedState, remote: SharedState) = SharedState.merge(base, local, remote)
+    private fun merge(base: SharedState?, local: SharedState, remote: SharedState) = SharedState.merge(base, local, remote, nowWall = t)
 
     @Test
     fun projection_dropsMonotonicStampsAndHabitTicks() {
@@ -196,6 +196,18 @@ class SharedStateTest {
         val merged = merge(null, here, there).allowance.getValue("a1")
         assertEquals(AllowanceUse(t, 7), merged["phone"])
         assertEquals(AllowanceUse(t, 9), merged["laptop"])
+    }
+
+    @Test
+    fun allowance_aDayThatHasNotBegunLosesToOneThatHas() {
+        val today = AllowanceUse(t - 12 * 60 * 60_000, 20L * 60_000)
+        val tomorrow = AllowanceUse(t + 12 * 60 * 60_000, 0) // from a clock 13 h ahead
+        val here = SharedState(allowance = mapOf("a1" to mapOf("laptop" to today)))
+        val there = SharedState(allowance = mapOf("a1" to mapOf("laptop" to tomorrow)))
+        assertEquals(today, merge(here, here, there).allowance.getValue("a1").getValue("laptop"))
+        assertEquals(today, merge(there, there, here).allowance.getValue("a1").getValue("laptop"))
+        // Once that day has come, it is the newer one.
+        assertEquals(tomorrow, SharedState.merge(here, here, there, nowWall = tomorrow.dayStartWall).allowance.getValue("a1").getValue("laptop"))
     }
 
     @Test
