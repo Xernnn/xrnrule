@@ -14,7 +14,7 @@
 // page, with shared.js listed before it in the manifest's background.scripts, and has no importScripts.
 if (typeof importScripts === "function" && !self.Xrn) importScripts("shared.js");
 
-const { DEFAULT_PORT, FAIL_CLOSED_MS, locationOf, redirectRules, blockedBy, enginePage, blockUrl } = self.Xrn;
+const { DEFAULT_PORT, FAIL_CLOSED_MS, locationOf, redirectRules, failClosed, blockedBy, enginePage, blockUrl } = self.Xrn;
 const OWN_PAGE = chrome.runtime.getURL("block.html");
 /** Our redirect rules' ids. Each rewrite removes the whole range first. */
 const DNR_BASE = 1000;
@@ -49,7 +49,7 @@ let offlineSince = null;
 /** I48: what counts as blocked now: after a minute without xrnrule, everything with a rule. */
 function inForce(rules) {
   if (!rules || offlineSince == null || Date.now() - offlineSince < FAIL_CLOSED_MS) return rules;
-  return { ...rules, blocked: rules.watched?.length ? rules.watched : rules.blocked };
+  return failClosed(rules);
 }
 
 let offlineRead = false;

@@ -78,9 +78,14 @@ object ExtensionApi {
         return SiteRules(v, blocked, page, world.settings.showClock, watched)
     }
 
-    /** I48: the blocks that could block something here, for when xrnrule can't be asked. */
+    /**
+     * I48: the blocks that could block something here, for when xrnrule can't be asked. A lockdown
+     * only while it runs: one not started blocks nothing, and nothing can start it meanwhile.
+     */
     private fun watched(world: World): List<SiteRule> {
-        val blocks = world.blocks.filter { it.enabled && world.appliesHere(it) && it.mode != BlockMode.LOCKDOWN }
+        val blocks = world.blocks.filter {
+            it.enabled && world.appliesHere(it) && (it.mode != BlockMode.LOCKDOWN || it.id in world.lockdowns)
+        }
         return blocks.flatMap { it.targetSites }.toSortedSet().map { site ->
             val covering = blocks.filter { site in it.targetSites }
             SiteRule(site, covering.map { it.exceptSites }.reduce { a, b -> a intersect b }.sorted())

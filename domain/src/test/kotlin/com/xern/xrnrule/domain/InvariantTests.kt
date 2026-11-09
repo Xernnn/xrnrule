@@ -2643,6 +2643,19 @@ class InvariantTests {
     }
 
     @Test
+    fun i48_aRunningLockdownIsWatched() {
+        val clock = FakeClock()
+        val lockdown = modeBlock("c", BlockMode.LOCKDOWN, targetPackages = emptySet(), targetSites = setOf("reddit.com"), lockdownMs = 60 * 60_000)
+        var world = buildWorld(listOf(lockdown), clock = clock)
+        assertTrue("not started: nothing to hold", ExtensionApi.rules(world, null).watched.isEmpty())
+        world = BlockEngine().reduce(world, BlockEvent.StartLockdown("c"), clock).world
+        val rules = ExtensionApi.rules(world, null)
+        assertEquals(listOf("reddit.com"), rules.blocked.map { it.domain })
+        // Without this, an extension that loses xrnrule for a minute would open what the lockdown holds.
+        assertEquals(listOf("reddit.com"), rules.watched.map { it.domain })
+    }
+
+    @Test
     fun i48_anExceptionHoldsOnlyIfEveryBlockHasIt() {
         val clock = FakeClock()
         val a = siteLimit("a", "youtube.com").copy(exceptSites = setOf("music.youtube.com", "kids.youtube.com"))
