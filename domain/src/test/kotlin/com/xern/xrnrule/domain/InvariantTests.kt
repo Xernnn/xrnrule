@@ -3325,4 +3325,39 @@ class InvariantTests {
         phone.pass(5_000)
         assertEquals(before, phone.world.withoutBookkeeping())
     }
+
+    // ---- I54: the time zone the phone set itself ------------------------------------------
+
+    @Test
+    fun i54_theLaptopGoesByTheZoneThePhoneSetItself() {
+        val berlin = ZoneId.of("Europe/Berlin")
+        val brisbane = ZoneId.of("Australia/Brisbane")
+        val server = FakeServer()
+        val phone = Device("phone", World(), FakeClock())
+        val laptop = Device("laptop", World(), FakeClock(mono = 5_000))
+        laptop.sync(server)
+        assertNull("none known yet", laptop.world.sharedZone())
+
+        phone.world = phone.world.withOwnZone(berlin, phone.clock.nowWallMs())
+        phone.sync(server)
+        laptop.sync(server)
+        assertEquals(berlin, laptop.world.sharedZone())
+        assertNull("the laptop sets none of its own", laptop.world.ownZone)
+
+        // Flown to Brisbane: the phone's newer zone wins over the copy the laptop kept.
+        phone.clock.advance(3_600_000)
+        phone.world = phone.world.withOwnZone(brisbane, phone.clock.nowWallMs())
+        phone.sync(server)
+        laptop.sync(server)
+        assertEquals(brisbane, laptop.world.sharedZone())
+        assertFalse("and it settles", phone.sync(server))
+        assertFalse(laptop.sync(server))
+
+        // The phone's world lost: its own zone comes back from the server rather than going.
+        val again = Device("phone", World(), FakeClock(wall = phone.clock.nowWallMs()))
+        again.sync(server)
+        assertEquals(brisbane.id, again.world.ownZone?.zone)
+        laptop.sync(server)
+        assertEquals(brisbane, laptop.world.sharedZone())
+    }
 }

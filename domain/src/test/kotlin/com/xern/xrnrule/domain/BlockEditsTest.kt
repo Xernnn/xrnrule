@@ -12,6 +12,25 @@ class BlockEditsTest {
     private val habit = combinedBlock("x1", requiredMs = 30L * 60_000).copy(targetPackages = setOf("a", "b"))
 
     @Test
+    fun anEditStampsWhatItChanged_settingsOrChecklist() {
+        val block = checklistBlock("c1").copy(editedAtWall = 100, checklistEditedAtWall = 100)
+        val todos = items("c1", 2)
+        val before = World(blocks = listOf(block), checklist = mapOf("c1" to todos))
+        fun stamped(after: World) = BlockEdits.stamped(before, after, nowWall = 500).blocks.single()
+
+        val removed = stamped(before.copy(checklist = mapOf("c1" to todos.take(1))))
+        assertEquals("the settings didn't change", 100L, removed.editedAtWall)
+        assertEquals(500L, removed.checklistEditedAtWall)
+
+        val renamed = stamped(before.copy(blocks = listOf(block.copy(name = "renamed"))))
+        assertEquals(500L, renamed.editedAtWall)
+        assertEquals("the checklist didn't change", 100L, renamed.checklistEditedAtWall)
+
+        val ticked = stamped(before.copy(checklist = mapOf("c1" to todos.map { it.copy(done = true, spentEpochDay = 3) })))
+        assertEquals("a tick is use, not an edit", block, ticked)
+    }
+
+    @Test
     fun stricterEditsDontLoosen() {
         assertFalse(BlockEdits.loosens(habit, habit.copy(name = "Renamed")))
         assertFalse(BlockEdits.loosens(habit, habit.copy(targetPackages = setOf("a", "b", "c"))))

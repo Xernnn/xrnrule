@@ -66,6 +66,29 @@ object BlockEdits {
     fun lockedBy(world: World, blockIds: Collection<String>, nowWall: Long): Block? =
         blockIds.mapNotNull { world.block(it) }.filter { locked(it, nowWall) }.maxByOrNull { it.lock!!.untilWall }
 
+    /**
+     * [after], a structural edit of [before] (§2.3), with each block it changed stamped at
+     * [nowWall], so the later edit wins on another device (§2.4): [Block.editedAtWall] when its own
+     * settings changed, [Block.checklistEditedAtWall] when its checklist did. A tick, or anything
+     * else an item records about use, is no change to the checklist.
+     */
+    fun stamped(before: World, after: World, nowWall: Long): World {
+        val old = before.blocks.associateBy { it.id }
+        return after.copy(blocks = after.blocks.map { b ->
+            val was = old[b.id]
+            val settings = was == null || was.copy(state = b.state, editedAtWall = b.editedAtWall, checklistEditedAtWall = b.checklistEditedAtWall) != b
+            val checklist = was == null || checklistConfig(before.items(b.id)) != checklistConfig(after.items(b.id))
+            b.copy(
+                editedAtWall = if (settings) nowWall else b.editedAtWall,
+                checklistEditedAtWall = if (checklist) nowWall else b.checklistEditedAtWall,
+            )
+        })
+    }
+
+    /** [items] as set up, by id: without the ticks and spending that change with use. */
+    fun checklistConfig(items: List<ChecklistItem>): Map<String, ChecklistItem> =
+        items.associate { it.id to it.copy(done = false, doneAtMonotonic = null, spentEpochDay = null, spentAmount = 0) }
+
     /** I40: emergency unlocks still to use, on every device together. */
     fun emergencyLeft(world: World): Int = (Defaults.EMERGENCY_UNLOCKS - world.emergencyLog.size).coerceAtLeast(0)
 

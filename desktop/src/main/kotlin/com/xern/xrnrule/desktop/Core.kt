@@ -1,5 +1,6 @@
 package com.xern.xrnrule.desktop
 
+import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.Clock
@@ -407,17 +408,13 @@ class Store(
         outcome
     }
 
-    /** A structural edit; a block whose settings change is stamped, so the later edit wins (contract §2.4). */
+    /**
+     * A structural edit; a block whose settings or checklist change is stamped, so the later edit
+     * wins and a lock can refuse one made without it (contract §2.4, [BlockEdits.stamped]).
+     */
     suspend fun edit(transform: (World) -> World): World = mutex.withLock {
         val before = _world.value
-        val now = clock.nowWallMs()
-        val old = before.blocks.associateBy { it.id }
-        val edited = transform(before).let { w ->
-            w.copy(blocks = w.blocks.map { b ->
-                val was = old[b.id]
-                if (was == null || was.copy(state = b.state, editedAtWall = b.editedAtWall) != b) b.copy(editedAtWall = now) else b
-            })
-        }
+        val edited = BlockEdits.stamped(before, transform(before), clock.nowWallMs())
         val plan = engine.shieldPlan(edited, clock)
         val next = edited.copy(appliedShield = plan)
         persist.save(next)

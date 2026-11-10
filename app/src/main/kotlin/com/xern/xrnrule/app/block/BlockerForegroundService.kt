@@ -102,12 +102,12 @@ class BlockerForegroundService : LifecycleService() {
                 // A hand-set clock change: book it before anything reads the time again (the
                 // rebuild reads it too, so nothing is lost by waiting for it, see onCreate).
                 Intent.ACTION_TIME_CHANGED -> {
-                    container.clockGuard.check()
+                    container.checkClock()
                     if (rebuilt) container.store.dispatch(BlockEvent.Tick)
                 }
                 // A zone the phone set itself is taken; one picked by hand isn't (ZoneGuard).
                 Intent.ACTION_TIMEZONE_CHANGED -> {
-                    container.clockGuard.check()
+                    container.checkClock()
                     if (rebuilt) container.store.dispatch(BlockEvent.Tick)
                 }
             }
@@ -245,7 +245,7 @@ class BlockerForegroundService : LifecycleService() {
             }
             if (seconds % 30 == 0) {
                 container.siteUsage.flush()
-                container.clockGuard.check()
+                container.checkClock()
             }
             if (seconds % 5 == 0) checkHealth(container.store.world.value)
             updateCornerClock()

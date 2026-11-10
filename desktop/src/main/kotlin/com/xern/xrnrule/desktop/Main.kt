@@ -8,6 +8,7 @@ import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.sharedZone
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
@@ -30,10 +31,12 @@ fun main() = runBlocking {
     // The habit history, blocks and event log are this user's alone: owner-only, like ~/.ssh.
     runCatching { Files.setPosixFilePermissions(config.dataDir.toPath(), PosixFilePermissions.fromString("rwx------")) }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val clock = DesktopClock()
+    // Hand-set time and zone changes taken back out (ClockGuard, I54).
+    val clock = ClockGuard(DesktopClock(), File(config.dataDir, "clock.json"))
     val persist = FilePersist(File(config.dataDir, "world.json"), clock, File(config.dataDir, SharedSyncClient.BASE_FILE))
     val telemetry = FileTelemetry(File(config.dataDir, "telemetry.log")).also { it.prune(clock.nowWallMs()) }
     val store = Store(BlockEngine(), persist, clock, scope, telemetry)
+    clock.sharedZone = { store.world.value.sharedZone() }
     if (store.world.value.deviceId.isEmpty()) {
         store.edit { it.copy(deviceId = "laptop-" + UUID.randomUUID().toString().take(8)) }
     }
@@ -87,6 +90,7 @@ fun main() = runBlocking {
     while (true) {
         val now = clock.nowMonotonicMs()
         if (now - lastMono > 10_000) {
+            withContext(Dispatchers.IO) { clock.check() } // the clock may have been set while it slept
             store.dispatch(BlockEvent.BootOrColdStart)
             foreground.heardExtension() // a sleeping laptop isn't a silent extension (I49)
         }
@@ -109,6 +113,7 @@ fun main() = runBlocking {
             }
         }
         if (seconds % 30 == 0) {
+            withContext(Dispatchers.IO) { clock.check() }
             val missing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() }
             if (missing && !extensionAlerted) {
                 notifier.notify("Website blocking is off", "The xrnrule extension isn't answering in this browser. Turn it on in the extensions page.", urgent = true)

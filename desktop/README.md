@@ -135,5 +135,6 @@ curl -s http://127.0.0.1:47321/api/state | head -c 400
 ```
 
 State lives in `~/.local/share/xrnrule/` (owner-only): `world.json`, `habit-entries.json` (the
-habit history), `shared-base.json` (the copy last agreed with the server), and `site-icons/`
+habit history), `shared-base.json` (the copy last agreed with the server), `clock.json` (how far the clock was
+set by hand, and the time zone blocks go by), and `site-icons/`
 (each blocked website's own icon, asked of that site, served to the page at `/api/site-icon`).

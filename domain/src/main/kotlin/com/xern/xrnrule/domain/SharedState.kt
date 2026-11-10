@@ -41,6 +41,8 @@ data class SharedState(
     val overrideLog: Map<String, Long> = emptyMap(),
     /** I40: emergency unlocks, every one ever. */
     val emergencyLog: Map<String, Long> = emptyMap(),
+    /** I54: the time zone each device set itself, by device id; only the phone has one. */
+    val zones: Map<String, DeviceZone> = emptyMap(),
 ) {
     /**
      * This state without what moves while something is in use (ALLOWANCE use, I19; a self-paced
@@ -100,6 +102,7 @@ data class SharedState(
                 overrideEpochDay = world.overrideEpochDay,
                 overrideLog = world.overrideLog,
                 emergencyLog = world.emergencyLog,
+                zones = world.otherZones + listOfNotNull(world.ownZone?.takeIf { world.deviceId.isNotEmpty() }?.let { world.deviceId to it }),
             )
         }
 
@@ -183,6 +186,58 @@ data class SharedState(
         /** [nowWall]: this device's clock, which says what day it is for the use reports ([newerUse]). */
         fun merge(base: SharedState?, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
             val b = base ?: SharedState()
+            // A checklist change a lock refuses never happened (I39): the merge goes on without it.
+            var l = local
+            var r = remote
+            for (id in local.blocks.keys intersect remote.blocks.keys) {
+                if (checklistRefused(id, b, made = local, other = remote)) {
+                    l = withoutChecklistChange(l, b, id)
+                } else if (checklistRefused(id, b, made = remote, other = local)) {
+                    r = withoutChecklistChange(r, b, id)
+                }
+            }
+            return mergeStates(b, l, r, nowWall)
+        }
+
+        /**
+         * Whether [made]'s change to block [id]'s checklist since [base] gives way (I39): made while
+         * a lock from [other] held that its device hadn't heard of (offline), and making the checklist
+         * easier ([itemsLoosen]: an item gone, a habit item's day or a tag changed). Its device
+         * would have refused it, had it known. An item carries no time of its own, and a removed one
+         * leaves nothing, so the block's [Block.checklistEditedAtWall] says when it was made.
+         */
+        private fun checklistRefused(id: String, base: SharedState, made: SharedState, other: SharedState): Boolean {
+            val was = base.blocks[id] ?: return false
+            val mine = made.blocks.getValue(id)
+            val at = mine.checklistEditedAtWall
+            if (at == was.checklistEditedAtWall) return false
+            val lock = laterLock(mine.lock, other.blocks.getValue(id).lock) ?: return false
+            val unheardOf = lock != mine.lock && lock.setAtWall <= at && at < lock.untilWall
+            return unheardOf && itemsLoosen(base.itemsOf(id), made.itemsOf(id))
+        }
+
+        /**
+         * [state] with block [id]'s checklist set up as in [base] again, stamp included: what that
+         * side ticked or spent on the items still there stands, while items it added or removed
+         * are back as they were.
+         */
+        private fun withoutChecklistChange(state: SharedState, base: SharedState, id: String): SharedState {
+            val mine = state.items.filterValues { it.blockId == id }
+            val asWas = base.items.filterValues { it.blockId == id }.mapValues { (itemId, was) ->
+                mine[itemId]?.let { now ->
+                    was.copy(done = now.done, doneAtMonotonic = now.doneAtMonotonic, spentEpochDay = now.spentEpochDay, spentAmount = now.spentAmount)
+                } ?: was
+            }
+            val stamp = base.blocks.getValue(id).checklistEditedAtWall
+            return state.copy(
+                blocks = state.blocks.mapValues { (blockId, block) -> if (blockId == id) block.copy(checklistEditedAtWall = stamp) else block },
+                items = state.items.filterValues { it.blockId != id } + asWas,
+            )
+        }
+
+        private fun SharedState.itemsOf(blockId: String): List<ChecklistItem> = items.values.filter { it.blockId == blockId }
+
+        private fun mergeStates(b: SharedState, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
             val newer = newerUse(nowWall)
             val unlockSameDay = local.unlockEpochDay == remote.unlockEpochDay
             val overrideSameDay = local.overrideEpochDay == remote.overrideEpochDay
@@ -284,6 +339,10 @@ data class SharedState(
                     else -> remote.overrideLog
                 },
                 emergencyLog = local.emergencyLog + remote.emergencyLog, // I40: only ever added to
+                // I54: each device writes only its own; never dropped, so a device off for a while keeps its zone.
+                zones = (local.zones.keys + remote.zones.keys).associateWith { device ->
+                    listOfNotNull(local.zones[device], remote.zones[device]).maxBy { it.atWall }
+                },
             )
         }
 
@@ -298,7 +357,9 @@ data class SharedState(
             val lock = laterLock(later.lock, earlier.lock)
             val unheardOf = lock != null && lock != later.lock && lock.setAtWall <= later.editedAtWall && later.editedAtWall < lock.untilWall
             val refused = unheardOf && BlockEdits.loosens(earlier, later.copy(lock = earlier.lock))
-            return (if (refused) earlier else later).copy(lock = lock)
+            // The checklist merges on its own, so its stamp is the later of the two whichever settings win.
+            val checklistAt = maxOf(later.checklistEditedAtWall, earlier.checklistEditedAtWall)
+            return (if (refused) earlier else later).copy(lock = lock, checklistEditedAtWall = checklistAt)
         }
 
         private fun laterLock(a: BlockLock?, b: BlockLock?): BlockLock? = when {

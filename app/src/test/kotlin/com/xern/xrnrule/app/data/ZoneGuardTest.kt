@@ -11,6 +11,7 @@ import com.xern.xrnrule.domain.TriggerUnit
 import com.xern.xrnrule.domain.World
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -47,7 +48,7 @@ class ZoneGuardTest {
         }
     }
 
-    private fun phone(guard: ZoneGuard? = ZoneGuard(null) {}) = Phone(guard, berlin, threePm - 30L * 60_000).also { it.guard?.check(berlin, true) }
+    private fun phone(guard: ZoneGuard? = ZoneGuard(null) { _, _ -> }) = Phone(guard, berlin, threePm - 30L * 60_000).also { it.guard?.check(berlin, true) }
 
     /** Today's 30 minutes, used up by 15:00. */
     private fun usedUp(phone: Phone): World {
@@ -109,15 +110,36 @@ class ZoneGuardTest {
     @Test
     fun theZoneKeptOutlivesARestart() {
         val saved = mutableListOf<String>()
-        ZoneGuard(null) { saved += it }.check(berlin, automatic = true)
+        ZoneGuard(null) { zone, _ -> saved += zone }.check(berlin, automatic = true)
         assertEquals(listOf("Europe/Berlin"), saved)
-        val again = ZoneGuard(saved.last()) { saved += it }
+        val again = ZoneGuard(saved.last(), savedSetItself = true) { zone, _ -> saved += zone }
         again.check(brisbane, automatic = false)
         assertEquals(berlin, again.zone(brisbane))
         assertEquals("nothing new to keep", 1, saved.size)
         // Nothing kept, or nothing readable: the zone the phone has when first asked.
-        val fresh = ZoneGuard("Not/AZone") { saved += it }
+        val fresh = ZoneGuard("Not/AZone") { zone, _ -> saved += zone }
         fresh.check(brisbane, automatic = false)
         assertEquals(brisbane, fresh.zone(berlin))
+    }
+
+    @Test
+    fun onlyAZoneThePhoneSetItselfIsShared() {
+        // First asked with a zone picked by hand: kept, but not shared (I54), as it may be wrong.
+        val guard = ZoneGuard(null) { _, _ -> }
+        guard.check(brisbane, automatic = false)
+        assertEquals(brisbane, guard.zone(brisbane))
+        assertNull(guard.ownZone)
+        // Then the phone sets it itself: that one is.
+        guard.check(berlin, automatic = true)
+        assertEquals(berlin, guard.ownZone)
+        // A zone picked by hand afterwards changes neither.
+        guard.check(brisbane, automatic = false)
+        assertEquals(berlin, guard.zone(brisbane))
+        assertEquals(berlin, guard.ownZone)
+        // An install from before kept its zone without saying how: shared once the phone sets it itself.
+        val older = ZoneGuard("Europe/Berlin") { _, _ -> }
+        assertNull(older.ownZone)
+        older.check(berlin, automatic = true)
+        assertEquals(berlin, older.ownZone)
     }
 }

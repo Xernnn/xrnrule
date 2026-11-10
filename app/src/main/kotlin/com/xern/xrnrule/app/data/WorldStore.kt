@@ -1,5 +1,6 @@
 package com.xern.xrnrule.app.data
 
+import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.Clock
@@ -75,13 +76,14 @@ class WorldStore(
 
     /**
      * Structural edits (create a block, add a to-do item) that are not [BlockEvent]s. A block
-     * whose settings change is stamped with the time, so the later edit wins when two devices
-     * change it at once (contract §2.4).
+     * whose settings or checklist change is stamped with the time, so the later edit wins when two
+     * devices change it at once and a lock can refuse one made without it (contract §2.4,
+     * [BlockEdits.stamped]).
      */
     fun edit(transform: (World) -> World) {
         scope.launch {
             mutex.withLock {
-                val edited = stampEdits(_world.value, transform(_world.value))
+                val edited = BlockEdits.stamped(_world.value, transform(_world.value), clock.nowWallMs())
                 val plan = engine.shieldPlan(edited, clock)
                 val next = edited.copy(appliedShield = plan)
                 persist.save(next)
@@ -90,17 +92,6 @@ class WorldStore(
             }
         }
     }
-}
-
-private fun WorldStore.stampEdits(before: World, after: World): World {
-    val now = clock.nowWallMs()
-    val old = before.blocks.associateBy { it.id }
-    val blocks = after.blocks.map { b ->
-        val was = old[b.id]
-        val changed = was == null || was.copy(state = b.state, editedAtWall = b.editedAtWall) != b
-        if (changed) b.copy(editedAtWall = now) else b
-    }
-    return after.copy(blocks = blocks)
 }
 
 object NoopShield : ShieldPort {

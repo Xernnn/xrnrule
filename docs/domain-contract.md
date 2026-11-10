@@ -191,8 +191,8 @@ không chờ hay mật khẩu nào mở được. Sửa chặt hơn vẫn đư�
 đã mua từ trước khi khóa. Làm habit vẫn mở block như cũ, và Settings chung (`dailyCapMs`, override)
 vẫn qua guard thường. Đặt hay kéo dài khóa là chặt hơn; `untilWall` nhỏ
 đi là nới lỏng, và lúc đang khóa chỉ làm được bằng **mở khẩn cấp** (I40). `lock` không bao giờ về
-null: hết hạn thì ở lại (đã qua), không chặn gì. Đồng hồ là wall của mỗi máy (điện thoại:
-ClockGuard đã bỏ chỉnh tay); laptop từ chối sửa nới lỏng block đang khóa theo đồng hồ của nó.
+null: hết hạn thì ở lại (đã qua), không chặn gì. Đồng hồ là wall của mỗi máy, đã bỏ chỉnh tay
+(ClockGuard, ở cả điện thoại lẫn laptop, I54); laptop từ chối sửa nới lỏng block đang khóa theo đồng hồ đó.
 
 ### 2.4 Nhiều thiết bị: trạng thái chung
 
@@ -204,7 +204,7 @@ cùng một thời điểm; hạn mức mở khóa mỗi ngày, Pause và lockdo
 credit, session, lockdown, `pause`, `lastPauseEpochDay`, `settings`, nhật ký mở khóa hôm nay
 (`unlockLog`, I28), lượng ALLOWANCE đã dùng hôm nay và lượt dùng liên tục của từng thiết bị
 (I19, I32), override đang chạy và nhật ký override hôm nay (I34), nhật ký mở khẩn cấp
-(`emergencyLog`, I40). Chỉ thời gian
+(`emergencyLog`, I40), múi giờ mỗi máy tự đặt (`zones`, I54). Chỉ thời gian
 **wall** đi qua máy khác: mọi mốc monotonic bị đặt 0 khi chiếu và được neo lại khi nhận (như I8).
 **Không** chung qua đây: habit và habit entry (đi qua habit server, §2.5), `done` của habit item
 (mỗi máy tự suy từ entry của nó, I36; `spentEpochDay`/`spentAmount` thì chung), tiến độ timer
@@ -221,8 +221,8 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | credit | kiếm sớm hơn; một bên xóa (đã dùng / hết hạn) → xóa |
 | lockdown | kết thúc muộn hơn; một bên xóa → bên còn |
 | pause | bắt đầu sớm hơn; một bên null → bên còn; `lastPauseEpochDay` lấy lớn hơn |
-| block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn). Bản muộn hơn mà nới lỏng (`BlockEdits.loosens`), làm lúc khóa của bên kia đang giữ (`setAtWall ≤ editedAtWall < untilWall`) mà máy sửa chưa biết khóa đó (offline) → bị từ chối như lúc sửa có khóa, bản bên kia đứng (I39) |
-| checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ |
+| block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn). Bản muộn hơn mà nới lỏng (`BlockEdits.loosens`), làm lúc khóa của bên kia đang giữ (`setAtWall ≤ editedAtWall < untilWall`) mà máy sửa chưa biết khóa đó (offline) → bị từ chối như lúc sửa có khóa, bản bên kia đứng (I39). `checklistEditedAtWall` lấy muộn hơn, bản nào thắng cũng vậy: checklist trộn riêng |
+| checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ. Một bên đổi checklist của một block (thêm, bỏ hay sửa mục, không phải tick: `Block.checklistEditedAtWall`, đóng dấu lúc sửa, `BlockEdits.stamped`) theo cách nới lỏng so với `base` (`itemsLoosen`), lúc khóa của bên kia đang giữ mà máy đó chưa biết (như hàng block) → thay đổi đó bị từ chối: checklist của block về như `base`, mục bị xóa quay lại, còn tick và phần đã tiêu của bên đó trên các mục vẫn tính (I39). Mục không có mốc giờ riêng, và mục đã xóa không để lại gì, nên mốc là của block |
 | settings | từng trường: `dailyCapMs`, `skewToleranceMs`, `overrideGrantMs`, `overridesPerDay` lấy nhỏ hơn; `unlockWarningMs`, `overrideWaitMs` lấy lớn hơn; `overridePhrase` lấy cái dài hơn; `showClock` lấy `false` |
 | `unlockLog` | ngày lớn hơn thắng cả; cùng ngày → hợp, mỗi khóa lấy max |
 | allowance (mọi block `hasLimit`, I44) | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32). Ngày chưa bắt đầu theo đồng hồ máy đang trộn (`dayStartWall > now_wall`: đồng hồ máy kia chạy trước) thua mọi ngày đã bắt đầu |
@@ -231,6 +231,7 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | `settings.blockOtherBrowsers` | OR: bên chặt hơn (I49) |
 | `block.lock` | trộn riêng, bất kể bản block nào thắng: `setAtWall` muộn hơn (đặt khóa và mở khẩn cấp đều đóng dấu lúc làm) (I39) |
 | `emergencyLog` | hợp, không bao giờ bớt (I40) |
+| `zones` | theo thiết bị: `atWall` muộn hơn; không bao giờ bớt, nên máy mất world lấy lại múi giờ của nó (I54) |
 
 Bản ghi allowance chỉ được thêm, không bị xóa khi trộn, nên máy chủ của bản ghi phải tự thay nó: mỗi
 máy **luôn** chiếu bản ghi của chính nó cho mọi block `hasLimit` có `progress`, kể cả khi chưa dùng
@@ -360,6 +361,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I51** | Nhật ký ghi đủ những lần gặp shield và những lần đi đường tắt: `ForegroundChanged` tới app bị chặn phát `BlockedImpression`, tới site bị chặn phát `SiteBlocked` (host đã `Sites.normalize`). Cùng một target trong vòng `Defaults.BLOCKED_AGAIN_MS` (30 s) chỉ tính một lần (`World.lastBlocked`, riêng từng máy, không chung), để một lần chớp tắt không đếm hai. `OverrideGranted` và `BreakTaken` (từ `StartPause` thật sự có hiệu lực) cũng vào nhật ký. Mở khẩn cấp thì đã có `emergencyLog` (I40). Test: `i51_*` |
 | **I52** | Giới hạn số lần mở (`Block.opensPerDay`, 0 = không; thuộc nhóm giới hạn của I44: `hasLimit`, `limitComesFirst`). Một **lần mở** là: target của block ra foreground, không gì khác đang chặn nó (shield gặp phải không tính), đang trong lịch của block, không nhờ Pause hay phút mua, và đã khuất ít nhất `Defaults.OPEN_GRACE_MS` (60 s): chuyển app chốc lát không tốn lượt. `World.openRuns` (riêng từng máy) nhớ lần mở đang chạy. Đếm trong `HabitProgress.opens`, qua `AllowanceUse.opens` sang máy khác, cộng các máy như I19 trừ khi `perDevice` (I33), về 0 khi qua ngày, sống qua `returnToArmed` như phút đã dùng (I44). Hết lượt thì `limitHolds`, nhưng lần mở cuối vẫn chạy tới khi rời đi hết grace (`opensReached`). HABIT `limitComesFirst` đang UNLOCKED thì không tính. Nới lượt hay bỏ giới hạn là nới lỏng. Phút mua (I34) và Pause (I25) qua được như giới hạn phút. Test: `i52_*` |
 | **I53** | Dừng trước khi mở (`Block.openWaitS`, 0 = không; chỉ trên block có giới hạn): một lần mở mới (định nghĩa I52) giữ shield `openWaitS` giây theo đồng hồ monotonic (`OpenRun.waitUntilMonotonic`, `BlockReason.WAIT`, `holds`), rồi tự mở và **lúc đó** mới tính là một lần mở: rời đi trong lúc chờ thì không tốn lượt, và lần sau lại chờ. Thời gian chờ không tính vào phút dùng, không vào nhật ký I51 (`withoutWaits`), không mua được (`overrideRejection`). Trên laptop chỉ áp cho site: app laptop bị chặn thì cửa sổ bị đóng, không chờ được. `BootOrColdStart` bỏ các lần chờ đang dở (mốc monotonic), giữ lần mở đang chạy. Nhiều block trên một target: chờ theo block lâu nhất, block không chờ tính lượt sau khi hết chờ. Rút ngắn hay bỏ là nới lỏng. Test: `i53_*` |
+| **I54** | Múi giờ mà ngày, lịch và giờ chặn theo (`Clock.zone()`). Điện thoại: múi giờ nó tự đặt (theo mạng hay vị trí); múi giờ chọn tay không tính, như giờ chỉnh tay (`ZoneGuard`), và múi giờ nó tự đặt được chia sẻ (`World.ownZone` → `SharedState.zones[deviceId]`). Laptop: Linux không tự đặt múi giờ (`timedatectl set-timezone`, cả menu của Omarchy, là chọn tay), nên laptop theo múi giờ điện thoại tự đặt mới nhất (`World.sharedZone()`), chưa có thì theo múi giờ nó theo lần trước, lúc đầu là múi giờ lúc nó chạy lần đầu; múi giờ của hệ thống đọc ở `/etc/localtime`, không ở `TZ` (biến môi trường của chính daemon). Giờ laptop chỉnh tay (wall nhảy lúc NTP không giữ đồng hồ: `NTPSynchronized` khác `yes`, mà chỉnh tay thì xóa cờ đó) bị bỏ khỏi wall như ở điện thoại (`ClockGuard`), nên chỉnh ngày không mở ngày mới, không hết khóa (I39); NTP giữ lại đồng hồ thì tin lại. Trộn (§2.4): theo thiết bị, `atWall` muộn hơn. | `i54_theLaptopGoesByTheZoneThePhoneSetItself`; `ClockGuardTest` (desktop); `ZoneGuardTest` (app) |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 
@@ -383,7 +385,7 @@ focusBreakMs       = 5 * 60 * 1000           // I37, nút "Nghỉ 5 phút"
 interface Clock {
     fun nowMonotonicMs(): Long     // SystemClock.elapsedRealtime()
     fun nowWallMs(): Long          // System.currentTimeMillis()
-    fun zone(): ZoneId             // điện thoại: múi giờ máy tự đặt; múi giờ chọn tay không tính, như giờ chỉnh tay (ClockGuard)
+    fun zone(): ZoneId             // múi giờ mà ngày và lịch theo, xem I54; wall của cả hai máy đã bỏ giờ chỉnh tay (ClockGuard)
 }
 
 interface PersistPort {
@@ -488,6 +490,6 @@ sealed interface BlockEvent {
 ## 7. Ghi chú test
 
 - `:domain` dùng `FakeClock`, `InMemoryPersist`, `RecordingShield` — không JUnit-Android, không Robolectric.
-- Mỗi bất biến I1–I53 có ít nhất một test đặt tên `i01_...` ... `i53_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
+- Mỗi bất biến I1–I54 có ít nhất một test đặt tên `i01_...` ... `i54_...` (I54 thêm `ClockGuardTest` ở desktop và `ZoneGuardTest` ở app); quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
 - Acceptance của brainstorm §1 map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
   chạy chuỗi sự kiện end-to-end trên engine.
