@@ -93,7 +93,7 @@ class SharedSync(
     val settings = SyncSettings(context)
 
     private val build by lazy { PackageInfoCompat.getLongVersionCode(context.packageManager.getPackageInfo(context.packageName, 0)) }
-    private val baseFile = AtomicFile(File(context.filesDir, "shared-base.json"))
+    private val baseFile = AtomicFile(File(context.filesDir, BASE_FILE))
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -207,10 +207,13 @@ class SharedSync(
             val cheap = base != null && base.state == local
             val remote = api.get(if (cheap) base!!.etag else null) ?: return "Up to date"
             val against = SharedState.baseFor(base?.state, base?.etag, remote.etag) // I45
-            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, remote.state))
-            saveBase(Base(remote.etag, remote.state))
+            // What a device on an older xrnrule left out of the copy, it didn't change (§2.4).
+            val state = SharedState.fromServer(remote.text, against, local, json)
+            val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, state))
+            saveBase(Base(remote.etag, state))
             val merged = SharedState.of(world)
-            if (merged == remote.state) return "Up to date"
+            // Compared with the copy as it is, so the server gets back what such a device left out.
+            if (merged == json.decodeFromString(SharedState.serializer(), remote.text)) return "Up to date"
             val etag = api.put(merged, remote.etag) ?: return@repeat // 412: someone wrote first
             saveBase(Base(etag, merged))
             return "Sent"
@@ -219,8 +222,8 @@ class SharedSync(
     }
 
     /**
-     * This phone's event log newer than what the server has (blocked, habit done, unlock used),
-     * for the weekly review in the habits web app. Apps go with their names, which the server
+     * This phone's event log newer than what the server has (blocked, habit done, unlock used,
+     * minutes bought, a break), for the weekly review in the habits web app. Apps go with their names, which the server
      * can't look up.
      */
     private fun sendEvents() {
@@ -240,6 +243,20 @@ class SharedSync(
                                 put("target", e.pkg)
                                 put("name", names.getOrPut(e.pkg) { InstalledApps.labelFor(context, e.pkg) })
                             }
+                            is TelemetryEvent.SiteBlocked -> {
+                                put("t", "blocked")
+                                put("target", e.host)
+                                put("name", e.host)
+                            }
+                            is TelemetryEvent.MinutesBought -> {
+                                put("t", "bought")
+                                put("block", e.blockIds)
+                                put("ms", e.ms)
+                            }
+                            is TelemetryEvent.BreakTaken -> {
+                                put("t", "break")
+                                put("ms", e.ms)
+                            }
                             is TelemetryEvent.HabitDone -> {
                                 put("t", "habit")
                                 put("block", e.blockId)
@@ -258,6 +275,14 @@ class SharedSync(
             settings.eventsSentUntil = fresh.maxOf { it.atWallMs }
         }
         telemetrySizeSent = size
+    }
+
+    /** What other devices logged since [sinceMs], for Insights; nothing with sync off or out of reach. Blocking. */
+    fun eventsElsewhere(sinceMs: Long): List<TelemetryEvent> {
+        if (!settings.isConfigured) return emptyList()
+        return runCatching {
+            eventsFromElsewhere(Api(settings.url, settings.user, settings.password).events(sinceMs), DEVICE)
+        }.getOrDefault(emptyList())
     }
 
     private fun loadBase(): Base? = try {
@@ -287,7 +312,8 @@ class SharedSync(
 
     private class AuthException : IOException("login refused")
 
-    private class Remote(val etag: String, val state: SharedState)
+    /** The server's copy as it came: read with [SharedState.fromServer]. */
+    private class Remote(val etag: String, val text: String)
 
     /** xrnrule-sync's `/state`. Blocking; called on [Dispatchers.IO]. */
     private inner class Api(private val baseUrl: String, user: String, password: String) {
@@ -307,7 +333,8 @@ class SharedSync(
                 check(conn, code)
                 if (code == HttpURLConnection.HTTP_NOT_MODIFIED) return null
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
-                return Remote(conn.getHeaderField("ETag").orEmpty(), json.decodeFromString(SharedState.serializer(), text))
+                json.parseToJsonElement(text) // not JSON: the round fails here, as before
+                return Remote(conn.getHeaderField("ETag").orEmpty(), text)
             } finally {
                 conn.disconnect()
             }
@@ -343,13 +370,23 @@ class SharedSync(
             }
         }
 
+        fun events(sinceMs: Long): String {
+            val conn = open("GET", "?since=$sinceMs", "/events")
+            try {
+                check(conn, conn.responseCode)
+                return conn.inputStream.use { it.readBytes().decodeToString() }
+            } finally {
+                conn.disconnect()
+            }
+        }
+
         private fun open(method: String, query: String = "", path: String = "/state"): HttpURLConnection =
             (URL("$baseUrl$path$query").openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = TIMEOUT_MS
                 readTimeout = TIMEOUT_MS
                 setRequestProperty("Authorization", auth)
-                setRequestProperty("X-Device", "phone")
+                setRequestProperty("X-Device", DEVICE)
             }
 
         private fun check(conn: HttpURLConnection, code: Int) {
@@ -361,12 +398,15 @@ class SharedSync(
         }
     }
 
-    private companion object {
-        const val CHANGE_DEBOUNCE_MS = 1_000L
-        const val PERIOD_MS = 60_000L
-        const val MAX_TRIES = 4
-        const val TIMEOUT_MS = 15_000
-        const val WATCH_WAIT_S = 25
-        const val WATCH_RETRY_MS = 5_000L
+    companion object {
+        /** In the app's files, beside the world (see [FilePersistPort]). */
+        const val BASE_FILE = "shared-base.json"
+        private const val DEVICE = "phone"
+        private const val CHANGE_DEBOUNCE_MS = 1_000L
+        private const val PERIOD_MS = 60_000L
+        private const val MAX_TRIES = 4
+        private const val TIMEOUT_MS = 15_000
+        private const val WATCH_WAIT_S = 25
+        private const val WATCH_RETRY_MS = 5_000L
     }
 }

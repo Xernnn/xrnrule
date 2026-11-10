@@ -61,6 +61,13 @@
 
         <!-- NFC tags that unlock blocks (contract I43): a read anywhere ticks and finishes at once. -->
         <activity
+            android:name=".data.AutostartActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
             android:name=".nfc.TagActivity"
             android:exported="true"
             android:excludeFromRecents="true"

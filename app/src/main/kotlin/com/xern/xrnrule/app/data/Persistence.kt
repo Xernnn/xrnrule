@@ -19,8 +19,11 @@ import java.io.FileNotFoundException
  * [AtomicFile] syncs the new copy to disk before swapping it in, so a crash or power cut
  * mid-save leaves the previous copy intact. The entries go first: a crash in between leaves them
  * newer than the world, which only means a habit item is worked out again.
+ *
+ * [sharedBase] is the base of the shared state ([SharedSync]), which means something only beside
+ * the world that agreed on it: when the world is gone or unreadable, it goes too (§2.4).
  */
-class FilePersistPort(private val file: File) : PersistPort {
+class FilePersistPort(private val file: File, private val sharedBase: File? = null) : PersistPort {
 
     private val atomic = AtomicFile(file)
     private val entriesFile = File(file.parentFile, "habit-entries.json")
@@ -46,10 +49,12 @@ class FilePersistPort(private val file: File) : PersistPort {
         val bytes = try {
             atomic.readFully()
         } catch (_: FileNotFoundException) {
-            return World() // first run
+            forgetSharedBase() // a first run has none; a world that went missing leaves one behind
+            return World()
         }
         val world = runCatching { json.decodeFromString(World.serializer(), bytes.decodeToString()) }
             .getOrElse {
+                forgetSharedBase()
                 val copy = File(file.parentFile, "world.unreadable-${System.currentTimeMillis()}.json")
                 if (runCatching { copy.writeBytes(bytes) }.isSuccess) unreadableCopy = copy
                 return World()
@@ -63,6 +68,15 @@ class FilePersistPort(private val file: File) : PersistPort {
             habitEntries = world.habitEntries + (entries ?: emptyMap()),
             habitSyncSeq = if (lost) 0 else world.habitSyncSeq,
         )
+    }
+
+    /**
+     * Starting without the world, this phone deleted nothing. Against the old base, the first
+     * round would take every block missing here for deleted, the locked ones too, and send that
+     * to every device; without one, it merges as a first sync and the server's blocks come back.
+     */
+    private fun forgetSharedBase() {
+        sharedBase?.let { AtomicFile(it).delete() } // with any copy AtomicFile would restore it from
     }
 
     /**

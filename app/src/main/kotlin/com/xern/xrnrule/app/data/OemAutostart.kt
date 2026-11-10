@@ -1,10 +1,15 @@
 package com.xern.xrnrule.app.data
 
+import android.app.AppOpsManager
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
+import android.os.Process
+import androidx.activity.ComponentActivity
 
 /**
  * OEM battery managers (Xiaomi/MIUI, Oppo/ColorOS, Vivo, Huawei/EMUI, OnePlus) kill background
@@ -19,6 +24,31 @@ import android.os.Build
 object OemAutostart {
 
     fun isKnownOem(): Boolean = candidates(Build.MANUFACTURER.lowercase()).isNotEmpty()
+
+    /**
+     * Whether autostart is on, or null where the phone won't say. Only Xiaomi's can be read: MIUI
+     * and HyperOS keep it as an app op of their own, which Android's public API has no name for.
+     * They turn it off at every install, a self-update included.
+     */
+    fun enabled(context: Context): Boolean? {
+        if ("xiaomi" !in Build.MANUFACTURER.lowercase()) return null
+        return runCatching {
+            val check = AppOpsManager::class.java.getMethod("checkOpNoThrow", Int::class.java, Int::class.java, String::class.java)
+            when (check.invoke(context.getSystemService(AppOpsManager::class.java), MIUI_AUTOSTART_OP, Process.myUid(), context.packageName)) {
+                AppOpsManager.MODE_ALLOWED -> true
+                AppOpsManager.MODE_IGNORED, AppOpsManager.MODE_ERRORED -> false
+                else -> null
+            }
+        }.getOrNull()
+    }
+
+    /** For a notification: the page where autostart is turned on. */
+    fun fixIt(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        Intent(context, AutostartActivity::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     fun open(context: Context) {
         for (candidate in candidates(Build.MANUFACTURER.lowercase())) {
@@ -54,4 +84,15 @@ object OemAutostart {
     }
 
     private fun component(pkg: String, cls: String) = Intent().apply { component = ComponentName(pkg, cls) }
+
+    private const val MIUI_AUTOSTART_OP = 10008
+}
+
+/** A notification can only name one page; this tries each known page in turn ([OemAutostart.open]). */
+class AutostartActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        runCatching { OemAutostart.open(this) }
+        finish()
+    }
 }

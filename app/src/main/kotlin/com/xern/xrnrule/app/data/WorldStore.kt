@@ -53,6 +53,17 @@ class WorldStore(
         scope.launch { dispatchAndGet(event) }
     }
 
+    /**
+     * I8 at a cold start, done before [feed] starts what feeds the engine (the foreground, the
+     * sites playing out of sight, the tick). The world as loaded holds the monotonic stamps of
+     * before the process died: the first of those to reach the engine would otherwise charge all
+     * the time it was dead to whatever was in front then, to a limit or to a habit app's timer.
+     */
+    suspend fun coldStart(feed: () -> Unit) {
+        dispatchAndGet(BlockEvent.BootOrColdStart)
+        feed()
+    }
+
     /** [dispatch], waiting for it: the world right after this event, before anything else ran. */
     suspend fun dispatchAndGet(event: BlockEvent): World = mutex.withLock {
         val outcome = engine.reduce(_world.value, event, clock)

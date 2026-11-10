@@ -2,20 +2,59 @@ package com.xern.xrnrule.app.data
 
 import androidx.core.util.AtomicFile
 import com.xern.xrnrule.domain.Telemetry
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import java.io.File
 
 /** One line of the local event log, as read back for Insights. */
 sealed interface TelemetryEvent {
     val atWallMs: Long
 
-    /** A blocked app was opened and the shield met it. */
-    data class Blocked(val pkg: String, override val atWallMs: Long) : TelemetryEvent
+    /** A blocked app was opened and the shield met it. [label] names it when it was on another device. */
+    data class Blocked(val pkg: String, override val atWallMs: Long, val label: String? = null) : TelemetryEvent
+
+    /** A blocked website was opened and the shield met it. */
+    data class SiteBlocked(val host: String, override val atWallMs: Long) : TelemetryEvent
+
+    /** Minutes were bought past [blockIds] (comma-separated: one purchase can cover several blocks). */
+    data class MinutesBought(val ms: Long, override val atWallMs: Long, val blockIds: String = "") : TelemetryEvent
+
+    /** The day's break was taken. */
+    data class BreakTaken(val ms: Long, override val atWallMs: Long) : TelemetryEvent
 
     /** A habit block's habit was done (ARMED → EARNED). */
     data class HabitDone(val blockId: String, override val atWallMs: Long) : TelemetryEvent
 
     /** An unlock ended after [ms] of use; [startedAtWall] names the session (0 in old lines). */
     data class UnlockUsed(val blockId: String, val ms: Long, override val atWallMs: Long, val startedAtWall: Long = 0) : TelemetryEvent
+}
+
+/**
+ * What other devices logged, out of a `GET /events` answer. Only what can't also be in this
+ * device's own log: a habit or an unlock is shared, so every device logs it already. Anything
+ * malformed is left out, since this only adds to a screen.
+ */
+fun eventsFromElsewhere(body: String, thisDevice: String): List<TelemetryEvent> {
+    fun JsonObject.text(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
+    fun JsonObject.number(key: String) = (this[key] as? JsonPrimitive)?.longOrNull
+    val root = runCatching { Json.parseToJsonElement(body) }.getOrNull() as? JsonObject
+    val events = root?.get("events") as? JsonArray ?: return emptyList()
+    return events.mapNotNull { element ->
+        val e = element as? JsonObject ?: return@mapNotNull null
+        val at = e.number("at") ?: return@mapNotNull null
+        val ms = e.number("ms")
+        if (e.text("d") == thisDevice) return@mapNotNull null
+        when (e.text("t")) {
+            "blocked" -> e.text("target")?.let { TelemetryEvent.Blocked(it, at, e.text("name") ?: it) }
+            "bought" -> ms?.let { TelemetryEvent.MinutesBought(it, at, e.text("block").orEmpty()) }
+            "break" -> ms?.let { TelemetryEvent.BreakTaken(it, at) }
+            else -> null
+        }
+    }
 }
 
 /**
@@ -26,6 +65,10 @@ sealed interface TelemetryEvent {
 class LocalTelemetry(private val file: File) : Telemetry {
 
     override fun onBlockedImpression(pkg: String, atWallMs: Long) = append("blocked;$pkg;$atWallMs")
+    override fun onSiteBlocked(host: String, atWallMs: Long) = append("site;$host;$atWallMs")
+    override fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long) =
+        append("bought;${blockIds.joinToString(",")};$ms;$atWallMs")
+    override fun onBreakTaken(ms: Long, atWallMs: Long) = append("break;$ms;$atWallMs")
     override fun onHabitCompleted(blockId: String, atWallMs: Long) = append("habit;$blockId;$atWallMs")
     override fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long) =
         append("unlock;$blockId;$ms;$atWallMs;$startedAtWall")
@@ -63,7 +106,18 @@ class LocalTelemetry(private val file: File) : Telemetry {
         val f = line.split(';')
         return when (f.firstOrNull()) {
             "blocked" -> f.getOrNull(2)?.toLongOrNull()?.let { TelemetryEvent.Blocked(f[1], it) }
+            "site" -> f.getOrNull(2)?.toLongOrNull()?.let { TelemetryEvent.SiteBlocked(f[1], it) }
             "habit" -> f.getOrNull(2)?.toLongOrNull()?.let { TelemetryEvent.HabitDone(f[1], it) }
+            "bought" -> {
+                val ms = f.getOrNull(2)?.toLongOrNull()
+                val at = f.getOrNull(3)?.toLongOrNull()
+                if (ms != null && at != null) TelemetryEvent.MinutesBought(ms, at, f[1]) else null
+            }
+            "break" -> {
+                val ms = f.getOrNull(1)?.toLongOrNull()
+                val at = f.getOrNull(2)?.toLongOrNull()
+                if (ms != null && at != null) TelemetryEvent.BreakTaken(ms, at) else null
+            }
             "unlock" -> {
                 val ms = f.getOrNull(2)?.toLongOrNull()
                 val at = f.getOrNull(3)?.toLongOrNull()

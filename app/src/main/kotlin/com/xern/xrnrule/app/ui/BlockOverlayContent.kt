@@ -139,6 +139,7 @@ fun BlockOverlayContent(
                             when {
                                 ui?.useBrowser != null -> "$subject can't block sites"
                                 earned -> "Nice work!\n$subject is ready to open"
+                                ui?.reason == BlockReason.WAIT -> "$subject is opening"
                                 block == null || strict -> "$subject is blocked"
                                 else -> "To unlock $subject,\nfinish your habits first!"
                             },
@@ -264,7 +265,7 @@ private fun KindIcon(ui: OverlayShieldPort.OverlayUi?, block: Block?, strict: Bo
         Icon(
             when {
                 ui?.isSite == true -> Icons.Outlined.Language
-                ui?.reason == BlockReason.LIMIT || ui?.reason == BlockReason.BREAK -> Icons.Outlined.HourglassBottom
+                ui?.reason == BlockReason.LIMIT || ui?.reason == BlockReason.BREAK || ui?.reason == BlockReason.WAIT -> Icons.Outlined.HourglassBottom
                 ui?.reason == BlockReason.HOURS -> Icons.Outlined.Schedule
                 else -> Icons.Outlined.Lock
             },

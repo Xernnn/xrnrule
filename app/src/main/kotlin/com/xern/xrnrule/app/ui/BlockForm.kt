@@ -620,12 +620,14 @@ private fun LimitCard(form: BlockFormState) {
     KindCard(
         icon = Icons.Outlined.HourglassBottom,
         title = "Daily limit",
-        about = "So many minutes a day, or in a row",
+        about = "So many minutes or opens a day, or minutes in a row",
         kind = kinds.limit,
         selected = form.limitOn,
         summary = listOfNotNull(
             if (form.dailyOn) "${formatDuration(form.dailyMinutes * 60_000)} a day" else null,
             if (form.rowOn) "${formatDuration(form.rowMinutes * 60_000)} in a row" else null,
+            if (form.opensOn) "${form.opensPerDay} opens a day" else null,
+            if (form.openWaitS > 0) "${form.openWaitS} s pause" else null,
         ).joinToString(" · "),
         onToggle = { form.setKind(FormKind.LIMIT, it) },
     ) {
@@ -668,6 +670,8 @@ private fun RuleOrder(form: BlockFormState) {
     }
 }
 
+private val OPEN_WAIT_CHOICES = listOf(3, 5, 10, 20)
+
 @Composable
 private fun LimitEditor(form: BlockFormState, kind: KindColors) {
     ToggleLine("A limit a day", form.dailyOn) { form.dailyOn = it }
@@ -685,6 +689,16 @@ private fun LimitEditor(form: BlockFormState, kind: KindColors) {
         Gap(4)
         MinuteChips(listOf(5, 15, 30, 60), form.rowBreakMinutes, kind, format = ::shortMinutes) { form.rowBreakMinutes = it }
         KindNote("Resting that long on your own counts as the break.")
+    }
+    ToggleLine("At most so many opens a day", form.opensOn) { form.opensOn = it }
+    if (form.opensOn) {
+        NumberChips(listOf(1, 2, 3, 5, 10), form.opensPerDay, kind) { form.opensPerDay = it }
+        KindNote("Coming back within a minute is the same open. The last one lasts until you leave it.")
+    }
+    ToggleLine("A pause before it opens", form.openWaitS > 0) { form.openWaitS = if (it) OPEN_WAIT_CHOICES[1] else 0 }
+    if (form.openWaitS > 0) {
+        NumberChips(OPEN_WAIT_CHOICES, form.openWaitS, kind, suffix = " s") { form.openWaitS = it }
+        KindNote("The block screen stays up this long, then it opens by itself. Leaving first costs no open.")
     }
     Gap(10)
     Text("Phone and laptop", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

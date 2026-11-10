@@ -64,6 +64,7 @@ import com.xern.xrnrule.app.data.InstalledApps
 import com.xern.xrnrule.app.data.LocalTelemetry
 import com.xern.xrnrule.app.data.ScreenTime
 import com.xern.xrnrule.app.data.SiteUsageLog
+import com.xern.xrnrule.app.data.SharedSync
 import com.xern.xrnrule.app.data.TelemetryEvent
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
@@ -86,11 +87,12 @@ import kotlinx.coroutines.withContext
 private const val DAYS = 7
 private const val APPS_COLLAPSED = 8
 private const val REFRESH_MS = 60_000L
+private const val DAY_MS = 86_400_000L
 private val PlotHeight = 132.dp
 private val PlotTopPad = 8.dp
 
 @Composable
-fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, siteUsage: SiteUsageLog, telemetry: LocalTelemetry) {
+fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, siteUsage: SiteUsageLog, telemetry: LocalTelemetry, shared: SharedSync) {
     val context = LocalContext.current
     val resume = rememberResumeSignal()
     val hasAccess = remember(resume) { AppPermission.USAGE_ACCESS.isGranted(context) }
@@ -111,6 +113,11 @@ fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, si
             history = withContext(Dispatchers.IO) { telemetry.events() }
             delay(REFRESH_MS)
         }
+    }
+    // The laptop's blocks and shortcuts, from the server: once a visit, it's only for this page.
+    var elsewhere by remember { mutableStateOf<List<TelemetryEvent>>(emptyList()) }
+    LaunchedEffect(resume) {
+        elsewhere = withContext(Dispatchers.IO) { shared.eventsElsewhere(store.clock.nowWallMs() - (DAYS + 1) * DAY_MS) }
     }
     var selected by rememberSaveable { mutableIntStateOf(DAYS - 1) }
     var week by rememberSaveable { mutableStateOf(false) }
@@ -173,7 +180,7 @@ fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, si
                     }
                 }
             } else {
-                HistoryCard(rangeTitle, dates.toSet(), history)
+                HistoryCard(rangeTitle, dates.toSet(), history + elsewhere, world.emergencyLog.values)
                 val usedMin = (world.dailyUnlockUsedMs + world.unlockLog.values.sum()) / 60_000 // I28
                 val capMin = world.settings.dailyCapMs / 60_000
                 HFCard {
@@ -638,18 +645,21 @@ private val ShortDay = DateTimeFormatter.ofPattern("EEE")
 private val LongDay = DateTimeFormatter.ofPattern("EEEE, d MMM")
 
 /**
- * What xrnrule itself saw on [dates] (the day picked on the chart, or the week): habits done,
- * attempts to open a blocked app and which apps, unlock time used. Plus the run of days with a
- * habit done.
+ * What xrnrule itself saw on [dates] (the day picked on the chart, or the week), on every device:
+ * habits done, attempts to open a blocked app or site and which ones, unlock time used, and the
+ * shortcuts taken: minutes bought, breaks, [emergencies]. Plus the run of days with a habit done.
  */
 @Composable
-private fun HistoryCard(title: String, dates: Set<LocalDate>, events: List<TelemetryEvent>) {
+private fun HistoryCard(title: String, dates: Set<LocalDate>, events: List<TelemetryEvent>, emergencies: Collection<Long>) {
     val context = LocalContext.current
     val zone = ZoneId.systemDefault()
     fun TelemetryEvent.date(): LocalDate = Instant.ofEpochMilli(atWallMs).atZone(zone).toLocalDate()
     val onDay = events.filter { it.date() in dates }
     val habits = onDay.count { it is TelemetryEvent.HabitDone }
-    val blocked = onDay.filterIsInstance<TelemetryEvent.Blocked>()
+    val blocked = onDay.filter { it is TelemetryEvent.Blocked || it is TelemetryEvent.SiteBlocked }
+    val bought = onDay.filterIsInstance<TelemetryEvent.MinutesBought>()
+    val breaks = onDay.count { it is TelemetryEvent.BreakTaken }
+    val emergencyCount = emergencies.count { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() in dates }
     val unlockMs = onDay.filterIsInstance<TelemetryEvent.UnlockUsed>().sumOf { it.ms }
     val habitDays = events.filterIsInstance<TelemetryEvent.HabitDone>().mapTo(HashSet()) { it.date() }
     val today = LocalDate.now(zone)
@@ -661,9 +671,19 @@ private fun HistoryCard(title: String, dates: Set<LocalDate>, events: List<Telem
         day = day.minusDays(1)
     }
     val topBlocked = remember(blocked) {
-        blocked.groupingBy { it.pkg }.eachCount().entries.sortedByDescending { it.value }.take(3)
-            .joinToString(", ") { (pkg, n) -> "${InstalledApps.labelFor(context, pkg)} ${n}×" }
+        blocked.groupingBy {
+            when (it) {
+                is TelemetryEvent.Blocked -> it.label ?: InstalledApps.labelFor(context, it.pkg)
+                is TelemetryEvent.SiteBlocked -> it.host
+                else -> ""
+            }
+        }.eachCount().entries.sortedByDescending { it.value }.take(3).joinToString(", ") { (name, n) -> "$name ${n}×" }
     }
+    val shortcuts = listOfNotNull(
+        "Minutes bought ${bought.size}× (${formatDuration(bought.sumOf { it.ms })})".takeIf { bought.isNotEmpty() },
+        "Break ${breaks}×".takeIf { breaks > 0 },
+        "Emergency unlock ${emergencyCount}×".takeIf { emergencyCount > 0 },
+    ).joinToString(" · ").ifEmpty { "No minutes bought, no breaks" }
 
     HFCard {
         Text(
@@ -685,6 +705,8 @@ private fun HistoryCard(title: String, dates: Set<LocalDate>, events: List<Telem
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        Gap(6)
+        Text(shortcuts, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Gap(6)
         Text(
             when (streak) {

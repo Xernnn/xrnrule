@@ -313,6 +313,14 @@ fun MinuteChips(
     }
 }
 
+/** A few set numbers to pick from; one set on the laptop stays until another is picked. */
+@Composable
+fun NumberChips(options: List<Int>, selected: Int, kind: KindColors, suffix: String = "", onSelect: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { n -> MinutePill("$n$suffix", selected == n, kind, Modifier.weight(1f)) { onSelect(n) } }
+    }
+}
+
 @Composable
 internal fun MinutePill(label: String, selected: Boolean, kind: KindColors, modifier: Modifier, onClick: () -> Unit) {
     Box(

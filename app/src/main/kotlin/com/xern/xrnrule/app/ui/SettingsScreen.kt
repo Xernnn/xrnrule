@@ -177,8 +177,10 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
     val appearance by Appearance.themeMode.collectAsState()
     val resume = rememberResumeSignal()
     val granted = remember(resume) { AppPermission.entries.associateWith { it.isGranted(context) } }
+    val autostart = remember(resume) { OemAutostart.enabled(context) }
     val automaticTime = remember(resume) { deps.clockGuard.automaticTime() }
     val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
+    val handPickedZone = remember(resume) { deps.clockGuard.handPickedZone }
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
     val loopStatus = remember(resume) { deps.loop.status() }
     val loopUnreachable by deps.loop.unreachable.collectAsState()
@@ -193,7 +195,7 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
                 }
             }
             if (OemAutostart.isKnownOem()) {
-                PermissionRow("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, granted = null) { OemAutostart.open(context) }
+                PermissionRow("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, granted = autostart) { OemAutostart.open(context) }
             }
             PermissionRow("Automatic date & time", Icons.Outlined.AccessTime, granted = automaticTime) {
                 runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
@@ -203,6 +205,12 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
             FootNote(
                 "The phone's clock was set ${formatDuration(kotlin.math.abs(clockSkew))} " +
                     "${if (clockSkew > 0) "ahead" else "back"} by hand. Blocks keep using the real time.",
+            )
+        }
+        if (handPickedZone != null) {
+            FootNote(
+                "The phone's time zone (${handPickedZone.id}) was picked by hand. Blocks keep using " +
+                    "${deps.clockGuard.zone().id} until the phone sets its time zone automatically.",
             )
         }
 

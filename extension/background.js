@@ -10,9 +10,11 @@
 //     page, since xrnrule's can't load then), and the toolbar icon shows "!"; after a minute of
 //     that, everything with a rule is blocked, so stopping xrnrule isn't a way past a limit.
 
-importScripts("shared.js");
+// Chromium runs this as a service worker and needs importScripts; Firefox (Zen) runs it as an event
+// page, with shared.js listed before it in the manifest's background.scripts, and has no importScripts.
+if (typeof importScripts === "function" && !self.Xrn) importScripts("shared.js");
 
-const { DEFAULT_PORT, FAIL_CLOSED_MS, locationOf, redirectRules, blockedBy, enginePage, blockUrl } = self.Xrn;
+const { DEFAULT_PORT, FAIL_CLOSED_MS, CALL_TIMEOUT_MS, locationOf, redirectRules, failClosed, blockedBy, enginePage, blockUrl } = self.Xrn;
 const OWN_PAGE = chrome.runtime.getURL("block.html");
 /** Our redirect rules' ids. Each rewrite removes the whole range first. */
 const DNR_BASE = 1000;
@@ -27,17 +29,27 @@ async function engineUrl() {
 
 async function call(path, body) {
   const engine = await engineUrl();
-  const res = await fetch(`${engine}${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json", "X-Xrnrule": "1" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`xrnrule answered ${res.status}`);
-  const answer = await res.json();
-  // Rules and verdicts name the block page: only one on xrnrule's own address is followed.
-  if (answer && typeof answer === "object" && "page" in answer) answer.page = enginePage(answer.page, engine);
-  return answer;
+  // Stopped (kill -STOP) or hung, xrnrule still takes the connection and never answers: without
+  // a limit the call would wait for good, and with one refresh at a time, it would never be
+  // counted as gone, nor everything with a rule blocked a minute on (I48).
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), CALL_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${engine}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { "Content-Type": "application/json", "X-Xrnrule": "1" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+      signal: abort.signal,
+    });
+    if (!res.ok) throw new Error(`xrnrule answered ${res.status}`);
+    const answer = await res.json();
+    // Rules and verdicts name the block page: only one on xrnrule's own address is followed.
+    if (answer && typeof answer === "object" && "page" in answer) answer.page = enginePage(answer.page, engine);
+    return answer;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 let reachable = null;
@@ -47,7 +59,7 @@ let offlineSince = null;
 /** I48: what counts as blocked now: after a minute without xrnrule, everything with a rule. */
 function inForce(rules) {
   if (!rules || offlineSince == null || Date.now() - offlineSince < FAIL_CLOSED_MS) return rules;
-  return { ...rules, blocked: rules.watched?.length ? rules.watched : rules.blocked };
+  return failClosed(rules);
 }
 
 let offlineRead = false;
@@ -275,6 +287,8 @@ async function checkForUpdate() {
     return { status: "reloading", version: onDisk, installType };
   }
   if (!running.update_url) return { status: "no_update_url", version: running.version, installType };
+  // Firefox has no requestUpdateCheck: it reads gecko.update_url on its own schedule.
+  if (typeof chrome.runtime.requestUpdateCheck !== "function") return { status: "unsupported", version: running.version, installType };
   try {
     // "update_available" (onUpdateAvailable follows once it's downloaded), "no_update", or
     // "throttled" when asked too often.

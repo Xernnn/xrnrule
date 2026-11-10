@@ -221,11 +221,11 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | credit | kiếm sớm hơn; một bên xóa (đã dùng / hết hạn) → xóa |
 | lockdown | kết thúc muộn hơn; một bên xóa → bên còn |
 | pause | bắt đầu sớm hơn; một bên null → bên còn; `lastPauseEpochDay` lấy lớn hơn |
-| block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn) |
+| block | `editedAtWall` muộn hơn; sửa vs xóa → giữ bản sửa (chặt hơn). Bản muộn hơn mà nới lỏng (`BlockEdits.loosens`), làm lúc khóa của bên kia đang giữ (`setAtWall ≤ editedAtWall < untilWall`) mà máy sửa chưa biết khóa đó (offline) → bị từ chối như lúc sửa có khóa, bản bên kia đứng (I39) |
 | checklist item | cấu hình theo bên đổi (remote nếu cả hai); `done` = OR; `spentEpochDay` = max; `spentAmount` theo `spentEpochDay` lớn hơn, cùng ngày → max; sửa vs xóa → giữ |
 | settings | từng trường: `dailyCapMs`, `skewToleranceMs`, `overrideGrantMs`, `overridesPerDay` lấy nhỏ hơn; `unlockWarningMs`, `overrideWaitMs` lấy lớn hơn; `overridePhrase` lấy cái dài hơn; `showClock` lấy `false` |
 | `unlockLog` | ngày lớn hơn thắng cả; cùng ngày → hợp, mỗi khóa lấy max |
-| allowance (mọi block `hasLimit`, I44) | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32) |
+| allowance (mọi block `hasLimit`, I44) | theo (block, thiết bị): ngày mới hơn; cùng ngày → `ms` lớn hơn, rồi `atWall` muộn hơn (bản ghi mang theo lượt liên tục, I32). Ngày chưa bắt đầu theo đồng hồ máy đang trộn (`dayStartWall > now_wall`: đồng hồ máy kia chạy trước) thua mọi ngày đã bắt đầu |
 | override | kết thúc muộn hơn; một bên xóa → bên còn (như lockdown) |
 | `overrideLog` | như `unlockLog`: ngày lớn hơn thắng; cùng ngày → hợp |
 | `settings.blockOtherBrowsers` | OR: bên chặt hơn (I49) |
@@ -236,9 +236,12 @@ Bản ghi allowance chỉ được thêm, không bị xóa khi trộn, nên máy
 máy **luôn** chiếu bản ghi của chính nó cho mọi block `hasLimit` có `progress`, kể cả khi chưa dùng
 (0 ms), để ngày mới của nó thắng bản của hôm trước mà máy kia còn giữ. Khi nhận, bản ghi của chính
 máy này trên server mà "lớn hơn" bản của nó (cùng thứ tự như bảng trên: ngày, `ms`, `atWall`; ví dụ
-dữ liệu máy này bị mất) thì được nhận vào `progress` và `runs` của nó. Hai điều này để hai máy luôn
+dữ liệu máy này bị mất) thì được nhận vào `progress` và `runs` của nó, trừ bản của một ngày chưa bắt
+đầu ở đây (đồng hồ máy này từng chạy trước). Hai điều này để hai máy luôn
 thống nhất được: không bao giờ có một bản ghi mà một máy cứ thêm lại và máy kia cứ bỏ đi, đẩy qua
-lại mãi (đã xảy ra ngày 2026-11-05 với bản ghi 0 ms của laptop).
+lại mãi (đã xảy ra ngày 2026-11-05 với bản ghi 0 ms của laptop; và với bản ghi "ngày mai" của một
+laptop khởi động với đồng hồ nhanh 11 giờ, thắng mọi vòng tới tận ngày đó, nên phần đã dùng hôm nay
+không bao giờ được tính).
 
 Nhận kết quả (I27): credit/session/lockdown/pause mới được neo monotonic theo wall; `state` của
 block suy ra lại (có session → `UNLOCKED`, có credit → `EARNED`, không → `ARMED`; mode khác HABIT
@@ -254,6 +257,21 @@ Giới hạn đã biết: thứ đã xóa sau bản sao lưu sẽ quay lại (ch
 giờ** trả tài liệu rỗng thay cho file không đọc được: `state.json` hỏng → 503 và thiết bị giữ nguyên;
 chỉ file thật sự chưa có mới là version 0. Server giữ 14 bản sao theo ngày trong `backups/` cạnh
 `state.json`; xóa file hỏng thì các thiết bị tự ghi lại, khỏi cần khôi phục tay.
+
+**Thiết bị mất world.** Base chỉ có nghĩa bên cạnh world đã đồng ý với nó. World của máy này không
+còn hay không đọc được (hỏng, hay bản app cũ hơn không đọc nổi) thì máy không xóa gì cả: lúc nạp,
+trước mọi lần ghi, base bị bỏ theo, và lần trộn đầu chạy như thiết bị chưa từng đồng bộ, nên mọi
+block trên server quay về máy này. Không vậy thì vòng đầu coi mọi block thiếu ở đây là đã xóa, cả
+block đang khóa (I39), rồi xóa chúng ở mọi máy.
+
+**Thiết bị chạy bản cũ hơn.** Thiết bị đọc bản của server bỏ qua trường nó không biết rồi ghi lại cả
+tài liệu, nên máy chạy xrnrule cũ hơn ghi lại mà thiếu các trường mới. Một bản ghi trong bản của
+server (block, mục checklist, `settings`, lượt dùng của một máy...) thiếu trường nào thì người ghi
+không biết trường đó, nên không đổi nó: `SharedState.fromServer` lấy trường đó từ base, base không có
+bản ghi ấy thì từ bản của máy này. Đọc thành giá trị mặc định thì lần trộn coi đó là sửa: mất khóa
+(I39), giới hạn số lần mở về 0 (I52). Bản ghi có mốc bắt đầu (`startedAtWall`, `earnedAtWall`,
+`dayStartWall`, `setAtWall`) mà mốc khác thì là bản ghi khác, không lấy gì từ bản cũ. Mục thiếu trong
+một map vẫn là đã xóa. Bản của server thiếu những gì máy này biết thì máy ghi lại.
 
 ### 2.5 Habit server: danh sách habit chung
 
@@ -300,7 +318,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I10** | Bất kỳ transition nào về ARMED → `HabitProgress` reset (0 / windowStart=today) **và** mọi `ChecklistItem.done=false`, `doneAtMonotonic=null`. | `checklist 3/3 done → EARNED → creditExpired → ARMED → assert 0/3 done` |
 | **I11** | CHECKLIST đủ ngưỡng ⟺ `doneCount ≥ (requiredAmount==-1 ? size : requiredAmount)` và `size > 0`. Checklist rỗng không bao giờ đủ ngưỡng. | bảng: (size,req,done)→expected; gồm ca size=0 |
 | **I12** | `toggleItem(itemId, done)` khi block ở EARNED hoặc UNLOCKED là **no-op** (không đổi state, không đổi `done`). Chỉ có tác dụng ở ARMED. (Habit item không toggle được; bỏ tick habit ở EARNED thì xem I36.) | `EARNED → toggleItem(false) → item vẫn done, state vẫn EARNED` |
-| **I13** | `windowStart` của `HabitProgress` là **đầu ngày local** (00:00 theo `ZoneId` thiết bị). "Day rollover" so sánh `localDate(now_wall) != localDate(windowStart)`. | `windowStart = hôm qua 23:59 → tick lúc 00:01 hôm nay → ARMED + reset` |
+| **I13** | `windowStart` của `HabitProgress` là **đầu ngày local** (00:00 theo `ZoneId` thiết bị). "Day rollover" so sánh `localDate(now_wall) != localDate(windowStart)`. Block nào cũng có `HabitProgress`: block chưa có (mới tạo, hay nhận từ máy khác) được sweep tạo cho, `windowStart` = hôm nay, không thì tick của nó không bao giờ qua ngày. | `windowStart = hôm qua 23:59 → tick lúc 00:01 hôm nay → ARMED + reset` |
 | **I14** | Nếu `trigger.type == CHECKLIST` mà block **không có** ChecklistItem nào → block coi như **không hợp lệ để ARMED-đủ-ngưỡng**; UI phải chặn tạo block kiểu này. Engine: `triggerMet` trả false. | `checklist rỗng → triggerMet == false mãi mãi` |
 | **I15** | `trigger.type == COMBINED`: `triggerMet` theo `combineMode` — `AND` cần `timerMet && checklistMet`, `OR` cần `timerMet \|\| checklistMet`, bất kể thứ tự hoàn thành (tick checklist trước hay chạy hết timer trước đều được). Cả hai đường dẫn hoàn thành (toggle checklist item, timer tick) đều phải gọi `triggerMet` theo cùng công thức này. | `i15_combinedAndRequiresBoth`: chỉ xong checklist hoặc chỉ xong timer → vẫn ARMED; xong cả hai (theo bất kỳ thứ tự nào) → EARNED. `i15_combinedOrRequiresEither`: xong một trong hai → EARNED ngay. |
 | **I16** | Khi `trigger.habitPackages` khác rỗng, timer đếm giờ theo tập này thay vì `block.targetPackages` — app Target vẫn bị chặn như thường, nhưng ở trong Target **không** cộng giờ; phải ở trong một app thuộc `habitPackages` mới cộng. Khi `habitPackages` rỗng, hành vi quay về đếm giờ trong `targetPackages` (tương thích ngược). | `i16_habitPackagesOverridesTargetForAccrual`: habitPackages={"com.habit"}, ở trong target 10s → accumulated==0; chuyển sang com.habit 10s → accumulated==10s. `i16_emptyHabitPackagesFallsBackToTarget`: habitPackages rỗng → hành vi y hệt TIMER cũ. |
@@ -339,6 +357,9 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I48** | `SiteRules.watched`: mọi site của block bật áp dụng ở thiết bị này, trừ lockdown chưa chạy, kể cả đang mở. Engine im lặng hơn 60 s thì extension chặn hết danh sách đó, không chỉ thứ đang bị chặn: tắt xrnrule không còn là cách qua hạn mức. Test: `i48_*` |
 | **I49** | `Settings.blockOtherBrowsers` (mặc định bật; trộn: OR; tắt là nới lỏng): trình duyệt không có extension, khi đã biết một trình duyệt có, bị chặn lúc có block website áp dụng ở đây, sau 10 s ở trước mặt. Trình duyệt có extension thì không bao giờ bị chặn trên điện thoại, kẻo không còn đường sửa extension. Test: `i49_*`, `BrowserWatchTest` |
 | **I50** | Block đang khóa (I39) không có lối tắt: Pause (I25) không nhấc nó (`pausable(block, clock)`), override không mua được (`overrideRejection` = `NOT_OVERRIDABLE`, xét lại lúc `ClaimOverride`, không tốn lượt), và phút đã mua trước đó không tính trong lúc khóa (`overrideRemainingMs` = 0). Làm habit vẫn mở block như cũ (I39). Xét theo từng lúc, không xóa gì: hết khóa hay mở khẩn cấp (I40) thì phút đã mua còn hạn lại tính và Pause đang chạy lại nhấc. Test: `i50_*` |
+| **I51** | Nhật ký ghi đủ những lần gặp shield và những lần đi đường tắt: `ForegroundChanged` tới app bị chặn phát `BlockedImpression`, tới site bị chặn phát `SiteBlocked` (host đã `Sites.normalize`). Cùng một target trong vòng `Defaults.BLOCKED_AGAIN_MS` (30 s) chỉ tính một lần (`World.lastBlocked`, riêng từng máy, không chung), để một lần chớp tắt không đếm hai. `OverrideGranted` và `BreakTaken` (từ `StartPause` thật sự có hiệu lực) cũng vào nhật ký. Mở khẩn cấp thì đã có `emergencyLog` (I40). Test: `i51_*` |
+| **I52** | Giới hạn số lần mở (`Block.opensPerDay`, 0 = không; thuộc nhóm giới hạn của I44: `hasLimit`, `limitComesFirst`). Một **lần mở** là: target của block ra foreground, không gì khác đang chặn nó (shield gặp phải không tính), đang trong lịch của block, không nhờ Pause hay phút mua, và đã khuất ít nhất `Defaults.OPEN_GRACE_MS` (60 s): chuyển app chốc lát không tốn lượt. `World.openRuns` (riêng từng máy) nhớ lần mở đang chạy. Đếm trong `HabitProgress.opens`, qua `AllowanceUse.opens` sang máy khác, cộng các máy như I19 trừ khi `perDevice` (I33), về 0 khi qua ngày, sống qua `returnToArmed` như phút đã dùng (I44). Hết lượt thì `limitHolds`, nhưng lần mở cuối vẫn chạy tới khi rời đi hết grace (`opensReached`). HABIT `limitComesFirst` đang UNLOCKED thì không tính. Nới lượt hay bỏ giới hạn là nới lỏng. Phút mua (I34) và Pause (I25) qua được như giới hạn phút. Test: `i52_*` |
+| **I53** | Dừng trước khi mở (`Block.openWaitS`, 0 = không; chỉ trên block có giới hạn): một lần mở mới (định nghĩa I52) giữ shield `openWaitS` giây theo đồng hồ monotonic (`OpenRun.waitUntilMonotonic`, `BlockReason.WAIT`, `holds`), rồi tự mở và **lúc đó** mới tính là một lần mở: rời đi trong lúc chờ thì không tốn lượt, và lần sau lại chờ. Thời gian chờ không tính vào phút dùng, không vào nhật ký I51 (`withoutWaits`), không mua được (`overrideRejection`). Trên laptop chỉ áp cho site: app laptop bị chặn thì cửa sổ bị đóng, không chờ được. `BootOrColdStart` bỏ các lần chờ đang dở (mốc monotonic), giữ lần mở đang chạy. Nhiều block trên một target: chờ theo block lâu nhất, block không chờ tính lượt sau khi hết chờ. Rút ngắn hay bỏ là nới lỏng. Test: `i53_*` |
 
 Hằng số mặc định (cấu hình qua Settings, nhưng đây là default hợp đồng):
 
@@ -362,7 +383,7 @@ focusBreakMs       = 5 * 60 * 1000           // I37, nút "Nghỉ 5 phút"
 interface Clock {
     fun nowMonotonicMs(): Long     // SystemClock.elapsedRealtime()
     fun nowWallMs(): Long          // System.currentTimeMillis()
-    fun zone(): ZoneId
+    fun zone(): ZoneId             // điện thoại: múi giờ máy tự đặt; múi giờ chọn tay không tính, như giờ chỉnh tay (ClockGuard)
 }
 
 interface PersistPort {
@@ -376,6 +397,9 @@ interface ShieldPort {
 
 interface Telemetry {                            // cho Insights; khi bật sync, còn gửi lên server của người dùng (trang Review)
     fun onBlockedImpression(pkg: String, atWallMs: Long)
+    fun onSiteBlocked(host: String, atWallMs: Long)   // I51
+    fun onMinutesBought(blockIds: Set<String>, ms: Long, atWallMs: Long)   // I51
+    fun onBreakTaken(ms: Long, atWallMs: Long)   // I51
     fun onHabitCompleted(blockId: String, atWallMs: Long)
     fun onUnlockConsumed(blockId: String, ms: Long, atWallMs: Long, startedAtWall: Long)  // startedAtWall: tên phiên (I28), các thiết bị cùng phiên ghi cùng một tên
 }
@@ -464,6 +488,6 @@ sealed interface BlockEvent {
 ## 7. Ghi chú test
 
 - `:domain` dùng `FakeClock`, `InMemoryPersist`, `RecordingShield` — không JUnit-Android, không Robolectric.
-- Mỗi bất biến I1–I50 có ít nhất một test đặt tên `i01_...` ... `i50_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
+- Mỗi bất biến I1–I53 có ít nhất một test đặt tên `i01_...` ... `i53_...`; quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
 - Acceptance của brainstorm §1 map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
   chạy chuỗi sự kiện end-to-end trên engine.

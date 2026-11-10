@@ -271,6 +271,21 @@ class SyncServerTest(unittest.TestCase):
         self.assertNotIn("", seen)  # the status page itself sends no X-Device
         self.assertTrue(os.path.isfile(srv.devices_path("sonn")))
 
+    def test_shortcuts_are_kept_as_events(self):
+        now = int(time.time() * 1000)
+        batch = {"events": [
+            {"t": "bought", "at": now - 2000, "block": "b1,b2", "ms": 240000},
+            {"t": "break", "at": now - 1000, "ms": 900000},
+            {"t": "nonsense", "at": now},
+        ]}
+        status, body, _ = self.call("POST", "/events", batch, {"X-Device": "laptop"})
+        self.assertEqual((200, 2), (status, json.loads(body)["added"]))
+        _, body, _ = self.call("GET", f"/events?since={now - 3000}")
+        got = [e for e in json.loads(body)["events"] if e["t"] in ("bought", "break")]
+        self.assertEqual(["bought", "break"], [e["t"] for e in got])
+        self.assertEqual("b1,b2", got[0]["block"])
+        self.assertEqual(900000, got[1]["ms"])
+
     def test_events_are_kept_once_and_read_back_by_time(self):
         now = int(time.time() * 1000)
         batch = {"events": [

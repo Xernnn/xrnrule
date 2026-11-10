@@ -19,6 +19,14 @@ self.Xrn = (() => {
   const MAX_RULES = 999;
   /** How long xrnrule may be gone before everything with a rule is blocked (I48). */
   const FAIL_CLOSED_MS = 60_000;
+  /**
+   * How long a call to xrnrule may take before it counts as not answered. It answers on the same
+   * device within milliseconds; one that takes the call and never answers (stopped, or hung) is
+   * as gone as one that isn't there.
+   */
+  const CALL_TIMEOUT_MS = 5_000;
+  /** The manifest's host_permissions: every web page, and xrnrule's own address on 127.0.0.1. */
+  const SITE_ORIGINS = ["http://*/*", "https://*/*"];
 
   /** "https://www.YouTube.com/watch" -> "youtube.com"; null for anything that isn't a web page. */
   function hostOf(url) {
@@ -97,6 +105,22 @@ self.Xrn = (() => {
     return out;
   }
 
+  /**
+   * I48: the rule list once xrnrule has been gone a minute: every site with a rule (`watched`),
+   * and still whatever it last said was blocked, which a list from an older xrnrule may leave out.
+   * A domain on both keeps only the exceptions both give it.
+   */
+  function failClosed(rules) {
+    if (!rules) return rules;
+    const byDomain = new Map();
+    for (const r of [...(rules.blocked || []), ...(rules.watched || [])]) {
+      const except = r.except || [];
+      const was = byDomain.get(r.domain);
+      byDomain.set(r.domain, { domain: r.domain, except: was ? was.except.filter((e) => except.includes(e)) : except });
+    }
+    return { ...rules, blocked: [...byDomain.values()] };
+  }
+
   /** The rule blocking [host] in the engine's last rule list, or null: a domain matches and none of its exceptions. */
   function blockedBy(rules, host) {
     if (!rules || !host) return null;
@@ -156,5 +180,5 @@ self.Xrn = (() => {
     }
   }
 
-  return { DEFAULT_PORT, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, hostOf, locationOf, matches, redirectRules, blockedBy, enginePage, blockUrl, mmss, warning };
+  return { DEFAULT_PORT, SITE_ORIGINS, HEARTBEAT_MS, WARN_AT_MIN, strongClock, USE_KINDS, CLOCK_LABEL, FAIL_CLOSED_MS, CALL_TIMEOUT_MS, hostOf, locationOf, matches, redirectRules, failClosed, blockedBy, enginePage, blockUrl, mmss, warning };
 })();

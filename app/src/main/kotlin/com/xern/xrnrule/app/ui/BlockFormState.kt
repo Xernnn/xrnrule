@@ -60,6 +60,9 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     var rowOn by mutableStateOf(start.rowOn)
     var rowMinutes by mutableLongStateOf(start.rowMinutes)
     var rowBreakMinutes by mutableLongStateOf(start.rowBreakMinutes)
+    var opensOn by mutableStateOf(start.opensOn)
+    var opensPerDay by mutableIntStateOf(start.opensPerDay)
+    var openWaitS by mutableIntStateOf(start.openWaitS)
     var perDevice by mutableStateOf(start.perDevice)
     /** I44: with a habit and a daily limit, the habit comes first. */
     var habitFirst by mutableStateOf(start.habitFirst)
@@ -94,6 +97,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
         timerMinutes = timerMinutes, tasks = tasks, habitIds = habitIds, manualOn = manualOn, focusOn = focusOn,
         links = links, loopOn = loopOn, combineMode = combineMode, tagOn = tagOn, tags = tags, limitOn = limitOn, dailyOn = dailyOn,
         dailyMinutes = dailyMinutes, rowOn = rowOn, rowMinutes = rowMinutes, rowBreakMinutes = rowBreakMinutes,
+        opensOn = opensOn, opensPerDay = opensPerDay, openWaitS = openWaitS,
         perDevice = perDevice, habitFirst = habitFirst, hoursOn = hoursOn, hoursDays = hoursDays, hoursTimeOn = hoursTimeOn,
         hoursStart = hoursStart, hoursEnd = hoursEnd, hoursMore = hoursMore, whenMode = whenMode, scheduleDays = scheduleDays, timeOn = timeOn,
         startMinute = startMinute, endMinute = endMinute, moreWindows = moreWindows, lockdownMinutes = lockdownMinutes,

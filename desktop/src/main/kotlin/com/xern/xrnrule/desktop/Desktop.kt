@@ -9,21 +9,26 @@ import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.appliesHere
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.freedesktop.dbus.annotations.DBusInterfaceName
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 import org.freedesktop.dbus.interfaces.DBusInterface
 import java.io.File
+import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-/** One window as KWin reports it: the `.desktop` id when it has one, else its WM class. */
+/** One window as KWin (or Hyprland) reports it: the `.desktop` id when it has one, else its WM class. */
 data class AppWindow(val appId: String, val resourceClass: String, val pid: Long)
 
 /**
- * What the KWin script (`desktop/kwin`) calls over D-Bus. Arguments are strings: a JS number
+ * What the KWin script (`desktop/kwin`) calls over D-Bus, and [HyprlandWindows] calls directly. Arguments are strings: a JS number
  * reaches D-Bus as a double, which wouldn't match an `i` argument.
  */
 @DBusInterfaceName("com.xern.xrnrule.Desktop")
@@ -145,27 +150,58 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         return isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
     }
 
-    private fun isBrowser(appId: String): Boolean = appId.lowercase().let { id -> BROWSERS.any { id.contains(it) } }
-
     companion object {
         const val FRESH_MS = 6_000L
 
         /** The extension asks for its rules once a minute, even on a page where it can't run. */
         const val EXTENSION_SILENCE_MS = 75_000L
-        val BROWSERS = listOf("helium", "chrom", "brave", "vivaldi", "edge", "opera", "firefox", "zen", "librewolf", "floorp", "thorium")
+
+        /** Browsers, as a word of their app id. */
+        val BROWSERS = setOf(
+            "helium", "chrome", "chromium", "brave", "vivaldi", "edge", "opera", "firefox", "firefoxdeveloperedition",
+            "zen", "librewolf", "floorp", "thorium",
+        )
+
+        /**
+         * A word of [appId] (split at `.`, `-`, `_`) is a browser's name: `app.zen_browser.zen`,
+         * `org.chromium.Chromium`. Never part of a word, which would take zenity (Steam's prompts)
+         * for Zen and close it after 10 s as a browser without the extension (I49).
+         */
+        fun isBrowser(appId: String): Boolean = appId.lowercase().split(NOT_A_WORD).any { it in BROWSERS }
+
+        private val NOT_A_WORD = Regex("[^a-z0-9]+")
     }
 }
 
 /**
- * The laptop's shield: blocked apps are closed through KWin (and their process stopped if the
+ * The laptop's shield: blocked apps are closed through the compositor's [WindowSystem] (and their process stopped if the
  * window doesn't go), blocked sites are the extension's job (it asks [isSiteBlocked]).
  */
-class Enforcer(private val store: Store, private val notifier: Notifier, private val config: Config) : ShieldPort, DesktopBus {
-    private val windows = ConcurrentHashMap<Long, AppWindow>()
+class Enforcer(
+    private val store: Store,
+    private val notifier: Notifier,
+    private val config: Config,
+    /** How long a closed window has to go before its process is stopped. */
+    private val trayGraceMs: Long = 4_000,
+) : ShieldPort, DesktopBus {
+    /**
+     * The apps each process has windows of. One process can show several: Chromium and the web
+     * apps it opens (Omarchy's YouTube), each with an id of its own.
+     */
+    private val windows = ConcurrentHashMap<Long, Set<String>>()
     lateinit var foreground: Foreground
 
+    /** Who reports windows and closes them: KWin's script, or Hyprland's sockets. */
+    var windowSystem: WindowSystem = KWin
+
+    /** When the window system last reported in (the name is from when it could only be KWin). */
     @Volatile var kwinSeenAtMs = 0L
         private set
+
+    /** The window system is there and watching, even with no window open yet. */
+    fun reported() {
+        kwinSeenAtMs = System.currentTimeMillis()
+    }
 
     private fun plan(): ShieldPlan = store.world.value.appliedShield
 
@@ -176,25 +212,26 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
     /** Runs inside the store's lock (I7), so the slow part goes to [worker]. */
     override fun apply(plan: ShieldPlan) {
         // Unlocks ending, lockdowns and schedules starting: close what just became blocked.
-        val doomed = windows.values.filter { it.appId in plan.blockedPackages }
+        val doomed = windows.filterValues { apps -> apps.any { it in plan.blockedPackages } }
         if (doomed.isEmpty()) return
         worker.execute {
-            val ids = doomed.map { it.appId }.toSet()
-            KWin.closeWindowsOf(ids)
+            val ids = doomed.values.flatten().filterTo(mutableSetOf()) { it in plan.blockedPackages }
+            windowSystem.closeWindowsOf(ids)
             ids.forEach { notifier.blocked(it) }
-            Thread.sleep(4_000)
+            Thread.sleep(trayGraceMs)
             // Closing a window may only hide it to the tray (Steam, Discord): then stop the process.
-            for (w in doomed) ProcessHandle.of(w.pid).ifPresent { if (it.isAlive && w.appId in plan().blockedPackages) it.destroy() }
+            val shown = doomed.mapValues { (pid, apps) -> apps + windows[pid].orEmpty() }
+            for (pid in toStop(shown, plan().blockedPackages)) ProcessHandle.of(pid).ifPresent { if (it.isAlive) it.destroy() }
         }
     }
 
     private val worker = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "enforcer").apply { isDaemon = true } }
 
     private fun seen(appId: String, resourceClass: String, pid: String): AppWindow? {
-        kwinSeenAtMs = System.currentTimeMillis()
+        reported()
         val id = DesktopApps.resolve(appId, resourceClass) ?: return null
         val w = AppWindow(id, resourceClass, pid.toLongOrNull() ?: 0)
-        if (w.pid > 0) windows[w.pid] = w
+        if (w.pid > 0) windows.merge(w.pid, setOf(id)) { apps, new -> apps + new }
         return w
     }
 
@@ -222,12 +259,26 @@ class Enforcer(private val store: Store, private val notifier: Notifier, private
     companion object {
         const val BUS_NAME = "com.xern.xrnrule"
         const val OBJECT_PATH = "/Desktop"
+
+        /**
+         * The processes to stop once their blocked windows were closed, out of the apps each
+         * showed: only those showing nothing but blocked apps. One that also shows an app that
+         * isn't blocked is that app too: stopping a browser to close its blocked web app would
+         * close every other window of it.
+         */
+        fun toStop(shown: Map<Long, Set<String>>, blocked: Set<String>): Set<Long> =
+            shown.filterValues { apps -> apps.isNotEmpty() && apps.all { it in blocked } }.keys
     }
 }
 
 /** Talking to KWin: export [DesktopBus] for our script, and run one-off scripts to close windows. */
-object KWin {
+object KWin : WindowSystem {
     private var connection: DBusConnection? = null
+
+    override val name = "kwin"
+
+    /** Exports [DesktopBus] and restarts our script, so it lists the open windows again. */
+    override fun start(bus: DesktopBus, connected: () -> Unit): Boolean = export(bus).also { if (it) reloadScript() }
 
     fun export(bus: DesktopBus): Boolean = try {
         val conn = DBusConnectionBuilder.forSessionBus().build()
@@ -246,7 +297,7 @@ object KWin {
         qdbus("org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
     }
 
-    fun closeWindowsOf(appIds: Set<String>) {
+    override fun closeWindowsOf(appIds: Set<String>) {
         if (appIds.isEmpty()) return
         // As JSON strings, which are JS strings: quotes, backslashes and control characters all escaped.
         val list = appIds.joinToString(",") { json.encodeToString(String.serializer(), it) }
@@ -280,7 +331,7 @@ object KWin {
     }
 
     /** Whether the screen locker is up (KDE's, through the freedesktop ScreenSaver interface). */
-    fun screenLocked(): Boolean =
+    override fun screenLocked(): Boolean =
         qdbus("org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver.GetActive")?.trim() == "true"
 }
 
@@ -296,30 +347,43 @@ object DesktopApps {
         "/var/lib/flatpak/exports/share/applications",
         "$home/.local/share/flatpak/exports/share/applications",
         "$home/.local/share/applications",
-    )
+    ).map(::File)
 
     @Volatile private var cache: Pair<Long, List<App>>? = null
 
     fun all(): List<App> {
         cache?.let { (at, apps) -> if (System.currentTimeMillis() - at < 60_000) return apps }
-        val found = LinkedHashMap<String, App>()
-        for (dir in dirs) {
-            File(dir).listFiles { f -> f.name.endsWith(".desktop") }?.forEach { f ->
-                parse(f)?.let { found[it.id] = it } // later dirs (the user's own) win
-            }
-        }
-        val apps = found.values.sortedBy { it.name.lowercase() }
+        val apps = scan(dirs)
         cache = System.currentTimeMillis() to apps
         return apps
     }
 
+    /** The apps whose `.desktop` files are in [dirs], by name; a later dir's file wins over an earlier one's. */
+    fun scan(dirs: List<File>): List<App> {
+        val found = LinkedHashMap<String, App>()
+        for (dir in dirs) {
+            dir.listFiles { f -> f.name.endsWith(".desktop") }?.forEach { f ->
+                parse(f)?.let { found[it.id] = it } // later dirs (the user's own) win
+            }
+        }
+        return found.values.sortedBy { it.name.lowercase() }
+    }
+
     private fun parse(f: File): App? {
+        // A link left behind by an uninstalled app, a directory, a file we may not read: no app,
+        // and not the end of the list, which names every window the daemon is told about.
+        if (!f.isFile) return null
+        val lines = try {
+            f.readLines()
+        } catch (_: IOException) {
+            return null
+        }
         var inEntry = false
         var name: String? = null
         var wmClass: String? = null
         var hidden = false
         var type: String? = null
-        for (line in f.readLines()) {
+        for (line in lines) {
             if (line.startsWith("[")) {
                 inEntry = line.trim() == "[Desktop Entry]"
                 continue
@@ -354,6 +418,33 @@ fun World.locksOnLaptop(block: Block): Boolean =
     appliesHere(block) && (block.targetSites.isNotEmpty() || block.targetDesktopApps.isNotEmpty())
 
 /**
+ * The phone can't say it has stopped, so the laptop watches for it: the server notes every device
+ * that reaches it, and the phone's service checks in whenever the phone is used.
+ */
+object PhoneWatch {
+    /** Longer than a night with the phone asleep. */
+    const val QUIET_MS = 12 * 60 * 60_000L
+    const val CHECK_MS = 10 * 60_000L
+
+    /** The phone's last check-in out of a `GET /devices` answer, or null if there's none. */
+    fun seen(body: String): Long? = runCatching {
+        (Json.parseToJsonElement(body) as? JsonObject)?.get("phone")?.jsonPrimitive?.longOrNull
+    }.getOrNull()
+
+    /**
+     * How long the phone has been quiet, or null while it's fine. An old answer says nothing: a
+     * laptop that just woke up mustn't blame the phone for what it missed while asleep.
+     */
+    fun quietMs(seenWall: Long?, askedWall: Long, nowWall: Long): Long? {
+        if (seenWall == null || nowWall - askedWall > 2 * CHECK_MS) return null
+        return (nowWall - seenWall).takeIf { it >= QUIET_MS }
+    }
+
+    fun text(quietMs: Long): String =
+        "It hasn't reached your home server for ${quietMs / 3_600_000} hours, so xrnrule may have stopped there. Open it on the phone."
+}
+
+/**
  * At most one popup of a kind in [everyMs]. The engine's warnings fire on every tick, so anything
  * reaching the desktop without this would stack up a popup a second.
  */
@@ -370,7 +461,7 @@ class PopupLimit(private val everyMs: Long = 10 * 60_000L) {
 }
 
 /** Desktop notifications (`notify-send`), and the block page in the browser. */
-class Notifier(private val config: Config, private val limit: PopupLimit = PopupLimit()) {
+open class Notifier(private val config: Config, private val limit: PopupLimit = PopupLimit()) {
     private val lastShown = ConcurrentHashMap<String, Long>()
 
     /** The popup on screen: the next one takes its place rather than stacking on it. */
@@ -380,7 +471,7 @@ class Notifier(private val config: Config, private val limit: PopupLimit = Popup
      * Gone by itself after 10 s, at normal urgency because Plasma keeps a critical one up until it's
      * dismissed. [urgent] only leaves it in the notification history, for what shouldn't be missed.
      */
-    fun notify(title: String, body: String, urgent: Boolean = false) {
+    open fun notify(title: String, body: String, urgent: Boolean = false) {
         if (!limit.allows(title, System.currentTimeMillis())) return
         val command = mutableListOf("notify-send", "-a", "xrnrule", "-i", "changes-prevent", "-t", "$POPUP_MS", "-p")
         if (!urgent) command += "-e"
@@ -397,7 +488,7 @@ class Notifier(private val config: Config, private val limit: PopupLimit = Popup
     }
 
     /** A blocked app was closed: the block page says why (at most once a minute per app), else a popup does. */
-    fun blocked(appId: String) {
+    open fun blocked(appId: String) {
         val now = System.currentTimeMillis()
         val last = lastShown.put(appId, now)
         if (last != null && now - last < 60_000) return

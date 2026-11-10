@@ -149,7 +149,8 @@ class OverlayShieldPort(
         val subject = if (appBlocked) appLabel(foregroundPkg!!) else Sites.hostOf(foregroundSite!!)
         uiState.value = OverlayUi(
             subject = subject,
-            triesToday = tries.count(subject),
+            // I53: the pause before an app opens isn't a try at getting past a block.
+            triesToday = if (block?.let { engine.blockReason(world, it, clock) } == BlockReason.WAIT) 0 else tries.count(subject),
             pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,

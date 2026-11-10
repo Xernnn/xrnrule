@@ -6,6 +6,7 @@ import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockReason
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.BlockTexts
 import com.xern.xrnrule.domain.startOfLocalDayMs
@@ -429,6 +430,9 @@ class LocalServer(
         val rowBreakMs: Long,
         val rowUsedMs: Long,
         val rowBreakRemainingMs: Long,
+        val opensPerDay: Int,
+        val opensUsed: Int,
+        val openWaitS: Int,
         val perDevice: Boolean,
         /** Bought minutes left on this block (I34), and how many more can be bought today. */
         val overrideRemainingMs: Long,
@@ -468,6 +472,8 @@ class LocalServer(
         /** What the block page leads with: when it's back, and why it isn't now. */
         val back: String? = null,
         val why: String? = null,
+        /** I53: it's only pausing before it opens by itself. */
+        val opening: Boolean = false,
     )
 
     @Serializable
@@ -494,6 +500,8 @@ class LocalServer(
         val canPause: Boolean,
         /** Whether a break would lift anything: not with every soft block locked (I50). */
         val breakLifts: Boolean,
+        /** Set when the phone has stopped reaching the server. */
+        val phoneQuiet: String?,
         val unlockUsedMs: Long,
         val dailyCapMs: Long,
         val sync: SyncStatus?,
@@ -501,6 +509,8 @@ class LocalServer(
         val syncConfigured: Boolean,
         val habitsUrl: String?,
         val kwinSeenAgoMs: Long?,
+        /** What reports the windows: "kwin" or "hyprland". */
+        val windowSystem: String = "kwin",
         val extensionMissing: Boolean,
         /** The extension's version, and the one this daemon was built with when it's older. */
         val summary: String? = null,
@@ -530,6 +540,7 @@ class LocalServer(
             pauseRemainingMs = engine.pauseRemainingMs(world, clock),
             canPause = engine.canPause(world, clock),
             breakLifts = world.blocks.any { engine.pausable(it, clock) },
+            phoneQuiet = shared.phoneQuietMs(System.currentTimeMillis())?.let(PhoneWatch::text),
             unlockUsedMs = engine.unlockUsedTodayMs(world, clock),
             dailyCapMs = world.settings.dailyCapMs,
             sync = shared.status.value,
@@ -537,6 +548,7 @@ class LocalServer(
             syncConfigured = config.syncConfigured,
             habitsUrl = if (config.syncConfigured) "${config.loopUrl}/" else null,
             kwinSeenAgoMs = enforcer.kwinSeenAtMs.takeIf { it > 0 }?.let { System.currentTimeMillis() - it },
+            windowSystem = enforcer.windowSystem.name,
             extensionMissing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() },
             summary = BlockTexts.summary(engine, world, clock),
             today = today(world),
@@ -566,6 +578,7 @@ class LocalServer(
             overrideReadyAtWall = pending?.let { it.sinceWall + world.settings.overrideWaitMs },
             back = back?.at,
             why = BlockTexts.why(back, lead),
+            opening = lead != null && store.engine.blockReason(world, lead, store.clock) == BlockReason.WAIT,
         )
     }
 
@@ -612,6 +625,9 @@ class LocalServer(
             rowBreakMs = b.sessionBreakMs,
             rowUsedMs = engine.rowUsedMs(world, b, clock),
             rowBreakRemainingMs = engine.rowBreakRemainingMs(world, b, clock),
+            opensPerDay = b.opensPerDay,
+            opensUsed = engine.opensUsed(world, b, clock),
+            openWaitS = b.openWaitS,
             perDevice = b.perDevice,
             overrideRemainingMs = engine.overrideRemainingMs(world, b.id, clock),
             overridesLeft = engine.overridesLeftToday(world, b.id, clock),

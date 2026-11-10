@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.PixelFormat
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.runtime.mutableStateOf
@@ -35,36 +36,51 @@ class SettingsGuardOverlay(
     private val unlockGraceMs: Long = 5 * 60_000L,
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)
-    private var view: ComposeView? = null
-    private var windowOwner: OverlayWindowOwner? = null
     private val showError = mutableStateOf(false)
+
+    private class Gate(val view: ComposeView, val owner: OverlayWindowOwner)
+
+    private val gate = OverlayWindow(
+        make = ::makeGate,
+        add = { g ->
+            wm.addView(g.view, params())
+            g.owner.onStart()
+        },
+        remove = { g -> wm.removeView(g.view) },
+        release = { g -> g.owner.onDestroy() },
+    )
 
     @Volatile
     private var unlockedUntilMono = 0L
 
+    /**
+     * Without "Display over other apps" (an update can take it away) the prompt can't be drawn,
+     * and Settings stays reachable: it's the only way to give the permission back, and the shield
+     * can't block anything until then either, which the service's alert says. Sending Settings
+     * home instead would leave it out of reach for as long as a hardcore block is armed.
+     */
     fun render(foregroundPkg: String?, world: World) {
         val shouldGuard = guard.shouldIntercept(foregroundPkg, world) &&
             SystemClock.elapsedRealtime() >= unlockedUntilMono
-        if (!shouldGuard) {
+        if (!shouldGuard || !Settings.canDrawOverlays(context)) {
             hide()
             return
         }
-        show()
+        gate.show()
     }
 
-    private fun show() {
-        if (view != null) return
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            overlayType(),
-            0, // no keep-screen-on: this prompt mustn't hold the phone awake if left up
-            PixelFormat.OPAQUE,
-        ).apply {
-            gravity = Gravity.CENTER
-            screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
+    private fun params() = WindowManager.LayoutParams(
+        WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.MATCH_PARENT,
+        overlayType(),
+        0, // no keep-screen-on: this prompt mustn't hold the phone awake if left up
+        PixelFormat.OPAQUE,
+    ).apply {
+        gravity = Gravity.CENTER
+        screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
 
+    private fun makeGate(): Gate {
         val owner = OverlayWindowOwner().also { it.onCreate() }
         val composeView = ComposeView(context).apply {
             setViewTreeLifecycleOwner(owner)
@@ -86,18 +102,10 @@ class SettingsGuardOverlay(
                 )
             }
         }
-        wm.addView(composeView, params)
-        view = composeView
-        windowOwner = owner
-        owner.onStart()
+        return Gate(composeView, owner)
     }
 
-    private fun hide() {
-        view?.let { runCatching { wm.removeView(it) } }
-        view = null
-        windowOwner?.onDestroy()
-        windowOwner = null
-    }
+    private fun hide() = gate.hide()
 
     private fun goHome() {
         val homeIntent = Intent(Intent.ACTION_MAIN)

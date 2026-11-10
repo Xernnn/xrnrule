@@ -30,7 +30,7 @@ enum class CombineMode { AND, OR }
 enum class BlockMode { HABIT, ALLOWANCE, SCHEDULE, LOCKDOWN }
 
 /** Why a block is blocking right now, the firmest first (I44). */
-enum class BlockReason { LOCKDOWN, HOURS, BREAK, LIMIT, HABIT }
+enum class BlockReason { LOCKDOWN, HOURS, BREAK, LIMIT, WAIT, HABIT }
 
 /** What a device running the engine is (I42). */
 enum class DeviceKind { PHONE, LAPTOP }
@@ -95,6 +95,8 @@ object Defaults {
     const val UNLOCK_WARNING_MS = 30_000L                // G3
     const val DEFAULT_UNLOCK_MS = 5L * 60 * 1000
     const val PAUSE_MS = 15L * 60 * 1000                 // I25
+    const val BLOCKED_AGAIN_MS = 30_000L                 // I51
+    const val OPEN_GRACE_MS = 60_000L                    // I52
     const val EMERGENCY_UNLOCKS = 5                      // I40: in all, never given back
     const val ALL_ITEMS = -1L                            // trigger.requiredAmount sentinel (I11)
     const val OVERRIDE_PHRASE = "I choose to keep scrolling" // I34
@@ -321,6 +323,10 @@ data class Block(
     val editedAtWall: Long = 0,
     /** I39: nothing that loosens this block goes through before [BlockLock.untilWall]; never set back to null. */
     val lock: BlockLock? = null,
+    /** I52: at most this many opens a day, one of the limit's rules; 0 = no such rule. */
+    val opensPerDay: Int = 0,
+    /** I53: on a block with a limit, seconds of block screen before each open; 0 = none. */
+    val openWaitS: Int = 0,
 ) {
     /** Everything this block blocks that can be "the foreground app": phone packages and laptop apps. */
     val targetApps: Set<String> get() = targetPackages + targetDesktopApps
@@ -335,10 +341,13 @@ data class Block(
 
     /** Whether it has a limit: an ALLOWANCE block always, a HABIT block if it was given one (I44). */
     val hasLimit: Boolean
-        get() = mode == BlockMode.ALLOWANCE || (mode == BlockMode.HABIT && (dailyAllowanceMs > 0 || hasRowRule))
+        get() = mode == BlockMode.ALLOWANCE || (mode == BlockMode.HABIT && (dailyAllowanceMs > 0 || hasRowRule || opensPerDay > 0))
 
-    /** I44: a HABIT block that only asks for its habit once the day's free minutes are gone. */
-    val limitComesFirst: Boolean get() = mode == BlockMode.HABIT && dailyAllowanceMs > 0 && !habitFirst
+    /** I44: a HABIT block that only asks for its habit once the day's free minutes or opens are gone. */
+    val limitComesFirst: Boolean get() = mode == BlockMode.HABIT && (dailyAllowanceMs > 0 || opensPerDay > 0) && !habitFirst
+
+    /** I52, I53: whether opening a target means anything to this block. */
+    val hasOpenRule: Boolean get() = hasLimit && (opensPerDay > 0 || openWaitS > 0)
 }
 
 /**
@@ -421,6 +430,8 @@ data class HabitProgress(
     val timerRunning: Boolean = false,
     /** I44: a HABIT block's use of its limit; its [accumulatedMs] is the habit's timer. */
     val limitUsedMs: Long = 0,
+    /** I52: opens on this device in this window. */
+    val opens: Int = 0,
 ) {
     /** I19, I44: this window's use of [block]'s limit. */
     fun limitUsed(block: Block): Long = if (block.mode == BlockMode.HABIT) limitUsedMs else accumulatedMs
@@ -488,7 +499,7 @@ data class RunUse(val ms: Long = 0, val lastActiveWall: Long = 0, val breakUntil
  * with its current run (I32). [atWall]: when that device last counted any of it.
  */
 @Serializable
-data class AllowanceUse(val dayStartWall: Long, val ms: Long, val run: RunUse? = null, val atWall: Long = 0)
+data class AllowanceUse(val dayStartWall: Long, val ms: Long, val run: RunUse? = null, val atWall: Long = 0, val opens: Int = 0)
 
 /** Minutes bought past a block (I34). Counted down on the monotonic clock, like [Lockdown]. */
 @Serializable
@@ -524,6 +535,17 @@ data class Settings(
     /** I49: browsers without the extension are blocked while any block has websites. */
     val blockOtherBrowsers: Boolean = true,
 )
+
+/**
+ * I52, I53: a block's targets being open on this device. [lastInFrontWall]: when one last was, which
+ * tells a quick switch from a new open. [waitUntilMonotonic]: set while the wait before it opens runs.
+ */
+@Serializable
+data class OpenRun(val lastInFrontWall: Long, val waitUntilMonotonic: Long? = null)
+
+/** I51: which app or site the shield last met here, and when. */
+@Serializable
+data class LastBlocked(val target: String, val atWall: Long)
 
 /**
  * The whole persisted world. `:app` loads it on boot and saves it back after every [Outcome]
@@ -568,6 +590,10 @@ data class World(
     val overrideEpochDay: Long = 0,
     /** I40: every emergency unlock ever, "blockId@wall" -> wall; shared, only ever added to. */
     val emergencyLog: Map<String, Long> = emptyMap(),
+    /** I51: the last target the shield met here, so a flicker is logged once. Device-local. */
+    val lastBlocked: LastBlocked? = null,
+    /** I52, I53: what's open here, by block. Device-local. */
+    val openRuns: Map<String, OpenRun> = emptyMap(),
     /** An override waiting out its delay here (I34). */
     val pendingOverride: PendingOverride? = null,
     /**

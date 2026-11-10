@@ -1,6 +1,11 @@
 package com.xern.xrnrule.domain
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 /**
  * The part of a [World] every device shares through the sync server (contract §2.4): what is
@@ -46,14 +51,20 @@ data class SharedState(
 
     companion object {
 
-        /** Which of two reports of one device's use of a block wins (§2.4): the later day, more use, the later count. */
-        val newerUse: Comparator<AllowanceUse> =
-            compareBy<AllowanceUse> { it.dayStartWall }.thenBy { it.ms }.thenBy { it.atWall }
+        /**
+         * Which of two reports of one device's use of a block wins (§2.4): the later day, more use,
+         * the later count. A day that hasn't begun by [nowWall] is from a clock that ran ahead (a
+         * laptop booted from another system before NTP): it loses to any day that has, or it would
+         * win every round until that day came, and the use counted today would never count.
+         */
+        fun newerUse(nowWall: Long): Comparator<AllowanceUse> =
+            compareBy<AllowanceUse> { it.dayStartWall <= nowWall }
+                .thenBy { it.dayStartWall }.thenBy { it.ms }.thenBy { it.opens }.thenBy { it.atWall }
 
         /** This device's own report of its use of [block]'s limit, with progress [p] (I19, I32, I44). */
         fun ownUse(world: World, block: Block, p: HabitProgress): AllowanceUse {
             val run = world.runs[p.blockId]
-            return AllowanceUse(p.windowStart, p.limitUsed(block), run, run?.lastActiveWall ?: 0)
+            return AllowanceUse(p.windowStart, p.limitUsed(block), run, run?.lastActiveWall ?: 0, p.opens)
         }
 
         /** This device's view of the shared state. */
@@ -111,8 +122,68 @@ data class SharedState(
 
         private fun versionOf(etag: String): Long? = etag.filter(Char::isDigit).toLongOrNull()
 
-        fun merge(base: SharedState?, local: SharedState, remote: SharedState): SharedState {
+        /** How devices write the shared state: every field, and fields they don't know left out on reading. */
+        val json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+        }
+
+        /**
+         * The server's copy ([text]) as this device reads it (§2.4). A device on an older xrnrule
+         * writes back only the fields it knows, so a field missing from one of the copy's records
+         * (a block, an item, the settings, a device's use...) was left out by a writer that didn't
+         * know it and so changed nothing there: it is taken from [base], the state this device last
+         * agreed on, or from [local] where the base hasn't that record. Read as its default, it
+         * would come out of the merge as a change: a lock gone, a limit's opens back to none. A
+         * record stamped with when it began (a session, a credit, a day's use) is another record
+         * once the stamp differs, so it takes nothing from the old one. An entry missing from a map
+         * (a block, a credit) is a deletion as ever.
+         */
+        fun fromServer(text: String, base: SharedState?, local: SharedState, json: Json = this.json): SharedState {
+            val descriptor = serializer().descriptor
+            val filled = keepUnsent(
+                json.parseToJsonElement(text),
+                descriptor,
+                base?.let { json.encodeToJsonElement(serializer(), it) },
+                json.encodeToJsonElement(serializer(), local),
+            )
+            return json.decodeFromJsonElement(serializer(), filled)
+        }
+
+        /** What a record began at: one that differs there is another record (another unlock, another day). */
+        private val STAMPS = listOf("startedAtWall", "earnedAtWall", "dayStartWall", "setAtWall")
+
+        private fun keepUnsent(sent: JsonElement, descriptor: SerialDescriptor, base: JsonElement?, local: JsonElement?): JsonElement {
+            val obj = sent as? JsonObject ?: return sent
+            fun same(other: JsonElement?) = (other as? JsonObject)?.takeIf { o -> STAMPS.all { obj[it] == o[it] } }
+            val baseObj = same(base)
+            val localObj = same(local)
+            return when (descriptor.kind) {
+                StructureKind.CLASS -> JsonObject(
+                    LinkedHashMap(obj).apply {
+                        for (i in 0 until descriptor.elementsCount) {
+                            val name = descriptor.getElementName(i)
+                            val value = obj[name]
+                            if (value == null) {
+                                (baseObj?.get(name) ?: localObj?.get(name))?.let { put(name, it) }
+                            } else {
+                                put(name, keepUnsent(value, descriptor.getElementDescriptor(i), baseObj?.get(name), localObj?.get(name)))
+                            }
+                        }
+                    },
+                )
+                StructureKind.MAP -> {
+                    val entry = descriptor.getElementDescriptor(1)
+                    JsonObject(obj.mapValues { (key, value) -> keepUnsent(value, entry, baseObj?.get(key), localObj?.get(key)) })
+                }
+                else -> sent
+            }
+        }
+
+        /** [nowWall]: this device's clock, which says what day it is for the use reports ([newerUse]). */
+        fun merge(base: SharedState?, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
             val b = base ?: SharedState()
+            val newer = newerUse(nowWall)
             val unlockSameDay = local.unlockEpochDay == remote.unlockEpochDay
             val overrideSameDay = local.overrideEpochDay == remote.overrideEpochDay
             fun <T> field(get: (Settings) -> T, resolve: (T, T) -> T): T =
@@ -122,9 +193,8 @@ data class SharedState(
                     when {
                         l == null -> r // edited beats deleted: the stricter side
                         r == null -> l
-                        // I39: the lock goes by when it was set, whichever edit wins.
-                        r.editedAtWall >= l.editedAtWall -> r.copy(lock = laterLock(l.lock, r.lock))
-                        else -> l.copy(lock = laterLock(l.lock, r.lock))
+                        r.editedAtWall >= l.editedAtWall -> laterEdit(r, l)
+                        else -> laterEdit(l, r)
                     }
                 },
                 items = mergeMaps(b.items, local.items, remote.items) { l, r ->
@@ -196,7 +266,7 @@ data class SharedState(
                     val l = local.allowance[blockId].orEmpty()
                     val r = remote.allowance[blockId].orEmpty()
                     (l.keys + r.keys).associateWith { device ->
-                        listOfNotNull(l[device], r[device]).maxWith(newerUse)
+                        listOfNotNull(l[device], r[device]).maxWith(newer)
                     }
                 },
                 overrides = mergeMaps(b.overrides, local.overrides, remote.overrides) { l, r ->
@@ -215,6 +285,20 @@ data class SharedState(
                 },
                 emergencyLog = local.emergencyLog + remote.emergencyLog, // I40: only ever added to
             )
+        }
+
+        /**
+         * Of two edits of a block, the [later] one wins, with the lock set last whichever it is
+         * (I39). Unless that lock came from the [earlier] side and held when [later] was made:
+         * its device hadn't heard of it yet (offline), and an edit making the block easier is one
+         * the lock refuses, so [earlier] stands. An edit made knowing the lock went through that
+         * device's own check, by its own clock; an emergency unlock (I40) set a lock already ended.
+         */
+        private fun laterEdit(later: Block, earlier: Block): Block {
+            val lock = laterLock(later.lock, earlier.lock)
+            val unheardOf = lock != null && lock != later.lock && lock.setAtWall <= later.editedAtWall && later.editedAtWall < lock.untilWall
+            val refused = unheardOf && BlockEdits.loosens(earlier, later.copy(lock = earlier.lock))
+            return (if (refused) earlier else later).copy(lock = lock)
         }
 
         private fun laterLock(a: BlockLock?, b: BlockLock?): BlockLock? = when {

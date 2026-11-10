@@ -1,6 +1,8 @@
 package com.xern.xrnrule.domain
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -16,7 +18,7 @@ class SharedStateTest {
     private fun session(id: String, start: Long, ms: Long = 5L * 60_000) = UnlockSession(id, 0, start, ms)
     private fun lockdown(id: String, start: Long, ms: Long) = Lockdown(id, 0, start, ms)
 
-    private fun merge(base: SharedState?, local: SharedState, remote: SharedState) = SharedState.merge(base, local, remote)
+    private fun merge(base: SharedState?, local: SharedState, remote: SharedState) = SharedState.merge(base, local, remote, nowWall = t)
 
     @Test
     fun projection_dropsMonotonicStampsAndHabitTicks() {
@@ -112,6 +114,33 @@ class SharedStateTest {
     }
 
     @Test
+    fun blocks_aLooseningEditMadeUnawareOfALockIsRefused() {
+        val minutes = 60_000L
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30 * minutes).copy(editedAtWall = t)
+        val base = SharedState(blocks = mapOf("a1" to block))
+        val lock = BlockLock(untilWall = t + 7 * DAY_MS, setAtWall = t + 1_000)
+        val lockedThere = SharedState(blocks = mapOf("a1" to block.copy(lock = lock, editedAtWall = t + 1_000)))
+        fun here(edit: Block) = SharedState(blocks = mapOf("a1" to edit))
+
+        // Offline here, after the lock was set there: an hour a day instead of half an hour.
+        val loosened = merge(base, here(block.copy(dailyAllowanceMs = 60 * minutes, editedAtWall = t + 2_000)), lockedThere).blocks.getValue("a1")
+        assertEquals(30 * minutes, loosened.dailyAllowanceMs)
+        assertEquals(lock, loosened.lock)
+        assertEquals("the same either way round", loosened, merge(base, lockedThere, here(block.copy(dailyAllowanceMs = 60 * minutes, editedAtWall = t + 2_000))).blocks.getValue("a1"))
+
+        // A stricter one made the same way stands, under the lock.
+        val tightened = merge(base, here(block.copy(dailyAllowanceMs = 20 * minutes, editedAtWall = t + 2_000)), lockedThere).blocks.getValue("a1")
+        assertEquals(20 * minutes, tightened.dailyAllowanceMs)
+        assertEquals(lock, tightened.lock)
+
+        // After an emergency unlock here (I40) the lock ended: a loosening edit stands.
+        val agreed = lockedThere
+        val unlockedHere = here(agreed.blocks.getValue("a1").copy(lock = BlockLock(t + 3_000, t + 3_000), dailyAllowanceMs = 60 * minutes, editedAtWall = t + 3_000))
+        val renamedThere = SharedState(blocks = mapOf("a1" to agreed.blocks.getValue("a1").copy(name = "renamed", editedAtWall = t + 2_500)))
+        assertEquals(60 * minutes, merge(agreed, unlockedHere, renamedThere).blocks.getValue("a1").dailyAllowanceMs)
+    }
+
+    @Test
     fun blocks_keepThisDevicesOrder() {
         val a = checklistBlock("a")
         val b = checklistBlock("b")
@@ -197,6 +226,18 @@ class SharedStateTest {
     }
 
     @Test
+    fun allowance_aDayThatHasNotBegunLosesToOneThatHas() {
+        val today = AllowanceUse(t - 12 * 60 * 60_000, 20L * 60_000)
+        val tomorrow = AllowanceUse(t + 12 * 60 * 60_000, 0) // from a clock 13 h ahead
+        val here = SharedState(allowance = mapOf("a1" to mapOf("laptop" to today)))
+        val there = SharedState(allowance = mapOf("a1" to mapOf("laptop" to tomorrow)))
+        assertEquals(today, merge(here, here, there).allowance.getValue("a1").getValue("laptop"))
+        assertEquals(today, merge(there, there, here).allowance.getValue("a1").getValue("laptop"))
+        // Once that day has come, it is the newer one.
+        assertEquals(tomorrow, SharedState.merge(here, here, there, nowWall = tomorrow.dayStartWall).allowance.getValue("a1").getValue("laptop"))
+    }
+
+    @Test
     fun roundTripsThroughJson() {
         val json = Json { encodeDefaults = true }
         val state = SharedState(
@@ -219,6 +260,83 @@ class SharedStateTest {
         // Unknown fields from a newer device must not break an older one.
         val lenient = Json { ignoreUnknownKeys = true }
         assertEquals(SharedState(), lenient.decodeFromString(SharedState.serializer(), """{"somethingNew":1}"""))
+    }
+
+    /** [state] as a device running an older xrnrule writes it back: without the fields it doesn't know. */
+    private fun asAnOlderDeviceWritesIt(state: SharedState, blockFields: Set<String>, useFields: Set<String> = emptySet()): String {
+        val json = Json { encodeDefaults = true }
+        val doc = json.encodeToJsonElement(SharedState.serializer(), state).jsonObject
+        fun JsonObject.without(fields: Set<String>) = JsonObject(this - fields)
+        val blocks = JsonObject(doc.getValue("blocks").jsonObject.mapValues { it.value.jsonObject.without(blockFields) })
+        val allowance = JsonObject(doc.getValue("allowance").jsonObject.mapValues { (_, byDevice) ->
+            JsonObject(byDevice.jsonObject.mapValues { it.value.jsonObject.without(useFields) })
+        })
+        return JsonObject(doc + ("blocks" to blocks) + ("allowance" to allowance)).toString()
+    }
+
+    @Test
+    fun aFieldAnOlderDeviceLeftOutIsNotTakenAsChanged() {
+        val lock = BlockLock(untilWall = t + 7 * DAY_MS, setAtWall = t)
+        val limit = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000)
+            .copy(opensPerDay = 3, openWaitS = 10, lock = lock, editedAtWall = t)
+        val other = checklistBlock("c1").copy(editedAtWall = t)
+        val agreed = SharedState(
+            blocks = mapOf("a1" to limit, "c1" to other),
+            allowance = mapOf("a1" to mapOf("phone" to AllowanceUse(t, 60_000, opens = 2))),
+        )
+        // The older device renamed the limit, deleted the other block, made one of its own, and
+        // wrote back what it knows: no opens, no wait (before 628cb07), no lock (before Oct 24).
+        val itsOwn = checklistBlock("new").copy(editedAtWall = t + 2)
+        val older = agreed.copy(blocks = mapOf("a1" to limit.copy(name = "renamed", editedAtWall = t + 1), "new" to itsOwn))
+        val text = asAnOlderDeviceWritesIt(older, setOf("opensPerDay", "openWaitS", "lock"), setOf("opens"))
+
+        val naive = merge(agreed, agreed, Json { ignoreUnknownKeys = true }.decodeFromString(SharedState.serializer(), text))
+        assertEquals("how it went before: the limit's opens were gone", 0, naive.blocks.getValue("a1").opensPerDay)
+
+        val merged = merge(agreed, agreed, SharedState.fromServer(text, agreed, agreed))
+        val a1 = merged.blocks.getValue("a1")
+        assertEquals("renamed", a1.name)
+        assertEquals(3, a1.opensPerDay)
+        assertEquals(10, a1.openWaitS)
+        assertEquals(lock, a1.lock)
+        assertEquals(2, merged.allowance.getValue("a1").getValue("phone").opens)
+        assertEquals("a block missing from the map is still deleted", setOf("a1", "new"), merged.blocks.keys)
+        assertEquals("nothing to keep for a block it made", itsOwn, merged.blocks.getValue("new"))
+    }
+
+    @Test
+    fun withoutABaseWhatAnOlderDeviceLeftOutComesFromHere() {
+        val limit = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000).copy(opensPerDay = 3, editedAtWall = t)
+        val here = SharedState(blocks = mapOf("a1" to limit))
+        val text = asAnOlderDeviceWritesIt(SharedState(blocks = mapOf("a1" to limit.copy(name = "renamed", editedAtWall = t + 1))), setOf("opensPerDay"))
+        val merged = merge(null, here, SharedState.fromServer(text, null, here))
+        assertEquals("renamed", merged.blocks.getValue("a1").name)
+        assertEquals(3, merged.blocks.getValue("a1").opensPerDay)
+    }
+
+    @Test
+    fun anotherRecordUnderTheSameKeyKeepsNothingOfTheOld() {
+        val json = Json { encodeDefaults = true }
+        val agreed = SharedState(sessions = mapOf("c1" to session("c1", t).copy(selfPaced = true, usedMs = mapOf("phone" to 60_000L))))
+        fun older(s: UnlockSession): String {
+            val doc = json.encodeToJsonElement(SharedState.serializer(), SharedState(sessions = mapOf("c1" to s))).jsonObject
+            val sessions = JsonObject(doc.getValue("sessions").jsonObject.mapValues { JsonObject(it.value.jsonObject - setOf("selfPaced", "usedMs")) })
+            return JsonObject(doc + ("sessions" to sessions)).toString()
+        }
+        // The same unlock, written back by a device that doesn't know self-paced ones: still self-paced.
+        assertEquals(agreed.sessions, SharedState.fromServer(older(session("c1", t)), agreed, agreed).sessions)
+        // A new unlock it made: nothing of the old one.
+        val new = session("c1", t + 60 * 60_000)
+        assertEquals(new, SharedState.fromServer(older(new), agreed, agreed).sessions.getValue("c1"))
+    }
+
+    @Test
+    fun aCopyWithEveryFieldIsReadAsItIs() {
+        val json = Json { encodeDefaults = true }
+        val limit = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000).copy(opensPerDay = 3, editedAtWall = t)
+        val there = SharedState(blocks = mapOf("a1" to limit.copy(opensPerDay = 0, lock = null)))
+        val here = SharedState(blocks = mapOf("a1" to limit.copy(lock = BlockLock(t + DAY_MS, t))))
+        assertEquals(there, SharedState.fromServer(json.encodeToString(SharedState.serializer(), there), here, here))
     }
 
     @Test

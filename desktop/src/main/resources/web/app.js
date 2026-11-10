@@ -176,6 +176,8 @@ function limitHow(b) {
   const parts = [];
   if (b.allowanceMs > 0) parts.push(`${min(b.allowanceMs)} min a day`);
   if (b.rowMs > 0) parts.push(`at most ${min(b.rowMs)} min in a row, then ${min(b.rowBreakMs)} min off`);
+  if (b.opensPerDay > 0) parts.push(`${b.opensUsed} of ${b.opensPerDay} opens used today`);
+  if (b.openWaitS > 0) parts.push(`a ${b.openWaitS} s pause before each open`);
   const limit = `${parts.join(", ")}${parts.length ? "; " : ""}${b.perDevice ? "each device has its own" : "phone and laptop share it"}.`;
   if (b.mode !== "HABIT") return limit;
   return `${limit} ${b.limitFirst ? "The limit comes first, then the habit opens it." : "The habit comes first, then the limit holds."}`;
@@ -294,7 +296,7 @@ async function openForm(b) {
   cancelGuard();
   message = "";
   const hours = { days: [1, 2, 3, 4, 5, 6, 7], startMin: 540, endMin: 1020, moreWindows: [] };
-  const base = { limitOn: false, habitFirst: false, hoursOn: false, hoursAllDay: false, hours, checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: true, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
+  const base = { limitOn: false, habitFirst: false, hoursOn: false, hoursAllDay: false, hours, checklist: true, timer: false, combineOr: false, timerMin: 30, unlockMin: 5, selfPaced: true, devices: "BOTH", dailyOn: true, allowanceMin: 30, rowOn: false, rowMin: 15, rowBreakMin: 15, opensOn: false, opensPerDay: 3, openWaitOn: false, openWaitS: 5, perDevice: false, lockdownMin: 60, days: [1, 2, 3, 4, 5], startMin: 540, endMin: 1020, moreWindows: [] };
   form = b
     ? {
       blockId: b.id,
@@ -322,6 +324,10 @@ async function openForm(b) {
         rowOn: b.rowMs > 0,
         rowMin: min(b.rowMs) || 15,
         rowBreakMin: min(b.rowBreakMs) || 15,
+        opensOn: b.opensPerDay > 0,
+        opensPerDay: b.opensPerDay || 3,
+        openWaitOn: b.openWaitS > 0,
+        openWaitS: b.openWaitS || 5,
         perDevice: b.perDevice,
         lockdownMin: min(b.lockdownMs) || 60,
         days: b.scheduleDays.length ? b.scheduleDays : base.days,
@@ -442,13 +448,17 @@ function buildForm(b) {
     check("rowOn", "At most so long in a row"),
     d.rowOn && h("div", { class: "row" }, field("Minutes in a row", number("rowMin")), field("Then a break of (minutes)", number("rowBreakMin"))),
     d.rowOn && h("div", { class: "note" }, "Resting that long on your own counts as the break."),
+    check("opensOn", "At most so many opens a day"),
+    d.opensOn && field("Opens a day", number("opensPerDay"), "Coming back within a minute is the same open. The last one lasts until you leave it."),
+    check("openWaitOn", "A pause before it opens"),
+    d.openWaitOn && field("Seconds", number("openWaitS"), "The block page stays up this long, then the site opens by itself. Websites only here: a laptop app can't wait."),
     field("Phone and laptop", seg("perDevice", [[false, "Share one limit"], [true, "Each has its own"]])),
   ];
   const limitSet = mode === "ALLOWANCE" ? h("fieldset", {}, h("legend", {}, "Daily limit"), limitFields())
     : mode === "HABIT" && h("fieldset", {}, h("legend", {}, "Daily limit"),
       check("limitOn", "Limit it too"),
       d.limitOn && limitFields(),
-      d.limitOn && d.dailyOn && field("What comes first", seg("habitFirst", [[false, "Limit first"], [true, "Habit first"]]),
+      d.limitOn && (d.dailyOn || d.opensOn) && field("What comes first", seg("habitFirst", [[false, "Limit first"], [true, "Habit first"]]),
         d.habitFirst ? "Blocked until the habit is done. The limit still holds after that." : "Open for the limit's minutes each day. After that, the habit opens it again."));
   const hoursSet = (mode === "HABIT" || mode === "ALLOWANCE") && h("fieldset", {}, h("legend", {}, "Blocked hours"),
     check("hoursOn", "Block it outright at set times"),
@@ -561,6 +571,8 @@ async function submitForm() {
     allowanceMin: d.allowanceMin,
     rowMin: d.rowOn ? d.rowMin : 0,
     rowBreakMin: d.rowBreakMin,
+    opensPerDay: d.opensOn ? d.opensPerDay : 0,
+    openWaitS: d.openWaitOn ? d.openWaitS : 0,
     perDevice: d.perDevice,
     lockdownMin: d.lockdownMin,
     days: d.days,
@@ -712,11 +724,15 @@ function alerts() {
   const out = [];
   if (failed) out.push(["The laptop app isn't answering", "Is xrnrule-desktop running? systemctl --user status xrnrule-desktop"]);
   if (!state) return out;
-  if (state.kwinSeenAgoMs == null) out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
+  if (state.kwinSeenAgoMs == null) {
+    if (state.windowSystem === "hyprland") out.push(["Desktop apps aren't being watched", "Hyprland's sockets haven't answered. Is HYPRLAND_INSTANCE_SIGNATURE in the service's environment? systemctl --user show-environment"]);
+    else out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
+  }
   if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering. Turn it on in the browser's extensions page."]);
   if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow the xrnrule extension in incognito on the browser's extensions page."]);
   if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
+  if (state.phoneQuiet) out.push(["The phone has gone quiet", state.phoneQuiet]);
   if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnrule/desktop.properties to share blocks and unlocks with the phone.`]);
   return out;
 }
@@ -756,7 +772,7 @@ function render() {
     }
     hero = h("section", { class: "hero" + (still ? "" : " open") },
       blockedSite && !blockedApp && siteIcon(blockedSite),
-      h("h2", {}, still ? `${what} is blocked` : `${what} is open`),
+      h("h2", {}, s?.opening ? `${what} is opening` : still ? `${what} is blocked` : `${what} is open`),
       still && s?.back && h("div", { class: "back" }, s.back),
       h("p", {}, still ? s?.why ?? "xrnrule is keeping this closed." : blockedApp ? "You can start it again." : "Go back to it."),
       still && timer && h("p", { class: "note" }, "A timer counts while you wait on this page."));
@@ -766,7 +782,7 @@ function render() {
     // Time holds these, so they have nothing to do here: only a habit gets its card.
     rules = blocks.filter((b) => b.reason !== "HABIT").map(ruleLine);
     blocks = blocks.filter((b) => b.reason === "HABIT");
-    document.title = still ? `${what} is blocked · xrnrule` : "xrnrule";
+    document.title = s?.opening ? `${what} is opening · xrnrule` : still ? `${what} is blocked · xrnrule` : "xrnrule";
   }
 
   const pause = !state.pauseRemainingMs && !state.breakLifts ? null : state.pauseRemainingMs > 0

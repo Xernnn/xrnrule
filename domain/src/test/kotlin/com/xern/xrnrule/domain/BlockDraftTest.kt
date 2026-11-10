@@ -2,6 +2,7 @@ package com.xern.xrnrule.domain
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -284,5 +285,33 @@ class BlockDraftTest {
         assertFalse(BlockDraft.of(timer, timerItems, habits).selfPaced)
         val (paced, pacedItems) = made(habitBlock.copy(selfPaced = true))
         assertTrue(BlockDraft.of(paced, pacedItems, habits).selfPaced)
+    }
+
+    @Test
+    fun opensAndThePauseGoOnALimitAndComeBack() {
+        val draft = BlockDraft(name = "x", apps = setOf("a"), limitOn = true, dailyOn = false, opensOn = true, opensPerDay = 2, openWaitS = 5)
+        assertNull(draft.unlockHint())
+        val block = draft.toBlock("b", "x")
+        assertEquals(2, block.opensPerDay)
+        assertEquals(5, block.openWaitS)
+        assertEquals(0L, block.dailyAllowanceMs)
+
+        val back = BlockDraft.of(block, emptyList(), emptyList())
+        assertTrue(back.opensOn)
+        assertEquals(2, back.opensPerDay)
+        assertEquals(5, back.openWaitS)
+        assertFalse(back.dailyOn)
+    }
+
+    @Test
+    fun aLimitWithNothingToCountIsNotReady() {
+        assertNotNull(BlockDraft(name = "x", apps = setOf("a"), limitOn = true, dailyOn = false).unlockHint())
+    }
+
+    @Test
+    fun droppingTheLimitDropsOpensAndThePause() {
+        val habit = BlockDraft(name = "x", apps = setOf("a"), timerOn = true, opensOn = true, openWaitS = 5).toBlock("b", "x")
+        assertEquals(0, habit.opensPerDay)
+        assertEquals(0, habit.openWaitS)
     }
 }

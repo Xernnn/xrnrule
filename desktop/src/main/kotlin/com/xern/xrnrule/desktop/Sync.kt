@@ -75,7 +75,7 @@ class SharedSyncClient(
     private val scope: CoroutineScope,
 ) {
     private val http = Http(config.user, config.password)
-    private val baseFile = File(config.dataDir, "shared-base.json")
+    private val baseFile = File(config.dataDir, BASE_FILE)
     private val eventsSentFile = File(config.dataDir, "events-sent")
     private var telemetrySizeSent = -1L
     private val requests = Channel<Unit>(Channel.CONFLATED)
@@ -87,11 +87,27 @@ class SharedSyncClient(
     var lastContactWall: Long? = null
         private set
 
+    /** The phone's last check-in as the server saw it, and when the server was asked. */
+    @Volatile
+    private var phoneSeen: Pair<Long?, Long>? = null
+
+    /** How long the phone has been quiet, or null while it's fine or nobody can tell. */
+    fun phoneQuietMs(nowWall: Long): Long? = phoneSeen?.let { (seen, asked) -> PhoneWatch.quietMs(seen, asked, nowWall) }
+
     @Serializable
     private data class Base(val etag: String, val state: SharedState)
 
     fun start() {
         if (!config.syncConfigured) return
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                runCatching {
+                    val r = http.send("${config.ruleUrl}/devices")
+                    if (r.statusCode() == 200) phoneSeen = PhoneWatch.seen(r.body()) to System.currentTimeMillis()
+                }
+                delay(PhoneWatch.CHECK_MS)
+            }
+        }
         scope.launch(Dispatchers.IO) {
             for (r in requests) {
                 try {
@@ -147,6 +163,11 @@ class SharedSyncClient(
         requests.trySend(Unit)
     }
 
+    companion object {
+        /** In the data dir, beside the world (see [FilePersist]). */
+        const val BASE_FILE = "shared-base.json"
+    }
+
     private suspend fun round(): String {
         repeat(4) {
             val base = loadBase()
@@ -158,12 +179,14 @@ class SharedSyncClient(
             if (got.statusCode() == 304) return "Up to date"
             check(got.statusCode() == 200) { "server answered ${got.statusCode()}" }
             val etag = got.headers().firstValue("ETag").orElse("")
-            val remote = json.decodeFromString(SharedState.serializer(), got.body())
             val against = SharedState.baseFor(base?.state, base?.etag, etag) // I45
+            // What a device on an older xrnrule left out of the copy, it didn't change (§2.4).
+            val remote = SharedState.fromServer(got.body(), against, local, json)
             val world = store.dispatchAndGet(BlockEvent.SharedStateMerged(against, remote))
             saveBase(Base(etag, remote)) // it's all in here now; a retry mustn't undo the other side
             val merged = SharedState.of(world)
-            if (merged == remote) return "Up to date"
+            // Compared with the copy as it is, so the server gets back what such a device left out.
+            if (merged == json.decodeFromString(SharedState.serializer(), got.body())) return "Up to date"
             val put = withContext(Dispatchers.IO) {
                 http.send("${config.ruleUrl}/state", "PUT", json.encodeToString(SharedState.serializer(), merged), mapOf("If-Match" to etag))
             }

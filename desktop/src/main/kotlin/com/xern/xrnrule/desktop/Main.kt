@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * xrnrule on the laptop: the same engine as the phone, enforcing the same shared blocks on
- * desktop apps (KWin) and websites (the browser extension). See `desktop/README.md`.
+ * desktop apps (KWin or Hyprland) and websites (the browser extension). See `desktop/README.md`.
  */
 fun main() = runBlocking {
     val config = Config.load()
@@ -31,7 +31,7 @@ fun main() = runBlocking {
     runCatching { Files.setPosixFilePermissions(config.dataDir.toPath(), PosixFilePermissions.fromString("rwx------")) }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val clock = DesktopClock()
-    val persist = FilePersist(File(config.dataDir, "world.json"), clock)
+    val persist = FilePersist(File(config.dataDir, "world.json"), clock, File(config.dataDir, SharedSyncClient.BASE_FILE))
     val telemetry = FileTelemetry(File(config.dataDir, "telemetry.log")).also { it.prune(clock.nowWallMs()) }
     val store = Store(BlockEngine(), persist, clock, scope, telemetry)
     if (store.world.value.deviceId.isEmpty()) {
@@ -44,13 +44,16 @@ fun main() = runBlocking {
     val enforcer = Enforcer(store, notifier, config)
     val foreground = Foreground(store, File(config.dataDir, "browsers.txt"))
     enforcer.foreground = foreground
+    val windows = WindowSystem.detect()
+    enforcer.windowSystem = windows
     store.shield = enforcer
     val shared = SharedSyncClient(config, store, telemetry, scope)
     val habits = HabitClient(config, store, scope)
 
-    if (KWin.export(enforcer)) KWin.reloadScript() // our script lists the open windows again
-    LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope), telemetry).start()
-    store.dispatch(BlockEvent.BootOrColdStart) // I8, and the first shield plan
+    store.coldStart {
+        windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
+        LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope), telemetry).start()
+    }
     shared.start()
     habits.start()
     Runtime.getRuntime().addShutdownHook(Thread { persist.flush() })
@@ -80,6 +83,7 @@ fun main() = runBlocking {
     var extensionAlerted = false
     var syncFailingSince: Long? = null
     var syncAlerted = false
+    var phoneAlerted = false
     while (true) {
         val now = clock.nowMonotonicMs()
         if (now - lastMono > 10_000) {
@@ -88,7 +92,7 @@ fun main() = runBlocking {
         }
         lastMono = now
         if (seconds % 3 == 0) {
-            val locked = withContext(Dispatchers.IO) { KWin.screenLocked() }
+            val locked = withContext(Dispatchers.IO) { windows.screenLocked() }
             if (locked != foreground.locked) {
                 foreground.locked = locked
                 if (locked) persist.flush()
@@ -100,7 +104,7 @@ fun main() = runBlocking {
         if (seconds % 5 == 0 && ExtensionApi.otherBrowsersMatter(world)) {
             foreground.browsers.toClose(now)?.let { app ->
                 // I49: a browser that can't block sites, or the extension turned off in this one.
-                withContext(Dispatchers.IO) { KWin.closeWindowsOf(setOf(app)) }
+                withContext(Dispatchers.IO) { windows.closeWindowsOf(setOf(app)) }
                 notifier.notify("${DesktopApps.name(app)} closed", "Your site blocks only work in a browser with the xrnrule extension.", urgent = true)
             }
         }
@@ -124,6 +128,11 @@ fun main() = runBlocking {
                 )
             }
             syncAlerted = stuck
+
+            // The phone can't report that it has stopped, but the laptop can see it go quiet.
+            val quiet = shared.phoneQuietMs(wall)
+            if (quiet != null && !phoneAlerted) notifier.notify("The phone has gone quiet", PhoneWatch.text(quiet))
+            phoneAlerted = quiet != null
         }
         seconds++
         delay(1_000)

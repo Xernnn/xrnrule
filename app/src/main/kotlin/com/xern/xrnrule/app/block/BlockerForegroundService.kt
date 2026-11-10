@@ -16,6 +16,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.xern.xrnrule.app.XrnruleApp
+import com.xern.xrnrule.app.data.AppContainer
+import com.xern.xrnrule.app.data.OemAutostart
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.isGranted
 import android.os.SystemClock
@@ -42,6 +44,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Owns the Phase A core loop: detect the foreground app -> feed the engine -> (re)render the
@@ -69,6 +72,10 @@ class BlockerForegroundService : LifecycleService() {
     private var warnedSession: Pair<String, Long>? = null
     private var lastHealth: String? = null
 
+    /** The cold-start rebuild is done: what accrues time may reach the engine (see onCreate). */
+    @Volatile
+    private var rebuilt = false
+
     /** A browser in front, and since when (`elapsedRealtime`): the extension should be speaking. */
     @Volatile
     private var browserInFront: Pair<String, Long>? = null
@@ -92,12 +99,17 @@ class BlockerForegroundService : LifecycleService() {
                     container.shared.request()
                 }
                 Intent.ACTION_SCREEN_ON -> if (!keyguardLocked()) awake.value = true
-                // A hand-set clock change: book it before anything reads the time again.
+                // A hand-set clock change: book it before anything reads the time again (the
+                // rebuild reads it too, so nothing is lost by waiting for it, see onCreate).
                 Intent.ACTION_TIME_CHANGED -> {
                     container.clockGuard.check()
-                    container.store.dispatch(BlockEvent.Tick)
+                    if (rebuilt) container.store.dispatch(BlockEvent.Tick)
                 }
-                Intent.ACTION_TIMEZONE_CHANGED -> container.store.dispatch(BlockEvent.Tick)
+                // A zone the phone set itself is taken; one picked by hand isn't (ZoneGuard).
+                Intent.ACTION_TIMEZONE_CHANGED -> {
+                    container.clockGuard.check()
+                    if (rebuilt) container.store.dispatch(BlockEvent.Tick)
+                }
             }
         }
     }
@@ -139,32 +151,26 @@ class BlockerForegroundService : LifecycleService() {
         val detector = UsageStatsDetector(this) {
             container.store.world.value.blocks.any { it.enabled }
         }
+        usageDetector = detector
 
-        // 1. foreground app (+ the site the browser extension reports) -> engine and the
-        //    site-time log. The detector only polls while the screen is on and unlocked.
+        // 1. cold-start rebuild (I8), done before anything feeds the engine (see WorldStore.coldStart);
+        // 2. then what does: the app in front (+ the site the browser extension reports), the sites
+        //    playing out of sight (I47), and the tick;
+        // 3. then catch up on what the home server got while we were down.
         lifecycleScope.launch {
-            usageDetector = detector
-            val detected = awake.flatMapLatest { isAwake -> if (isAwake) detector.foregroundPackage else flowOf(null) }
-            combine(detected, SiteSightings.current, awake) { pkg, host, isAwake ->
-                val browser = pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
-                if (!isAwake) Foreground(null, null) else Foreground(pkg, host?.takeIf { browser != null })
-            }.distinctUntilChanged().collect { fg ->
-                foreground.value = fg
-                val browser = fg.pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
-                if (browser == null) browserInFront = null
-                else if (browserInFront?.first != browser) browserInFront = browser to SystemClock.elapsedRealtime()
-                container.siteUsage.onSite(fg.site?.let(Sites::hostOf))
-                container.store.dispatch(BlockEvent.ForegroundChanged(fg.pkg, fg.site))
+            withContext(Dispatchers.Default) {
+                container.store.coldStart {
+                    rebuilt = true
+                    lifecycleScope.launch { followForeground(container, detector) }
+                    lifecycleScope.launch {
+                        SiteSightings.playing.collect { container.store.dispatch(BlockEvent.BackgroundChanged(it)) }
+                    }
+                    lifecycleScope.launch { tick(container) }
+                }
             }
+            container.habits.request()
+            container.shared.request()
         }
-        lifecycleScope.launch {
-            SiteSightings.playing.collect { container.store.dispatch(BlockEvent.BackgroundChanged(it)) } // I47
-        }
-
-        // 2. cold-start rebuild (I8), then catch up on what the home server got while we were down
-        container.store.dispatch(BlockEvent.BootOrColdStart)
-        container.habits.request()
-        container.shared.request()
         lifecycleScope.launch(Dispatchers.IO) { container.telemetry.prune(container.clock.nowWallMs()) }
         container.unreadableWorldCopy?.let { copy ->
             notifications.alert(
@@ -172,36 +178,6 @@ class BlockerForegroundService : LifecycleService() {
                 "Couldn't read your blocks",
                 "xrnrule started empty. The unreadable file was kept as ${copy.name}.",
             )
-        }
-
-        // 3. ~1s tick while anything time-based is live and the screen is on (nothing is shown
-        //    while it's off, and the first event after waking catches up); book website time
-        //    every 30 s; work habit items out again when a new habit day starts (I23); check every
-        //    5 s that blocking still works.
-        lifecycleScope.launch {
-            var seconds = 0
-            var habitDay = container.store.world.value.habitDay(container.clock)
-            while (true) {
-                // Asleep unless a page is playing: its time still counts (I47).
-                if (!awake.value) combine(awake, SiteSightings.playing) { on, sites -> on || sites.isNotEmpty() }.first { it }
-                if (needsTicking(container.store.world.value)) {
-                    container.store.dispatch(BlockEvent.Tick)
-                }
-                if (seconds % 30 == 0) {
-                    container.siteUsage.flush()
-                    container.clockGuard.check()
-                }
-                if (seconds % 5 == 0) checkHealth(container.store.world.value)
-                updateCornerClock()
-                seconds++
-                val today = container.store.world.value.habitDay(container.clock)
-                if (today != habitDay) {
-                    habitDay = today
-                    container.store.dispatch(BlockEvent.Tick)
-                    container.habits.request()
-                }
-                delay(1_000)
-            }
         }
 
         // 4. re-render the overlay (and the hardcore Settings guard) whenever the world or the
@@ -232,6 +208,55 @@ class BlockerForegroundService : LifecycleService() {
                     container.habits.watch { overlay.showsHabitItem }
                 }
             }
+        }
+    }
+
+    /** The app in front, and the site when it's a browser, to the engine and the site-time log. The detector only polls while the screen is on and unlocked. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun followForeground(container: AppContainer, detector: UsageStatsDetector) {
+        val detected = awake.flatMapLatest { isAwake -> if (isAwake) detector.foregroundPackage else flowOf(null) }
+        combine(detected, SiteSightings.current, awake) { pkg, host, isAwake ->
+            val browser = pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
+            if (!isAwake) Foreground(null, null) else Foreground(pkg, host?.takeIf { browser != null })
+        }.distinctUntilChanged().collect { fg ->
+            foreground.value = fg
+            val browser = fg.pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
+            if (browser == null) browserInFront = null
+            else if (browserInFront?.first != browser) browserInFront = browser to SystemClock.elapsedRealtime()
+            container.siteUsage.onSite(fg.site?.let(Sites::hostOf))
+            container.store.dispatch(BlockEvent.ForegroundChanged(fg.pkg, fg.site))
+        }
+    }
+
+    /**
+     * ~1s tick while anything time-based is live and the screen is on (nothing is shown
+     * while it's off, and the first event after waking catches up); book website time
+     * every 30 s; work habit items out again when a new habit day starts (I23); check every
+     * 5 s that blocking still works.
+     */
+    private suspend fun tick(container: AppContainer) {
+        var seconds = 0
+        var habitDay = container.store.world.value.habitDay(container.clock)
+        while (true) {
+            // Asleep unless a page is playing: its time still counts (I47).
+            if (!awake.value) combine(awake, SiteSightings.playing) { on, sites -> on || sites.isNotEmpty() }.first { it }
+            if (needsTicking(container.store.world.value)) {
+                container.store.dispatch(BlockEvent.Tick)
+            }
+            if (seconds % 30 == 0) {
+                container.siteUsage.flush()
+                container.clockGuard.check()
+            }
+            if (seconds % 5 == 0) checkHealth(container.store.world.value)
+            updateCornerClock()
+            seconds++
+            val today = container.store.world.value.habitDay(container.clock)
+            if (today != habitDay) {
+                habitDay = today
+                container.store.dispatch(BlockEvent.Tick)
+                container.habits.request()
+            }
+            delay(1_000)
         }
     }
 
@@ -298,7 +323,9 @@ class BlockerForegroundService : LifecycleService() {
         container.loop.check()
         val loopStuck = container.loop.serverFailingSince.value?.let { now - it >= SYNC_ALERT_MS } == true
         val loopUnreachable = loopStuck && container.loop.unreachable.value
-        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck|$loopUnreachable"
+        // The phone turns this off at every install, and nothing else shows until a kill goes unrepaired.
+        val autostartOff = world.blocks.isNotEmpty() && OemAutostart.enabled(this) == false
+        val health = "${missing.joinToString()}|$sitesOff|$silentBrowser|$blocksStuck|$habitsStuck|$loopStuck|$loopUnreachable|$autostartOff"
         if (health == lastHealth) return
         lastHealth = health
 
@@ -319,6 +346,17 @@ class BlockerForegroundService : LifecycleService() {
             )
         } else {
             notifications.cancel(Notifications.ALERT_SYNC_OFF)
+        }
+
+        if (autostartOff) {
+            notifications.alert(
+                Notifications.ALERT_AUTOSTART_OFF,
+                "Autostart is off",
+                "The phone turned it off, so xrnrule may not come back if it's stopped. Tap to turn it on.",
+                tap = OemAutostart.fixIt(this),
+            )
+        } else {
+            notifications.cancel(Notifications.ALERT_AUTOSTART_OFF)
         }
 
         if (missing.isEmpty()) {

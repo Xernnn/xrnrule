@@ -37,3 +37,6 @@ __pycache__/
 
 # Packed browser extension (scripts/pack-extension.sh)
 dist/
+
+# The MiSans download the fonts in app/src/main/res/font were taken from
+MiSans_Latin.zip

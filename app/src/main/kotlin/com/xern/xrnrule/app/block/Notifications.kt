@@ -177,6 +177,7 @@ class Notifications(private val context: Context) {
         const val ALERT_WORLD_UNREADABLE = 14
         const val ALERT_SYNC_OFF = 15
         const val ALERT_UPDATE = 16
+        const val ALERT_AUTOSTART_OFF = 17
         private const val CHANNEL_STATUS = "enforcement"
         private const val CHANNEL_ALERTS = "alerts"
     }

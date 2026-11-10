@@ -79,6 +79,7 @@ object BlockTexts {
         when (engine.blockReason(world, block, clock)) {
             null, BlockReason.HABIT -> return null
             BlockReason.LOCKDOWN -> return clock.nowWallMs() + engine.lockdownRemainingMs(world, block.id, clock)
+            BlockReason.WAIT -> return clock.nowWallMs() + engine.openWaitRemainingMs(world, block.id, clock)
             else -> Unit
         }
         val breakEnd = engine.rowBreakRemainingMs(world, block, clock).takeIf { it > 0 }?.let { clock.nowWallMs() + it }
@@ -109,11 +110,33 @@ object BlockTexts {
             BlockReason.LOCKDOWN -> "Locked down"
             BlockReason.HOURS -> "Blocked hours"
             BlockReason.BREAK -> "A break after ${duration(block.sessionMs)} in a row"
-            BlockReason.LIMIT -> if (block.dailyAllowanceMs > 0) "Today's ${duration(block.dailyAllowanceMs)} is used up" else "Today's limit is used up"
+            BlockReason.LIMIT -> when {
+                engine.dailyLimitReached(world, block, clock) -> "Today's ${duration(block.dailyAllowanceMs)} is used up"
+                engine.opensReached(world, block, clock) ->
+                    if (block.opensPerDay == 1) "Today's open is used up" else "Today's ${block.opensPerDay} opens are used up"
+                else -> "Today's limit is used up"
+            }
+            BlockReason.WAIT -> return Back(
+                "Opens in ${waitSeconds(engine, world, block, clock)} s",
+                limitLeft(engine, world, block, clock) ?: "A moment to change your mind",
+            )
         }
         val freeAt = freeAtWall(engine, world, block, clock) ?: return Back("Blocked for now", why)
         return Back(backAt(freeAt, clock), "$why · ${duration(freeAt - clock.nowWallMs())} to go")
     }
+
+    private fun waitSeconds(engine: BlockEngine, world: World, block: Block, clock: Clock) =
+        ((engine.openWaitRemainingMs(world, block.id, clock) + 999) / 1000).coerceAtLeast(1)
+
+    /** What's left of [block]'s limit today, or null if it counts neither minutes nor opens. */
+    fun limitLeft(engine: BlockEngine, world: World, block: Block, clock: Clock): String? = listOfNotNull(
+        block.dailyAllowanceMs.takeIf { it > 0 }?.let {
+            "${duration((it - engine.allowanceUsedMs(world, block, clock)).coerceAtLeast(0))} left today"
+        },
+        block.opensPerDay.takeIf { it > 0 }?.let {
+            "${(it - engine.opensUsed(world, block, clock)).coerceAtLeast(0)} of $it opens left"
+        },
+    ).joinToString(" · ").ifEmpty { null }
 
     /** The line under a block screen's headline: why it's held, or what a habit block asks for. */
     fun why(back: Back?, lead: Block?): String? = back?.why ?: lead?.let {
@@ -170,9 +193,12 @@ object BlockTexts {
             BlockReason.HOURS -> blocked(until()?.let { "Blocked until $it" } ?: "Blocked")
             BlockReason.BREAK -> blocked("Resting · open in ${duration(engine.rowBreakRemainingMs(world, block, clock))}")
             BlockReason.LIMIT -> blocked("Limit reached · back tomorrow")
+            BlockReason.WAIT -> open("Opening in ${waitSeconds(engine, world, block, clock)} s")
             BlockReason.HABIT -> when {
                 block.state == BlockState.EARNED -> Headline("Ready to open", Tone.READY)
-                block.hasLimit && block.limitComesFirst -> blocked("Time's up · do the habit to open it")
+                block.hasLimit && block.limitComesFirst && engine.dailyLimitReached(world, block, clock) ->
+                    blocked("Time's up · do the habit to open it")
+                block.hasLimit && block.limitComesFirst -> blocked("Opens used up · do the habit to open it")
                 else -> blocked("Blocked until you do the habit")
             }
             null -> openHeadline(engine, world, block, clock, open)
@@ -190,8 +216,7 @@ object BlockTexts {
             bought > 0 -> open("Open · ${duration(bought)} bought")
             session != null && session.selfPaced -> open("Open · ${duration(session.leftMs(clock))} of use left")
             session != null -> open("Open · ${duration(session.leftMs(clock))} left")
-            block.hasLimit && block.dailyAllowanceMs > 0 ->
-                open("Open · ${duration((block.dailyAllowanceMs - engine.allowanceUsedMs(world, block, clock)).coerceAtLeast(0))} left today")
+            block.hasLimit && limitLeft(engine, world, block, clock) != null -> open("Open · ${limitLeft(engine, world, block, clock)}")
             block.hasRowRule -> open("Open · ${duration((block.sessionMs - engine.rowUsedMs(world, block, clock)).coerceAtLeast(0))} left in a row")
             else -> nextHoursAtWall(block, clock)?.let { open("Open · blocks at ${clockTime(it, clock)}") } ?: open("Open")
         }

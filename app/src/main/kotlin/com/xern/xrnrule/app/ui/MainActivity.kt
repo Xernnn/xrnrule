@@ -327,7 +327,7 @@ private fun XrnruleScreens(container: AppContainer) {
                 FocusScreen(store, entry.arguments?.getString("habitId").orEmpty(), onClose = { nav.leave(entry) })
             }
             composable(Tab.Insights.route) {
-                InsightsScreen(world, container.store, container.websites, container.siteUsage, container.telemetry)
+                InsightsScreen(world, container.store, container.websites, container.siteUsage, container.telemetry, container.shared)
             }
             composable(Tab.Settings.route) {
                 SettingsScreen(world, settingsDeps, onOpen = { nav.navigate("settings/${it.name}") })

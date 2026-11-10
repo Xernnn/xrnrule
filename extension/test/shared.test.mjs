@@ -26,6 +26,25 @@ test("blockedBy honours exceptions and subdomains", () => {
   assert.equal(X.blockedBy(null, "reddit.com"), null);
 });
 
+test("a minute without xrnrule blocks every rule's site and still what it said was blocked", () => {
+  const rules = {
+    v: "1",
+    // A running lockdown on reddit.com, which an xrnrule before the fix left out of watched.
+    blocked: [{ domain: "reddit.com", except: [] }, { domain: "youtube.com", except: [] }],
+    watched: [{ domain: "youtube.com", except: ["music.youtube.com"] }, { domain: "x.com", except: [] }],
+  };
+  const closed = X.failClosed(rules);
+  assert.deepEqual([...closed.blocked].map((r) => r.domain), ["reddit.com", "youtube.com", "x.com"]);
+  assert.ok(X.blockedBy(closed, "old.reddit.com"));
+  assert.ok(X.blockedBy(closed, "x.com"));
+  // An exception holds only where both lists give it.
+  assert.ok(X.blockedBy(closed, "music.youtube.com"));
+  assert.equal(closed.v, "1");
+  // An xrnrule that sends no watched list: what it said was blocked.
+  assert.deepEqual(JSON.parse(JSON.stringify(X.failClosed({ blocked: [{ domain: "a.com" }] }).blocked)), [{ domain: "a.com", except: [] }]);
+  assert.equal(X.failClosed(null), null);
+});
+
 test("locationOf keeps the path, without query, case or trailing slash", () => {
   assert.equal(X.locationOf("https://www.YouTube.com/Shorts/?x=1#y"), "youtube.com/shorts");
   assert.equal(X.locationOf("https://m.youtube.com/watch?v=1"), "m.youtube.com/watch");

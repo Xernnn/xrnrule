@@ -169,11 +169,25 @@ class BlockFormsTest {
         // No daily limit, only the row rule; but not neither.
         val rowOnly = ok(BlockForms.create(World(), Form(name = "X", mode = BlockMode.ALLOWANCE, sites = listOf("x.com"), dailyOn = false, rowMin = 20), clock))
         assertEquals(0L, rowOnly.block.dailyAllowanceMs)
-        assertEquals("Set minutes a day, minutes in a row, or both", reason(BlockForms.create(World(), Form(name = "X", mode = BlockMode.ALLOWANCE, sites = listOf("x.com"), dailyOn = false), clock)))
+        assertEquals("Set minutes a day, minutes in a row, or opens a day", reason(BlockForms.create(World(), Form(name = "X", mode = BlockMode.ALLOWANCE, sites = listOf("x.com"), dailyOn = false), clock)))
 
         // Turning the row rule off loosens the block.
         val edited = ok(BlockForms.edit(r.world, Form(id = r.block.id, name = "YouTube", sites = listOf("youtube.com"), exceptSites = listOf("music.youtube.com"), allowanceMin = 30, rowMin = 0, perDevice = true)))
         assertEquals(0L, edited.block.sessionMs)
+        assertTrue(BlockEdits.loosens(r.block, edited.block))
+    }
+
+    @Test
+    fun aLimitCanBeOpensAloneWithAPause_andLeavingItOutLoosens() {
+        val form = Form(name = "Insta", mode = BlockMode.ALLOWANCE, sites = listOf("instagram.com"), dailyOn = false, opensPerDay = 3, openWaitS = 5)
+        val r = ok(BlockForms.create(World(), form, clock))
+        assertEquals(3, r.block.opensPerDay)
+        assertEquals(5, r.block.openWaitS)
+        assertEquals(0L, r.block.dailyAllowanceMs)
+
+        val nothing = form.copy(opensPerDay = 0, openWaitS = 0)
+        assertTrue(reason(BlockForms.create(World(), nothing, clock)).startsWith("Set minutes a day"))
+        val edited = ok(BlockForms.edit(r.world, form.copy(id = r.block.id, openWaitS = 0)))
         assertTrue(BlockEdits.loosens(r.block, edited.block))
     }
 

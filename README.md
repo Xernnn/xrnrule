@@ -1,4 +1,8 @@
-# xrnrule
+<p align="center">
+  <img src="desktop/src/main/resources/web/icon.svg" width="72" height="72" alt="">
+</p>
+
+<h1 align="center">xrnrule</h1>
 
 Rules for your phone and your laptop. Distracting apps and websites stay behind a block until
 you've done a habit, used up today's minutes, or are inside the hours you set; then they open
@@ -28,7 +32,9 @@ youtube.com in both browsers and a laptop app. Each block is one of three kinds:
 1. **Earn it.** Blocked until you do the habit: a checklist, a timer (optionally counted in a
    *different* app, such as a reading app), or both. A checklist item can be linked to a habit
    in [xrnloops](#companion-app-xrnloops), so only a real tick there counts.
-2. **Limit.** N minutes a day, and/or "at most N minutes in a row, then a break". Phone and
+2. **Limit.** N minutes a day, N opens a day, and/or "at most N minutes in a row, then a break".
+   Coming back within a minute is the same open. Optionally a few seconds' pause before each
+   open, showing what's left; it opens by itself, and leaving first costs nothing. Phone and
    laptop share one limit, or each gets its own (a choice per block).
 3. **Set time.** Blocked on a weekly schedule (as many time windows as you like), or locked
    down right now for N minutes.
@@ -50,7 +56,7 @@ parts of a site alone (music.youtube.com under youtube.com).
   security apps) plus Device Admin anti-uninstall while a hardcore block is active.
 - **Hard to talk yourself out of.** Deleting a block or making one easier (including the
   buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the phone's
-  clock by hand doesn't reset limits or move schedules.
+  clock or time zone by hand doesn't reset limits or move schedules.
 - **Locks.** A block can be locked for 24 hours up to a year (its edit page): until then nothing
   that makes it easier to get past can change, on the phone or the laptop, whatever you wait or
   type. Bought minutes and the daily break don't get past it either, not even ones already
@@ -70,8 +76,10 @@ parts of a site alone (music.youtube.com under youtube.com).
   the Blocks tab say it's ready and take you to Settings → Updates, where it installs when you tap
   Install. See [Updates](#updates).
 - **Backup.** Export your blocks to a file and import them on a new install.
-- **Insights.** Per-app screen time, time per site, habits done, times blocked and your streak.
-- Built to survive reboots, process death and OEM battery killers.
+- **Insights.** Per-app screen time, time per site, habits done, times blocked on apps and sites
+  (the laptop's too, with sync on), minutes bought, breaks, emergency unlocks and your streak.
+- Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
+  turns its autostart off, which Xiaomi phones do at every install.
 
 ## The browser extension
 
@@ -97,6 +105,15 @@ it has nothing to go back to, so the rest of the browser stays yours.
 - **Laptop (Helium or another Chromium browser):** extensions page → Developer mode → Load
   unpacked → `extension/`. It reloads itself whenever that folder's `manifest.json` names a new
   version (a pull, or a release).
+- **Laptop (Zen, Firefox 140 or newer):** `about:debugging` → **This Firefox** → **Load Temporary
+  Add-on…** → `extension/manifest.json` (or the `.zip` from `scripts/pack-extension.sh`; Firefox
+  takes it as an `.xpi`). Firefox drops a temporary add-on when it closes; to keep it, sign the
+  zip with an unlisted upload to addons.mozilla.org, or, in a build that allows unsigned add-ons,
+  set `xpinstall.signatures.required` to `false` in `about:config` and install the file. If the
+  toolbar popup says xrnrule isn't allowed on websites, click **Allow on all sites** (Firefox can
+  withhold or revoke an extension's site access in `about:addons`). There is no self-update
+  there: a temporary add-on still reloads when its folder's version changes, an installed `.xpi`
+  updates by installing a newer one.
 - **Phone (Quetta):** open `https://<your server>/xrnrule/update/xrnrule.crx` in Quetta →
   **Download anyway** → **OK** (or hand the file to its extensions page: Developer mode → "(from
   .zip/.crx/.user.js)"). From then on it fetches each new version from your server by itself.
@@ -181,6 +198,7 @@ for Java 17 whatever the JDK) and the Android SDK (platform 35, build tools 36).
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
 ./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
 node --test extension/test             # the extension's helpers and its signed .crx
+scripts/smoke.sh                       # the block screen on an emulator of its own, end to end
 node scripts/release.mjs               # publish the extension and the app; see Updates
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
 ```
