@@ -35,7 +35,12 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
     var skewMs: Long = prefs.getLong(KEY_SKEW, 0)
         private set
 
-    private val zones = ZoneGuard(prefs.getString(KEY_ZONE, null)) { prefs.edit().putString(KEY_ZONE, it).apply() }
+    private val zones = ZoneGuard(prefs.getString(KEY_ZONE, null), prefs.getBoolean(KEY_ZONE_SET_ITSELF, false)) { zone, setItself ->
+        prefs.edit().putString(KEY_ZONE, zone).putBoolean(KEY_ZONE_SET_ITSELF, setItself).apply()
+    }
+
+    /** I54: the zone the phone set itself, shared so the laptop goes by it ([ZoneGuard.ownZone]). */
+    val ownZone: ZoneId? get() = zones.ownZone
 
     init {
         check()
@@ -84,6 +89,7 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
 
     private companion object {
         const val KEY_ZONE = "zone"
+        const val KEY_ZONE_SET_ITSELF = "zone_set_itself"
         const val KEY_SKEW = "skew"
         const val KEY_OFFSET = "offset"
         const val KEY_MONO = "mono"

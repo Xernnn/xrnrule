@@ -555,6 +555,14 @@ data class OpenRun(val lastInFrontWall: Long, val waitUntilMonotonic: Long? = nu
 data class LastBlocked(val target: String, val atWall: Long)
 
 /**
+ * I54: the time zone a device set itself (the phone, from the network or its location), as an
+ * IANA id, and when it took it. Shared, so the laptop, which has no zone set automatically,
+ * goes by the phone's.
+ */
+@Serializable
+data class DeviceZone(val zone: String, val atWall: Long)
+
+/**
  * The whole persisted world. `:app` loads it on boot and saves it back after every [Outcome]
  * (save must complete before the shield is touched — I7).
  */
@@ -588,6 +596,10 @@ data class World(
     val deviceKind: DeviceKind? = null,
     /** Other devices' ALLOWANCE use, block id -> device id -> use (I19, §2.4). */
     val otherAllowance: Map<String, Map<String, AllowanceUse>> = emptyMap(),
+    /** I54: the time zone this device set itself, shared under [deviceId]; only the phone has one. */
+    val ownZone: DeviceZone? = null,
+    /** I54: the zones other devices set themselves, by device id (§2.4). */
+    val otherZones: Map<String, DeviceZone> = emptyMap(),
     /** This device's run of use in a row, by block (I32). */
     val runs: Map<String, RunUse> = emptyMap(),
     /** Minutes bought past blocks, by block (I34). */

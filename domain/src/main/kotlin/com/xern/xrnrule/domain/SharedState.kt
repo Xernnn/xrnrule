@@ -41,6 +41,8 @@ data class SharedState(
     val overrideLog: Map<String, Long> = emptyMap(),
     /** I40: emergency unlocks, every one ever. */
     val emergencyLog: Map<String, Long> = emptyMap(),
+    /** I54: the time zone each device set itself, by device id; only the phone has one. */
+    val zones: Map<String, DeviceZone> = emptyMap(),
 ) {
     /**
      * This state without what moves while something is in use (ALLOWANCE use, I19; a self-paced
@@ -100,6 +102,7 @@ data class SharedState(
                 overrideEpochDay = world.overrideEpochDay,
                 overrideLog = world.overrideLog,
                 emergencyLog = world.emergencyLog,
+                zones = world.otherZones + listOfNotNull(world.ownZone?.takeIf { world.deviceId.isNotEmpty() }?.let { world.deviceId to it }),
             )
         }
 
@@ -336,6 +339,10 @@ data class SharedState(
                     else -> remote.overrideLog
                 },
                 emergencyLog = local.emergencyLog + remote.emergencyLog, // I40: only ever added to
+                // I54: each device writes only its own; never dropped, so a device off for a while keeps its zone.
+                zones = (local.zones.keys + remote.zones.keys).associateWith { device ->
+                    listOfNotNull(local.zones[device], remote.zones[device]).maxBy { it.atWall }
+                },
             )
         }
 

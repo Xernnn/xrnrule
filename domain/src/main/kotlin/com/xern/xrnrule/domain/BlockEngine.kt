@@ -1175,6 +1175,9 @@ class BlockEngine {
                 .mapValues { (_, byDevice) -> byDevice - world.deviceId }
                 .filterValues { it.isNotEmpty() },
             runs = runs,
+            // I54: this device's own zone is its to set; the server's copy only replaces one it lost.
+            ownZone = listOfNotNull(world.ownZone, shared.zones[world.deviceId]).maxByOrNull { it.atWall },
+            otherZones = shared.zones - world.deviceId,
         )
     }
 

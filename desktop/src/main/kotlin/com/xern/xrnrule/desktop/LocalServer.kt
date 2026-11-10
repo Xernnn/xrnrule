@@ -25,7 +25,6 @@ import com.xern.xrnrule.domain.appliesHere
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.time.Instant
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -266,7 +265,7 @@ class LocalServer(
     private fun lockedError(old: Block): String? {
         val current = store.world.value.block(old.id) ?: old
         if (!BlockEdits.locked(current, store.clock.nowWallMs())) return null
-        val until = LOCK_END.format(Instant.ofEpochMilli(current.lock!!.untilWall).atZone(ZoneId.systemDefault()))
+        val until = LOCK_END.format(Instant.ofEpochMilli(current.lock!!.untilWall).atZone(store.clock.zone()))
         return error("This block is locked until $until: nothing can make it easier before then, except an emergency unlock on the phone.")
     }
 
@@ -525,6 +524,8 @@ class LocalServer(
         val siteExceptions: Map<String, List<String>>,
         val appNames: Map<String, String>,
         val settings: UiSettings,
+        /** A clock or time zone set by hand, which blocks leave out (ClockGuard, I54). */
+        val clockNote: String? = null,
         val subject: UiSubject?,
     )
 
@@ -562,6 +563,7 @@ class LocalServer(
             appNames = appIds.associateWith(DesktopApps::name),
             settings = world.settings.let { UiSettings(it.overridePhrase, it.overrideWaitMs, it.overrideGrantMs, it.overridesPerDay, it.showClock, it.blockOtherBrowsers) },
             subject = if (app == null && site == null) null else subject(world, app, site?.let(Sites::normalizeTarget)),
+            clockNote = (clock as? ClockGuard)?.note(),
         )
     }
 

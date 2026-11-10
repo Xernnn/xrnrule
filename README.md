@@ -55,8 +55,9 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Hardcore mode** (sideload build). A password gate on Android Settings (and phone-maker
   security apps) plus Device Admin anti-uninstall while a hardcore block is active.
 - **Hard to talk yourself out of.** Deleting a block or making one easier (including the
-  buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the phone's
-  clock or time zone by hand doesn't reset limits or move schedules.
+  buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the clock or
+  time zone by hand, on the phone or the laptop, doesn't reset limits, move schedules or end a
+  lock. The laptop goes by the time zone the phone sets itself.
 - **Locks.** A block can be locked for 24 hours up to a year (its edit page): until then nothing
   that makes it easier to get past can change, on the phone or the laptop, whatever you wait or
   type. Bought minutes and the daily break don't get past it either, not even ones already

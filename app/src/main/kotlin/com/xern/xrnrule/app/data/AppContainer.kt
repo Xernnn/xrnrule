@@ -12,6 +12,7 @@ import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.withOwnZone
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +65,16 @@ class AppContainer(context: Context) {
 
     /** The fingerprint step in front of the app's screens. */
     val appLock = AppLock(context)
+
+    /**
+     * Books any clock or zone change ([ClockGuard.check]), then shares the zone the phone set
+     * itself, which the laptop goes by (I54). Call where the clock is checked.
+     */
+    fun checkClock() {
+        clockGuard.check()
+        val zone = clockGuard.ownZone ?: return
+        if (store.world.value.ownZone?.zone != zone.id) store.edit { it.withOwnZone(zone, clock.nowWallMs()) }
+    }
 
     init {
         // This install's name in the shared state (whose allowance use is whose, §2.4).
