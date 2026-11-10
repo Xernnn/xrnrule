@@ -24,7 +24,7 @@ android {
         applicationId = "com.xern.xrnrule"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
+        versionCode = 13
         versionName = "0.2.$versionCode"
     }
 
