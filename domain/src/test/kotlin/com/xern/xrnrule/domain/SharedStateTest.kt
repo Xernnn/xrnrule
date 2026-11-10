@@ -140,6 +140,65 @@ class SharedStateTest {
         assertEquals(60 * minutes, merge(agreed, unlockedHere, renamedThere).blocks.getValue("a1").dailyAllowanceMs)
     }
 
+    /** Block c1 with three to-dos, as both sides agreed, and the other side's lock set at t + 1 s. */
+    private inner class LockedChecklist {
+        val block = checklistBlock("c1").copy(editedAtWall = t, checklistEditedAtWall = t)
+        val todos = items("c1", 3)
+        val base = state(block, todos)
+        val lock = BlockLock(untilWall = t + 7 * DAY_MS, setAtWall = t + 1_000)
+        val lockedThere = state(block.copy(lock = lock, editedAtWall = t + 1_000), todos)
+
+        fun state(block: Block, items: List<ChecklistItem>) = SharedState(blocks = mapOf(block.id to block), items = items.associateBy { it.id })
+
+        /** This side, offline, with its checklist changed to [items] at [at]. */
+        fun here(items: List<ChecklistItem>, at: Long) = state(block.copy(checklistEditedAtWall = at), items)
+    }
+
+    @Test
+    fun items_aRemovalMadeUnawareOfALockIsRefused() {
+        with(LockedChecklist()) {
+            // Offline here, after the lock was set there: the hardest to-do deleted.
+            val removed = here(todos.take(2), at = t + 2_000)
+            for (merged in listOf(merge(base, removed, lockedThere), merge(base, lockedThere, removed))) {
+                assertEquals("the to-do is back", todos.map { it.id }.toSet(), merged.items.keys)
+                assertEquals(lock, merged.blocks.getValue("c1").lock)
+                assertEquals("the stamp of the change that stood", t, merged.blocks.getValue("c1").checklistEditedAtWall)
+            }
+
+            // Made before the lock, the same removal stands: that device's own check let it through.
+            val before = here(todos.take(2), at = t + 500)
+            assertEquals(todos.take(2).map { it.id }.toSet(), merge(base, before, lockedThere).items.keys)
+        }
+    }
+
+    @Test
+    fun items_whatARefusedSideTickedStillCounts() {
+        with(LockedChecklist()) {
+            // Two ticked here, then the third deleted, all offline: the ticks were use, not a change to the checklist.
+            val tickedAndRemoved = here(todos.take(2).map { it.copy(done = true) }, at = t + 2_000)
+            val merged = merge(base, tickedAndRemoved, lockedThere)
+            assertEquals(3, merged.items.size)
+            assertEquals(listOf(true, true, false), todos.map { merged.items.getValue(it.id).done })
+        }
+    }
+
+    @Test
+    fun items_aStricterChecklistMadeUnawareOfALockStands() {
+        with(LockedChecklist()) {
+            val added = todos + ChecklistItem(id = "c1-new", blockId = "c1", text = "one more", order = 3)
+            val merged = merge(base, here(added, at = t + 2_000), lockedThere)
+            assertEquals(4, merged.items.size)
+            assertEquals(lock, merged.blocks.getValue("c1").lock)
+            assertEquals(t + 2_000, merged.blocks.getValue("c1").checklistEditedAtWall)
+
+            // And with no lock at all, a removal here and a rename there both stand.
+            val renamedThere = state(block.copy(name = "renamed", editedAtWall = t + 1_000), todos)
+            val both = merge(base, here(todos.take(2), at = t + 2_000), renamedThere)
+            assertEquals("renamed", both.blocks.getValue("c1").name)
+            assertEquals(2, both.items.size)
+        }
+    }
+
     @Test
     fun blocks_keepThisDevicesOrder() {
         val a = checklistBlock("a")

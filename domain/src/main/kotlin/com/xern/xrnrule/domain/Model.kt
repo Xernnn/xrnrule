@@ -321,6 +321,13 @@ data class Block(
     val habitFirst: Boolean = false,
     /** Wall-clock ms of the last edit; the later edit wins when two devices change a block at once (§2.4). */
     val editedAtWall: Long = 0,
+    /**
+     * Wall-clock ms of the last change to this block's checklist: an item added, removed or set
+     * up differently, never a tick. Items have no time of their own, and a removed one leaves
+     * nothing behind, so the merge goes by this to tell a change made while a lock it hadn't
+     * heard of held (§2.4, I39).
+     */
+    val checklistEditedAtWall: Long = 0,
     /** I39: nothing that loosens this block goes through before [BlockLock.untilWall]; never set back to null. */
     val lock: BlockLock? = null,
     /** I52: at most this many opens a day, one of the limit's rules; 0 = no such rule. */
