@@ -271,6 +271,11 @@ class SyncServerTest(unittest.TestCase):
                 self.assertEqual(b"", s.recv(100))
                 self.assertLess(time.monotonic() - start, 5)
 
+    def test_an_unparseable_request_gets_an_answer(self):
+        with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+            s.sendall(b"GARBAGE\r\n\r\n")
+            self.assertIn(b"400", s.recv(200))
+
     def test_pages_cannot_be_framed_or_sniffed(self):
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertEqual("DENY", r.headers["X-Frame-Options"])
