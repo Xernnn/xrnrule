@@ -255,6 +255,13 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(429, self.call("GET", "/state", headers=guesser)[0])
         self.assertEqual(200, self.call("GET", "/state", headers={"X-Forwarded-For": "203.0.113.10"})[0])
 
+    def test_a_made_up_first_hop_doesnt_dodge_the_lockout(self):
+        for i in range(srv.FAIL_LIMIT):
+            forwarded = {"X-Forwarded-For": f"198.51.100.{i}, 203.0.113.40"}  # what a proxy appends to
+            self.assertEqual(401, self.call("GET", "/state", password=WRONG, headers=forwarded)[0])
+        forwarded = {"X-Forwarded-For": "198.51.100.200, 203.0.113.40"}
+        self.assertEqual(429, self.call("GET", "/state", headers=forwarded)[0])
+
     def test_guesses_sent_at_once_still_stop_at_the_limit(self):
         def slow_wrong(header):  # bcrypt takes a while: every guess is in flight at once
             time.sleep(0.3)

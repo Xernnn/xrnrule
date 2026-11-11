@@ -219,12 +219,13 @@ def session_cookie(value, max_age):
 
 
 def client_address(handler):
-    """The caller's address. Behind the local proxy (Funnel) that's the first X-Forwarded-For hop;
-    the header is only trusted from a loopback peer, since anyone else could make it up."""
+    """The caller's address. Behind the local proxy (Funnel) that's the last X-Forwarded-For hop,
+    the one the proxy added: anything before it came from the caller, who could make up a new
+    address for every password guess. Only trusted from a loopback peer, for the same reason."""
     peer = handler.client_address[0]
     forwarded = handler.headers.get("X-Forwarded-For")
     if forwarded and peer in ("127.0.0.1", "::1"):
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return peer
 
 
