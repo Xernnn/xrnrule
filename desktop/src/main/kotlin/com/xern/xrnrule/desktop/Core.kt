@@ -164,6 +164,10 @@ class FilePersist(private val file: File, private val clock: Clock, private val 
         } else if (world.habitEntries.isEmpty() && world.habitSyncSeq > 0) {
             world = world.copy(habitSyncSeq = 0) // read the history from the habit server's start again (§2.5)
         }
+        // A number below zero saved by an older build, or written into the file by hand, is read as
+        // what it means (BlockEdits.sane), as what comes by sync is: no limit, an unlock of no
+        // length. The engine never meets one: a negative unlock, once redeemed, threw on every event.
+        world = BlockEdits.sane(world)
         saved = world
         savedAtMono = clock.nowMonotonicMs()
         return world

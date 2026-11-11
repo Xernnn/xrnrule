@@ -3,6 +3,9 @@ package com.xern.xrnrule.desktop
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockLock
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.EarnedCredit
+import com.xern.xrnrule.domain.Reward
+import com.xern.xrnrule.domain.UnlockSession
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.SharedState
@@ -77,5 +80,33 @@ class PersistTest {
         val world = FilePersist(worldFile, TestClock, base).loadWorld()
         assertEquals(listOf("b1"), world.blocks.map { it.id })
         assertTrue(base.exists())
+    }
+
+    @Test
+    fun numbersBelowZeroInTheFileAreReadAsWhatTheyMean() {
+        val dir = Files.createTempDirectory("xrnrule-persist").toFile()
+        try {
+            // Saved by an older build, or edited by hand: what no form makes, as the sync's merge reads it (BlockEdits.sane).
+            val odd = Block(
+                id = "b2", name = "Limit", targetSites = setOf("youtube.com"), mode = BlockMode.ALLOWANCE,
+                trigger = Trigger(TriggerType.TIMER, -5, TriggerUnit.MS), reward = Reward(unlockDurationMs = -60_000),
+                dailyAllowanceMs = -1, opensPerDay = -3, lockdownMs = -10,
+            )
+            val world = World(
+                blocks = listOf(odd), deviceId = "laptop-1",
+                credits = mapOf("b2" to EarnedCredit("b2", 0, 0, TestClock.nowWallMs() + 60_000, amountMs = -60_000)),
+                sessions = mapOf("b2" to UnlockSession("b2", 0, TestClock.nowWallMs(), durationMs = -60_000)),
+            )
+            val file = File(dir, "world.json")
+            FilePersist(file, TestClock).save(world)
+            val loaded = FilePersist(file, TestClock).loadWorld()
+            val b = loaded.block("b2")!!
+            assertEquals(listOf(0L, 0L, 0L, 0L), listOf(b.trigger.requiredAmount, b.reward.unlockDurationMs, b.dailyAllowanceMs, b.lockdownMs))
+            assertEquals(0, b.opensPerDay)
+            assertEquals(0L, loaded.credits.getValue("b2").amountMs)
+            assertEquals(0L, loaded.sessions.getValue("b2").durationMs)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }
