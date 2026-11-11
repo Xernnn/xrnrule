@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -259,6 +260,16 @@ class SyncServerTest(unittest.TestCase):
         with conn.getresponse() as r:
             self.assertEqual(400, r.status)
         conn.close()
+
+    def test_a_connection_that_goes_quiet_is_let_go(self):
+        # With no timeout, a client that stopped half way through its request held a thread for good.
+        self.assertGreater(srv.Handler.timeout, srv.MAX_WAIT_S)  # and longer than any long poll
+        with unittest.mock.patch.object(srv.Handler, "timeout", 0.3):
+            with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                s.sendall(b"GET /state HTTP/1.1\r\nHost: x\r\n")  # and then nothing
+                start = time.monotonic()
+                self.assertEqual(b"", s.recv(100))
+                self.assertLess(time.monotonic() - start, 5)
 
     def test_pages_cannot_be_framed_or_sniffed(self):
         with urllib.request.urlopen(self.base + "/") as r:
