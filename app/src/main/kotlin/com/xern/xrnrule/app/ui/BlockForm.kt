@@ -135,8 +135,8 @@ fun NewBlockScreen(
             onDone()
         }
         // I6: a habit block on another one's targets is a way past that one, so it asks that one's guard.
-        loosen = openingRequest(store, BlockEdits.opens(store.world.value, null, block), "Save this block?") { apply() }
-        if (loosen == null) apply()
+        val request = openingRequest(store, BlockEdits.opens(store.world.value, null, block), "Save this block?") { apply() }
+        if (request == null) apply() else loosen = request
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
@@ -269,7 +269,7 @@ fun EditBlockScreen(
         val loosens = draft.saveLoosens(now.items(stored.id))
         // I6: and its unlock may open more of what other habit blocks block than it did.
         val opening = openingRequest(store, BlockEdits.opens(now, stored, updated, loosens), "Save these changes?") { apply() }
-        loosen = if (loosens && BlockEdits.guardNeeded(store.engine, now, stored, store.clock)) {
+        val request = if (loosens && BlockEdits.guardNeeded(store.engine, now, stored, store.clock)) {
             LoosenRequest(
                 "Save these changes?",
                 "They make ${stored.name} easier to get past." + opening?.let { " " + it.detail }.orEmpty(),
@@ -279,7 +279,7 @@ fun EditBlockScreen(
         } else {
             opening
         }
-        if (loosen == null) apply()
+        if (request == null) apply() else loosen = request
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {

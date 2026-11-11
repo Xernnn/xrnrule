@@ -1149,8 +1149,8 @@ private fun BackupPage(world: World, store: WorldStore, guard: HardcoreGuard) {
             // I6: an added habit block on the targets of one here is a way past that one.
             val here = store.world.value
             val added = parsed.first.blocks.filter { here.block(it.id) == null }
-            loosen = openingRequest(store, added.flatMap { BlockEdits.opens(here, null, it) }.distinctBy { it.id }, "Add these blocks?") { apply() }
-            if (loosen == null) apply()
+            val request = openingRequest(store, added.flatMap { BlockEdits.opens(here, null, it) }.distinctBy { it.id }, "Add these blocks?") { apply() }
+            if (request == null) apply() else loosen = request
         }
     }
     loosen?.let { request -> LoosenGuardDialog(request, guard, store, onDismiss = { loosen = null }) }
