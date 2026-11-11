@@ -3,8 +3,12 @@ package com.xern.xrnrule.desktop
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
+import com.xern.xrnrule.domain.BlockLock
+import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.Clock
+import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.DeviceKind
+import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.PersistPort
 import com.xern.xrnrule.domain.SiteIcons
 import com.xern.xrnrule.domain.Trigger
@@ -58,6 +62,7 @@ class LocalServerTest {
      */
     private inner class Daemon(
         blocks: List<Block> = emptyList(),
+        checklist: Map<String, List<ChecklistItem>> = emptyMap(),
         known: String? = null,
         fetcher: (String, Int) -> SiteIcons.Fetched? = { _, _ -> null },
     ) {
@@ -65,7 +70,7 @@ class LocalServerTest {
         val port = ServerSocket(0).use { it.localPort }
         private val config = Config(server = "", user = "", password = "", port = port, dataDir = dir)
         private val scope = CoroutineScope(Dispatchers.Unconfined)
-        private val world = World(blocks = blocks, deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
+        private val world = World(blocks = blocks, checklist = checklist, deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
         val store = Store(
             BlockEngine(),
             object : PersistPort {
@@ -211,5 +216,63 @@ class LocalServerTest {
         // One that can still be confirmed stays.
         d.clock.mono += LocalServer.GUARD_MS
         assertEquals(JsonObject(emptyMap()), d.postJson("/api/confirm", """{"token":"$next"}"""))
+    }
+
+    /** A habit block on [site], its unlock a 60-minute timer; [lockedFor] from now, if locked (I39). */
+    private fun habitOn(id: String, site: String, lockedFor: Long? = null, hardcore: Boolean = false) = Block(
+        id, id.replaceFirstChar { it.uppercase() }, targetSites = setOf(site),
+        trigger = Trigger(TriggerType.TIMER, 60 * 60_000, TriggerUnit.MS),
+        enforcementTier = if (hardcore) EnforcementTier.HARDCORE else EnforcementTier.SOFT,
+        lock = lockedFor?.let { BlockLock(untilWall = TestClock().nowWallMs() + it, setAtWall = TestClock().nowWallMs()) },
+    )
+
+    private fun JsonObject.error(): String? = this["error"]?.jsonPrimitive?.content
+
+    @Test
+    fun i06_aNewHabitBlockOnAnotherOnesSiteAsksThatOnesGuard() {
+        val d = Daemon(listOf(habitOn("locked", "youtube.com", lockedFor = 86_400_000), habitOn("hard", "x.com", hardcore = true), habitOn("soft", "reddit.com")))
+        fun make(site: String) = d.postJson("/api/block", """{"name":"Easy","sites":["$site"],"items":["Stretch"]}""")
+        fun made() = d.store.world.value.blocks.count { it.name == "Easy" }
+        // An easy habit block on a site a locked one holds: its unlock would open that one (I6), so the lock refuses it (I39).
+        for (site in listOf("youtube.com", "m.youtube.com")) assertTrue(site, make(site).error().orEmpty().contains("Locked"))
+        // On a hardcore one's: only the phone, which has the password.
+        assertTrue(make("x.com").error().orEmpty().contains("phone"))
+        assertEquals(0, made())
+        // On a soft one's: its 60 s.
+        val token = make("reddit.com")["token"]!!.jsonPrimitive.content
+        assertEquals(0, made())
+        d.clock.mono += LocalServer.GUARD_MS
+        assertEquals(JsonObject(emptyMap()), d.postJson("/api/confirm", """{"token":"$token"}"""))
+        assertEquals(1, made())
+        // On no habit block's site, or not a habit block: made at once.
+        assertEquals(JsonObject(emptyMap()), make("example.com"))
+        assertEquals(JsonObject(emptyMap()), d.postJson("/api/block", """{"name":"Hours","mode":"SCHEDULE","sites":["youtube.com"]}"""))
+        assertEquals(2, made())
+    }
+
+    @Test
+    fun i06_givingAHabitBlockALockedOnesSiteIsRefused() {
+        val d = Daemon(listOf(habitOn("locked", "youtube.com", lockedFor = 86_400_000), habitOn("mine", "example.com")))
+        fun sites() = d.store.world.value.block("mine")!!.targetSites
+        // More to block is no loosening of its own, but its unlock would open what the locked one blocks (I6).
+        val targets = d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["example.com","youtube.com"]}""")
+        assertTrue(targets.toString(), targets.error().orEmpty().contains("Locked"))
+        val form = d.postJson("/api/block", """{"id":"mine","name":"Mine","sites":["example.com","youtube.com"],"timerMin":60}""")
+        assertTrue(form.toString(), form.error().orEmpty().contains("Locked"))
+        assertEquals(setOf("example.com"), sites())
+        // A site no other habit block holds: at once.
+        assertEquals(JsonObject(emptyMap()), d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["example.com","example.org"]}"""))
+        assertEquals(setOf("example.com", "example.org"), sites())
+    }
+
+    @Test
+    fun i06_aTaskTakenFromABlockOnALockedOnesSiteIsRefused() {
+        val mine = habitOn("mine", "youtube.com").copy(trigger = Trigger(TriggerType.CHECKLIST, Defaults.ALL_ITEMS, TriggerUnit.ITEMS))
+        val tasks = listOf(ChecklistItem(id = "t1", blockId = "mine", text = "Stretch", order = 0), ChecklistItem(id = "t2", blockId = "mine", text = "Read", order = 1))
+        val d = Daemon(listOf(habitOn("locked", "youtube.com", lockedFor = 86_400_000), mine), checklist = mapOf("mine" to tasks))
+        // Easier to earn, its unlock opens youtube.com, which the locked block holds, the sooner (I6).
+        val answer = d.postJson("/api/item", """{"blockId":"mine","op":"remove","itemId":"t1"}""")
+        assertTrue(answer.toString(), answer.error().orEmpty().contains("Locked"))
+        assertEquals(2, d.store.world.value.items("mine").size)
     }
 }

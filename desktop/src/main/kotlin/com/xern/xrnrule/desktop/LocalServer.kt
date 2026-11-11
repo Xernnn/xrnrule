@@ -196,7 +196,7 @@ class LocalServer(
             runBlocking { apply() }
             return "{}"
         }
-        return guarded(apply)
+        return guarded(apply = apply)
     }
 
     /** Only the fields this form edits, on top of whatever the settings are by the time it applies. */
@@ -238,7 +238,10 @@ class LocalServer(
         return "{}"
     }
 
-    /** Which laptop apps and sites a block covers. Taking any away waits 60 s; a hardcore block only loosens on the phone. */
+    /**
+     * Which laptop apps and sites a block covers. Taking any away waits 60 s, and so does giving a
+     * habit block one another habit block holds (I6); a hardcore block only loosens on the phone.
+     */
     private fun laptopTargets(body: JsonObject): String {
         val id = body["blockId"]!!.jsonPrimitive.content
         val apps = body["desktopApps"]!!.jsonArray.map { it.jsonPrimitive.content }.filter { it.isNotBlank() }.toSet()
@@ -249,27 +252,51 @@ class LocalServer(
     }
 
     /**
-     * Applies a change to [old] at once, unless it loosens the block ([new] null: always): then it
-     * waits out the guard (contract §2.3), and a hardcore block only loosens on the phone.
+     * Applies a change to [old] at once, unless it loosens the block ([new] null: always), or its
+     * unlock would open more of what other habit blocks block ([BlockEdits.opens], I6): then it
+     * waits out the guard of each (contract §2.3), and a hardcore one only loosens on the phone.
      */
     private fun loosening(old: Block, new: Block?, apply: suspend () -> Unit): String {
         val loosens = new == null || BlockEdits.loosens(old, new)
-        if (!loosens || !BlockEdits.guardNeeded(store.engine, store.world.value, old, store.clock)) {
+        val opened = new?.let { BlockEdits.opens(store.world.value, old, it, loosens) }.orEmpty()
+        return guardedBy(listOfNotNull(old.takeIf { loosens }), opened, apply)
+    }
+
+    /**
+     * Applies a change at once unless it makes [loosened] easier to get past, or opens what
+     * [opened] block (I6): then the guard of each that has one (§2.3). A locked one refuses it
+     * (I39), a hardcore one sends it to the phone, which has the password; the rest wait 60 s.
+     */
+    private fun guardedBy(loosened: List<Block>, opened: List<Block>, apply: suspend () -> Unit): String {
+        val world = store.world.value
+        fun held(blocks: List<Block>) = blocks.filter { BlockEdits.guardNeeded(store.engine, world, it, store.clock) }
+        val own = held(loosened)
+        val others = held(opened).filter { o -> own.none { it.id == o.id } }
+        if (own.isEmpty() && others.isEmpty()) {
             runBlocking { apply() }
             return "{}"
         }
-        lockedError(old)?.let { return it }
-        if (old.enforcementTier == EnforcementTier.HARDCORE) return error("This is a hardcore block: loosen it on the phone, with its password.")
+        own.firstNotNullOfOrNull { lockedError(it) }?.let { return it }
+        others.firstNotNullOfOrNull { lockedError(it, opened = true) }?.let { return it }
+        if (own.any { it.enforcementTier == EnforcementTier.HARDCORE }) return error("This is a hardcore block: loosen it on the phone, with its password.")
+        others.firstOrNull { it.enforcementTier == EnforcementTier.HARDCORE }?.let {
+            return error("Its unlock would open what ${it.name} blocks, a hardcore block: do this on the phone, with its password.")
+        }
+        val label = others.takeIf { it.isNotEmpty() }?.let { o -> "Saving (its unlock would open what ${o.joinToString(" and ") { it.name }} blocks too)" }
         // A lock set on the phone during the wait still holds (I39).
-        return guarded { if (lockedError(old) == null) apply() }
+        return guarded(label) { if ((own + others).all { lockedError(it) == null }) apply() }
     }
 
-    /** I39: a locked block refuses every loosening; only the phone has emergency unlocks (I40). */
-    private fun lockedError(old: Block): String? {
+    /**
+     * I39: a locked block refuses every loosening, and every change whose unlock would open what it
+     * blocks ([opened], I6); only the phone has emergency unlocks (I40).
+     */
+    private fun lockedError(old: Block, opened: Boolean = false): String? {
         val current = store.world.value.block(old.id) ?: old
         if (!BlockEdits.locked(current, store.clock.nowWallMs())) return null
         val until = LOCK_END.format(Instant.ofEpochMilli(current.lock!!.untilWall).atZone(store.clock.zone()))
-        return error("This block is locked until $until: nothing can make it easier before then, except an emergency unlock on the phone.")
+        val what = if (opened) "Its unlock would open what ${current.name} blocks, and that is locked" else "This block is locked"
+        return error("$what until $until: nothing can make it easier before then, except an emergency unlock on the phone.")
     }
 
     private fun error(text: String) = """{"error":${json.encodeToString(String.serializer(), text)}}"""
@@ -290,10 +317,15 @@ class LocalServer(
         }
         val world = store.world.value
         if (form.id == null) {
-            (BlockForms.create(world, form, store.clock) as? BlockForms.Result.Invalid)?.let { return error(it.reason) }
+            val made = when (val r = BlockForms.create(world, form, store.clock)) {
+                is BlockForms.Result.Invalid -> return error(r.reason)
+                is BlockForms.Result.Ok -> r.block
+            }
+            // I6: a new habit block on another one's targets is a way past that one, so it asks that one's guard.
             // Built again inside the edit, against the world as it is by then.
-            runBlocking { store.edit { w -> (BlockForms.create(w, form, store.clock) as? BlockForms.Result.Ok)?.world ?: w } }
-            return "{}"
+            return guardedBy(emptyList(), BlockEdits.opens(world, null, made)) {
+                store.edit { w -> (BlockForms.create(w, form, store.clock) as? BlockForms.Result.Ok)?.world ?: w }
+            }
         }
         val old = world.block(form.id) ?: return error("That block is gone.")
         val new = when (val r = BlockForms.edit(world, form)) {
@@ -329,22 +361,26 @@ class LocalServer(
             }
             "remove" -> {
                 val itemId = body["itemId"]!!.jsonPrimitive.content
-                // Its own task only: this block's wait, lock and tier are the ones checked below.
+                // Its own task only: this block's wait, lock and tier are the ones checked below,
+                // and those of the habit blocks it shares a target with, made easier with it (I6).
                 if (store.world.value.items(blockId).none { it.id == itemId }) return error("That task is gone.")
-                loosening(old, null) { store.edit { w -> BlockForms.removeItem(w, blockId, itemId) } }
+                val opened = BlockEdits.opens(store.world.value, old, old, loosened = true)
+                guardedBy(listOf(old), opened) { store.edit { w -> BlockForms.removeItem(w, blockId, itemId) } }
             }
             else -> error("unknown change")
         }
     }
 
-    private fun guarded(apply: suspend () -> Unit): String {
+    /** Starts a 60 s wait for [apply]; [label] says what it is for, if the page's own words don't. */
+    private fun guarded(label: String? = null, apply: suspend () -> Unit): String {
         val now = store.clock.nowMonotonicMs()
         // A wait nobody confirmed or cancelled (the page went before it could say) goes once it
         // can't be confirmed any more, rather than staying for as long as the daemon runs.
         guards.values.removeIf { now - it.startedAtMono > GUARD_MS + CONFIRM_MS }
         val token = UUID.randomUUID().toString()
         guards[token] = Guard(now, apply)
-        return """{"token":"$token","waitMs":$GUARD_MS}"""
+        val said = label?.let { ""","label":${json.encodeToString(String.serializer(), it)}""" }.orEmpty()
+        return """{"token":"$token","waitMs":$GUARD_MS$said}"""
     }
 
     private fun confirm(body: JsonObject): String {

@@ -589,7 +589,7 @@ async function submitForm() {
     hoursMore: d.hours.moreWindows,
   });
   if (result.error) showFormError(result.error);
-  else if (result.token) startGuard(result.token, result.waitMs, "Saving (it makes the block easier to get past)");
+  else if (result.token) startGuard(result.token, result.waitMs, result.label ?? "Saving (it makes the block easier to get past)");
   else {
     closeForm();
     refresh();
