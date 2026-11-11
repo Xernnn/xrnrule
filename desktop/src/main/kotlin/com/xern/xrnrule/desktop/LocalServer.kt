@@ -338,8 +338,12 @@ class LocalServer(
     }
 
     private fun guarded(apply: suspend () -> Unit): String {
+        val now = store.clock.nowMonotonicMs()
+        // A wait nobody confirmed or cancelled (the page went before it could say) goes once it
+        // can't be confirmed any more, rather than staying for as long as the daemon runs.
+        guards.values.removeIf { now - it.startedAtMono > GUARD_MS + CONFIRM_MS }
         val token = UUID.randomUUID().toString()
-        guards[token] = Guard(store.clock.nowMonotonicMs(), apply)
+        guards[token] = Guard(now, apply)
         return """{"token":"$token","waitMs":$GUARD_MS}"""
     }
 
@@ -353,7 +357,7 @@ class LocalServer(
         val waited = store.clock.nowMonotonicMs() - guard.startedAtMono
         if (waited < GUARD_MS) return """{"error":"Not yet: ${(GUARD_MS - waited) / 1000} s to go."}"""
         guards.remove(token)
-        if (waited > GUARD_MS + 5 * 60_000) return """{"error":"That wait ran out. Start again."}"""
+        if (waited > GUARD_MS + CONFIRM_MS) return """{"error":"That wait ran out. Start again."}"""
         runBlocking { guard.apply() }
         return "{}"
     }
@@ -780,6 +784,9 @@ class LocalServer(
 
     companion object {
         const val GUARD_MS = 60_000L
+
+        /** How long after its wait a loosening can still be confirmed. */
+        private const val CONFIRM_MS = 5 * 60_000L
         private const val CONTENT_POLICY = "default-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; " +
             "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 

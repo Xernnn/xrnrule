@@ -14,6 +14,10 @@ import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,7 +94,14 @@ class LocalServerTest {
 
         fun post(path: String, body: String): Int = request("POST", path, body, xrnrule = true)
 
-        private fun request(method: String, path: String, body: String?, xrnrule: Boolean): Int {
+        /** What a POST answers, as JSON. */
+        fun postJson(path: String, body: String): JsonObject {
+            var answer = ""
+            request("POST", path, body, xrnrule = true) { answer = it }
+            return Json.parseToJsonElement(answer).jsonObject
+        }
+
+        private fun request(method: String, path: String, body: String?, xrnrule: Boolean, read: (String) -> Unit = {}): Int {
             val conn = URI("http://127.0.0.1:$port$path").toURL().openConnection() as HttpURLConnection
             conn.requestMethod = method
             if (xrnrule) conn.setRequestProperty("X-Xrnrule", "1")
@@ -100,7 +111,7 @@ class LocalServerTest {
                 conn.outputStream.use { it.write(body.toByteArray()) }
             }
             val code = conn.responseCode
-            (if (code < 400) conn.inputStream else conn.errorStream)?.use { it.readBytes() }
+            (if (code < 400) conn.inputStream else conn.errorStream)?.use { read(it.readBytes().decodeToString()) }
             return code
         }
     }
@@ -186,5 +197,19 @@ class LocalServerTest {
         // The extension sends it with every call.
         assertEquals(200, d.get("/ext/rules?focused=1"))
         assertNull(d.foreground.browsers.toClose(d.clock.mono))
+    }
+
+    @Test
+    fun aWaitNobodyConfirmsIsDroppedOnceItCantBeConfirmed() {
+        val d = Daemon()
+        // A break waits 60 s (§2.3, I25); the page that asked went before it could confirm or cancel.
+        val stale = d.postJson("/api/event", """{"type":"pause"}""")["token"]!!.jsonPrimitive.content
+        d.clock.mono += LocalServer.GUARD_MS + 5 * 60_000 + 1
+        // The next wait started finds it past confirming, and drops it: it isn't kept for good.
+        val next = d.postJson("/api/event", """{"type":"pause"}""")["token"]!!.jsonPrimitive.content
+        assertEquals("That wait was cancelled. Start again.", d.postJson("/api/confirm", """{"token":"$stale"}""")["error"]!!.jsonPrimitive.content)
+        // One that can still be confirmed stays.
+        d.clock.mono += LocalServer.GUARD_MS
+        assertEquals(JsonObject(emptyMap()), d.postJson("/api/confirm", """{"token":"$next"}"""))
     }
 }
