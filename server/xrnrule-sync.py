@@ -240,13 +240,21 @@ def locked_out(addr):
         return len(recent) >= FAIL_LIMIT
 
 
-def note_failure(addr):
+def reserve_guess(addr):
+    """Counts a password from this address as wrong before it is checked; False if the address
+    has used up its wrong logins. Counted afterwards, guesses sent at once all passed the check
+    while the first were still in bcrypt. A right one clears the count (see Handler.login)."""
     now = time.monotonic()
     with fail_lock:
         if len(failures) > 10000:  # a flood from many addresses: forget the stale ones
             for a in [a for a, ts in failures.items() if now - ts[-1] >= FAIL_WINDOW_S]:
                 del failures[a]
-        failures.setdefault(addr, []).append(now)
+        recent = [t for t in failures.get(addr, ()) if now - t < FAIL_WINDOW_S]
+        if len(recent) >= FAIL_LIMIT:
+            failures[addr] = recent
+            return False
+        failures[addr] = recent + [now]
+        return True
 
 
 def devices_path(user):
@@ -481,14 +489,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(401, "login required")
             return user
         addr = client_address(self)
-        if locked_out(addr):
+        password = self.headers.get("Authorization")
+        if not (reserve_guess(addr) if password else not locked_out(addr)):
             time.sleep(FAIL_DELAY_S)
             self.send(429, "too many wrong passwords; try again later", headers={"Retry-After": str(FAIL_WINDOW_S)})
             return None
-        user = check_login(self.headers.get("Authorization"))
+        user = check_login(password)
         if not user:
-            if self.headers.get("Authorization"):
-                note_failure(addr)
             time.sleep(FAIL_DELAY_S)
             # The status page logs in with its own form: a challenge would pop the browser's dialog.
             challenge = {} if self.headers.get("X-Xrn-Client") else {"WWW-Authenticate": 'Basic realm="xrnrule"'}
