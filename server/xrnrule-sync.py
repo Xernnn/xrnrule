@@ -538,12 +538,14 @@ class Handler(BaseHTTPRequestHandler):
         addr = client_address(self)
         password = self.headers.get("Authorization")
         if not (reserve_guess(addr) if password else not locked_out(addr)):
-            time.sleep(FAIL_DELAY_S)
+            if password:
+                time.sleep(FAIL_DELAY_S)
             self.send(429, "too many wrong passwords; try again later", headers={"Retry-After": str(FAIL_WINDOW_S)})
             return None
         user = check_login(password)
         if not user:
-            time.sleep(FAIL_DELAY_S)
+            if password:  # a request with none guessed nothing, and needn't hold a thread for it
+                time.sleep(FAIL_DELAY_S)
             # The status page logs in with its own form: a challenge would pop the browser's dialog.
             challenge = {} if self.headers.get("X-Xrn-Client") else {"WWW-Authenticate": 'Basic realm="xrnrule"'}
             self.send(401, "login required", headers=challenge)

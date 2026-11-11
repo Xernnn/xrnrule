@@ -327,6 +327,29 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(limit, statuses.count(401))
         self.assertEqual(n - limit, statuses.count(429))
 
+    def test_a_request_with_no_password_isnt_held(self):
+        # The hold after a wrong password slows a guesser down. One that sent no password guessed
+        # nothing, and each held a thread for the hold all the same.
+        def timed(addr, password=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+            headers = {"X-Forwarded-For": addr}
+            if password:
+                headers["Authorization"] = "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode()
+            start = time.monotonic()
+            conn.request("GET", "/state", headers=headers)
+            status = conn.getresponse().status
+            conn.close()
+            return status, time.monotonic() - start
+        srv.failures["203.0.113.61"] = [time.monotonic()] * srv.FAIL_LIMIT  # locked out
+        with unittest.mock.patch.object(srv, "FAIL_DELAY_S", 0.5):
+            for addr, status in (("203.0.113.60", 401), ("203.0.113.61", 429)):
+                got, took = timed(addr)
+                self.assertEqual(status, got)
+                self.assertLess(took, 0.4, addr)
+                got, took = timed(addr, WRONG)
+                self.assertEqual(status, got)
+                self.assertGreaterEqual(took, 0.5, addr)
+
     def test_a_right_password_clears_earlier_mistakes(self):
         typo = {"X-Forwarded-For": "203.0.113.20"}
         for _ in range(srv.FAIL_LIMIT - 1):
