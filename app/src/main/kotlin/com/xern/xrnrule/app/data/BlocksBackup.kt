@@ -1,6 +1,7 @@
 package com.xern.xrnrule.app.data
 
 import com.xern.xrnrule.domain.Block
+import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.Habit
@@ -53,7 +54,7 @@ object BlocksBackups {
     fun import(world: World, text: String): Pair<World, Int> {
         val backup = json.decodeFromString(BlocksBackup.serializer(), text)
         val existing = world.blocks.mapTo(HashSet()) { it.id }
-        val added = backup.blocks.filter { it.id !in existing }.map { it.copy(state = BlockState.ARMED) }
+        val added = backup.blocks.filter { it.id !in existing }.map { BlockEdits.sane(it).copy(state = BlockState.ARMED) }
         val checklist = added.associate { b -> b.id to backup.checklist[b.id].orEmpty().map(::fresh) }
             .filterValues { it.isNotEmpty() }
         val cap = minOf(world.settings.dailyCapMs, backup.settings.dailyCapMs)

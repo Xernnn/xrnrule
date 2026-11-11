@@ -51,6 +51,13 @@ data class SharedState(
     fun withoutUse(): SharedState =
         copy(allowance = emptyMap(), sessions = sessions.mapValues { it.value.copy(usedMs = emptyMap()) })
 
+    /** [BlockEdits.sane] for every block, and no credit or unlock of negative length: what the merge works on. */
+    fun sane(): SharedState = copy(
+        blocks = blocks.mapValues { BlockEdits.sane(it.value) },
+        credits = credits.mapValues { (_, c) -> c.copy(amountMs = c.amountMs.coerceAtLeast(0)) },
+        sessions = sessions.mapValues { (_, s) -> s.copy(durationMs = s.durationMs.coerceAtLeast(0)) },
+    )
+
     companion object {
 
         /**
@@ -185,14 +192,17 @@ data class SharedState(
 
         /** [nowWall]: this device's clock, which says what day it is for the use reports ([newerUse]). */
         fun merge(base: SharedState?, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
-            val b = base ?: SharedState()
+            // Numbers below zero no form makes are read as what they mean first (§2.3), so a lock judges them as such.
+            val b = (base ?: SharedState()).sane()
+            val sentHere = local.sane()
+            val sentThere = remote.sane()
             // A checklist change a lock refuses never happened (I39): the merge goes on without it.
-            var l = local
-            var r = remote
+            var l = sentHere
+            var r = sentThere
             for (id in local.blocks.keys intersect remote.blocks.keys) {
-                if (checklistRefused(id, b, made = local, other = remote)) {
+                if (checklistRefused(id, b, made = sentHere, other = sentThere)) {
                     l = withoutChecklistChange(l, b, id)
-                } else if (checklistRefused(id, b, made = remote, other = local)) {
+                } else if (checklistRefused(id, b, made = sentThere, other = sentHere)) {
                     r = withoutChecklistChange(r, b, id)
                 }
             }

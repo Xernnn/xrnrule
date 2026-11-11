@@ -191,6 +191,14 @@ chung. Sửa đó qua guard của block kia như mọi sửa nới lỏng (chờ
 chối** khi block kia đang khóa (I39). Phủ chung: cùng một app, hay một site nằm trên hoặc dưới một
 site của block kia. `BlockEdits.opens`. Test: `BlockEditsTest.aHabitBlockOnAnothersTargetIsAWayPastIt`.
 
+**Số dưới 0.** Không form nào tạo số âm, nhưng chúng đến được qua máy khác, bản cũ hơn hay bản sửa
+tay trên server. Khi đọc world, file sao lưu và khi trộn (§2.4, trước mọi so sánh), hạn mức ngày,
+số lần mở, độ dài lockdown, độ dài mở khóa (cả `amountMs` của credit và `durationMs` của session)
+và timer chờ (`requiredAmount` của `TIMER`/`COMBINED`) dưới 0 được đọc thành 0, đúng nghĩa
+`BlockEdits.loosens` đọc chúng: không có hạn mức (bỏ hạn mức là nới lỏng, khóa từ chối), mở khóa,
+lockdown hay timer dài 0 (`BlockEdits.sane`). `-1` của `CHECKLIST` vẫn là "mọi mục". Test:
+`SharedStateTest.aNumberBelowZeroFromElsewhereIsReadAsWhatItMeans`.
+
 **Khóa có hạn** (I39): `block.lock = BlockLock(untilWall, setAtWall)`. Khi `now_wall < untilWall`
 block **đang khóa** (`BlockEdits.locked`): mọi sửa nới lỏng **cấu hình của nó** (sửa block hay
 checklist của nó, tắt, xóa, sửa nới lỏng một habit mà habit item của nó dùng) bị **từ chối**,

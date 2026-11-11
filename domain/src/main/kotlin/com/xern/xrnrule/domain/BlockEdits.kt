@@ -148,6 +148,31 @@ object BlockEdits {
             !new.moreWindows.containsAll(old.moreWindows)
 
     /**
+     * [block] with the numbers below zero no form makes read as what they mean, as [loosens] reads
+     * them: no daily limit, no opens rule, and a lockdown, an unlock or a wait timer of no length.
+     * They only come in decoded (another device's form, an old build, a copy edited on the server),
+     * so they are put right there and in the merge, and the engine never meets one: an unlock of
+     * negative length, once redeemed, made the sweep throw on every event.
+     */
+    fun sane(block: Block): Block {
+        val timer = block.trigger.type != TriggerType.CHECKLIST // a checklist's -1 is "all of them"
+        return block.copy(
+            dailyAllowanceMs = block.dailyAllowanceMs.coerceAtLeast(0),
+            opensPerDay = block.opensPerDay.coerceAtLeast(0),
+            lockdownMs = block.lockdownMs.coerceAtLeast(0),
+            reward = block.reward.copy(unlockDurationMs = block.reward.unlockDurationMs.coerceAtLeast(0)),
+            trigger = if (timer) block.trigger.copy(requiredAmount = block.trigger.requiredAmount.coerceAtLeast(0)) else block.trigger,
+        )
+    }
+
+    /** [sane] for every block of [world], and no credit or unlock of negative length in it. */
+    fun sane(world: World): World = world.copy(
+        blocks = world.blocks.map(::sane),
+        credits = world.credits.mapValues { (_, c) -> c.copy(amountMs = c.amountMs.coerceAtLeast(0)) },
+        sessions = world.sessions.mapValues { (_, s) -> s.copy(durationMs = s.durationMs.coerceAtLeast(0)) },
+    )
+
+    /**
      * §2.3: a habit some block asks for ([World.blocksUsing]) gets easier: a smaller unlock's worth
      * (I36), another kind, or a check due less often (Loop fills in more days by itself). Deleting
      * one doesn't loosen: its items stay and can't be done any more.
