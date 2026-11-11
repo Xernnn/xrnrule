@@ -116,7 +116,7 @@ fun main() = runBlocking {
             withContext(Dispatchers.IO) { clock.check() }
             val missing = foreground.extensionMissing() && world.blocks.any { it.targetSites.isNotEmpty() }
             if (missing && !extensionAlerted) {
-                notifier.notify("Website blocking is off", "The xrnrule extension isn't answering in this browser. Turn it on in the extensions page.", urgent = true)
+                notifier.notify("Website blocking is off", "The xrnrule extension isn't answering for this window. Turn it on in the extensions page, allow it in private windows, or use a profile that has it.", urgent = true)
             }
             extensionAlerted = missing
 

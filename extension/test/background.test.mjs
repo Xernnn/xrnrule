@@ -72,3 +72,84 @@ test("an xrnrule that never answers is unreachable, and a minute on everything w
   await refreshWhileHung();
   assert.ok(written.at(-1).some((r) => r.condition.requestDomains.includes("reddit.com")), "a minute on, everything with a rule");
 });
+
+/** background.js loaded with xrnrule answering every call at once; [overrides] add to chrome.*. */
+function answering(overrides = {}) {
+  const urls = [];
+  const stored = {};
+  const sandbox = {
+    URL, console, AbortController, setTimeout, clearTimeout,
+    fetch: async (url) => {
+      urls.push(String(url));
+      return { ok: true, json: async () => ({ v: "1", blocked: [], watched: [] }) };
+    },
+  };
+  sandbox.self = sandbox;
+  sandbox.chrome = fakeChrome({
+    "chrome.runtime.getURL": (p) => `chrome-extension://test/${p}`,
+    "chrome.runtime.getManifest": () => ({ version: "0" }),
+    "chrome.management.getSelf": async () => ({ installType: "normal" }),
+    "chrome.storage.local.get": async (key) => (key in stored ? { [key]: stored[key] } : {}),
+    "chrome.storage.local.set": async (values) => { Object.assign(stored, values); },
+    "chrome.storage.local.remove": async (key) => { delete stored[key]; },
+    ...overrides,
+  });
+  vm.runInNewContext(read("shared.js"), sandbox);
+  vm.runInNewContext(read("background.js"), sandbox);
+  return { sandbox, urls, stored };
+}
+
+test("every rule fetch says whether a window the extension can see has focus (I49)", async () => {
+  // A private window it may not run in, or another profile's, is in front when none has: the
+  // laptop then treats the window in front as the extension being off.
+  let focused = false;
+  const bg = answering({ "chrome.windows.getLastFocused": async () => ({ id: 1, focused }) });
+  await bg.sandbox.refreshRules();
+  assert.ok(bg.urls.some((u) => u.endsWith("/ext/rules?focused=0")), bg.urls.join(" "));
+  // The new tab page, about:addons, xrnrule's block page: no content script, but its own window.
+  focused = true;
+  await bg.sandbox.refreshRules();
+  assert.ok(bg.urls.at(-1).endsWith("/ext/rules?focused=1"), bg.urls.at(-1));
+
+  // Only private windows open: no window it can see at all, so none has focus.
+  const none = answering({ "chrome.windows.getLastFocused": async () => { throw new Error("No last-focused window"); } });
+  await none.sandbox.refreshRules();
+  assert.ok(none.urls.at(-1).endsWith("/ext/rules?focused=0"), none.urls.at(-1));
+
+  // A browser that can't say (no windows API) says nothing, which xrnrule takes as before.
+  const blind = answering({ "chrome.windows.getLastFocused": undefined });
+  await blind.sandbox.refreshRules();
+  assert.ok(blind.urls.at(-1).endsWith("/ext/rules"), blind.urls.at(-1));
+});
+
+test("the rules alarm is made only when it isn't there, so a start of the worker doesn't put the poll off", async () => {
+  const created = [];
+  const create = (name) => { created.push(name); };
+  // Already there, a minute after the last poll: a new start of the worker keeps it.
+  answering({ "chrome.alarms.get": async (name) => (name === "rules" ? { name, periodInMinutes: 1 } : undefined), "chrome.alarms.create": create });
+  await settle();
+  assert.deepEqual(created, []);
+  // None yet (just installed, or dropped at a browser restart): it's made.
+  answering({ "chrome.alarms.get": async () => undefined, "chrome.alarms.create": create });
+  await settle();
+  assert.deepEqual(created, ["rules"]);
+});
+
+test("setPort and checkUpdate are taken from the extension's own pages only, not a content script", async () => {
+  const listeners = [];
+  const bg = answering({ "chrome.runtime.onMessage.addListener": (fn) => { listeners.push(fn); } });
+  const [onMessage] = listeners;
+  const page = { id: "test", tab: { id: 7 }, frameId: 0, url: "https://evil.example/" };
+  let replied = false;
+  assert.equal(onMessage({ type: "setPort", port: 9999 }, page, () => { replied = true; }), false);
+  assert.equal(onMessage({ type: "checkUpdate" }, page, () => { replied = true; }), false);
+  await settle();
+  assert.equal(bg.stored.port, undefined, "the port stays");
+  assert.equal(replied, false);
+  // A page's content script still reports the site in front.
+  assert.ok(await new Promise((resolve) => onMessage({ type: "beat", host: "example.com", focused: true }, page, resolve)));
+  // The options page, in a tab of its own, may.
+  const options = { id: "test", tab: { id: 8 }, url: "chrome-extension://test/options.html" };
+  await new Promise((resolve) => onMessage({ type: "setPort", port: 9999 }, options, resolve));
+  assert.equal(bg.stored.port, 9999);
+});

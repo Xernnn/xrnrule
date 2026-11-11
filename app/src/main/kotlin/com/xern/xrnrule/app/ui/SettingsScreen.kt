@@ -463,7 +463,7 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
                 SettingsPage.CORNER_CLOCK -> CornerClockPage()
                 SettingsPage.WEBSITES -> WebsitesPage(world, deps)
                 SettingsPage.UPDATES -> UpdatesPage(deps.updates)
-                SettingsPage.BACKUP -> BackupPage(world, deps.store)
+                SettingsPage.BACKUP -> BackupPage(world, deps.store, deps.guard)
                 SettingsPage.ADVANCED -> AdvancedPage(world, deps, onOpen)
             }
             Gap(32)
@@ -520,7 +520,9 @@ private fun HabitsPage(world: World, deps: SettingsDeps) {
     OutlinePill("New habit", onClick = { making = true }, icon = Icons.Filled.Add)
 
     fun guarded(habit: Habit, title: String, detail: String, apply: () -> Unit) {
-        val blocks = world.blocksUsing(habit.id)
+        val using = world.blocksUsing(habit.id)
+        // I6: the blocks they open with an unlock get easier to get past too.
+        val blocks = (using + using.flatMap { BlockEdits.opens(world, it, it, loosened = true) }).distinctBy { it.id }
         if (blocks.any { BlockEdits.guardNeeded(store.engine, world, it, store.clock) }) {
             loosen = LoosenRequest(title, detail, hardcore = blocks.any { it.enforcementTier == EnforcementTier.HARDCORE }, blockIds = blocks.map { it.id }, apply = apply)
         } else {
@@ -1114,9 +1116,10 @@ private fun UpdatesPage(updates: AppUpdates) {
 }
 
 @Composable
-private fun BackupPage(world: World, store: WorldStore) {
+private fun BackupPage(world: World, store: WorldStore, guard: HardcoreGuard) {
     val context = LocalContext.current
     var message by remember { mutableStateOf<String?>(null) }
+    var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
     val scope = rememberCoroutineScope()
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -1135,14 +1138,22 @@ private fun BackupPage(world: World, store: WorldStore) {
                 runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }.getOrNull()
             }
             val parsed = text?.let { runCatching { BlocksBackups.import(store.world.value, it) }.getOrNull() }
-            message = if (parsed == null) {
-                "That file isn't an xrnrule backup."
-            } else {
-                store.edit { w -> BlocksBackups.import(w, text).first }
-                if (parsed.second == 0) "Nothing new: every block in it is already here." else "Added ${parsed.second} blocks."
+            if (parsed == null) {
+                message = "That file isn't an xrnrule backup."
+                return@launch
             }
+            val apply = {
+                store.edit { w -> BlocksBackups.import(w, text).first }
+                message = if (parsed.second == 0) "Nothing new: every block in it is already here." else "Added ${parsed.second} blocks."
+            }
+            // I6: an added habit block on the targets of one here is a way past that one.
+            val here = store.world.value
+            val added = parsed.first.blocks.filter { here.block(it.id) == null }
+            val request = openingRequest(store, added.flatMap { BlockEdits.opens(here, null, it) }.distinctBy { it.id }, "Add these blocks?") { apply() }
+            if (request == null) apply() else loosen = request
         }
     }
+    loosen?.let { request -> LoosenGuardDialog(request, guard, store, onDismiss = { loosen = null }) }
     PageIntro("Save your blocks to a file, or add blocks from one. Importing only adds blocks; it never changes or removes the ones here.")
     Gap(16)
     PillButton("Export blocks", enabled = world.blocks.isNotEmpty(), onClick = { exportLauncher.launch("xrnrule-blocks-${LocalDate.now()}.json") })

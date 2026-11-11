@@ -7,7 +7,9 @@ package com.xern.xrnrule.desktop
  * A browser the extension has never spoken from goes after [OTHER_GRACE_MS] in front, once some
  * browser is known to have it. One that has it goes only after [SILENT_GRACE_MS] of silence:
  * it's the extension turned off, and that's long enough to turn it back on from the extensions
- * page, which every new window gets again.
+ * page, which every new window gets again. Silence is about the window in front: a private window
+ * the extension may not run in, or another profile's window, is silent however much the extension
+ * says from the windows behind it ([Foreground] only calls [heard] for what speaks for the front).
  */
 class BrowserWatch(known: Set<String> = emptySet(), startedAtMs: Long = 0) {
     private val browsers = known.toMutableSet()

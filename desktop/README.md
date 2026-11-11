@@ -34,7 +34,8 @@ it again to update.
 Then load the browser extension once. The browser's extensions page (`chrome://extensions`
 in Chromium browsers, including Helium) → Developer mode → **Load unpacked** → `extension/`
 at the top of this repo (the phone's Quetta uses the same extension). On its Details page,
-allow it in incognito windows, or incognito tabs aren't blocked.
+allow it in incognito windows, or incognito tabs aren't blocked: a private window it can't see,
+kept in front, has the browser closed as if the extension were off.
 
 Moving from xrnhabit: `install.sh` stops `xrnhabit-desktop`, removes its KWin script, and
 moves `~/.config/xrnhabit` and `~/.local/share/xrnhabit` over, so the blocks and this

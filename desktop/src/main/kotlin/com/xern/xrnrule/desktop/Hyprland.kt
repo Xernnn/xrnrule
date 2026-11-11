@@ -77,6 +77,7 @@ object Hyprland {
         data class Active(val address: String?) : Event
         data class Opened(val address: String, val resourceClass: String) : Event
         data class Closed(val address: String) : Event
+        data class Titled(val address: String, val title: String) : Event
     }
 
     /** Event addresses come without `0x`, `j/clients` ones with it: always `0x…`, lower case. */
@@ -98,6 +99,8 @@ object Hyprland {
                 address(parts[0])?.let { Event.Opened(it, parts.getOrElse(2) { "" }) }
             }
             "closewindow" -> address(data)?.let { Event.Closed(it) }
+            // ADDRESS,TITLE: the title may hold commas.
+            "windowtitlev2" -> address(data.substringBefore(',', ""))?.let { Event.Titled(it, data.substringAfter(',')) }
             else -> null
         }
     }
@@ -174,7 +177,8 @@ object Hyprland {
 /**
  * The Hyprland stand-in for the KWin script: follows `.socket2.sock` and reports each window
  * to [Enforcer] exactly as the script does (Added for each window, Activated for the one in
- * front, Removed when one closes), and closes those it answers "block" for through `.socket.sock`.
+ * front, Removed when one closes), with the title of the one in front too, which the script
+ * doesn't send ([DesktopBus.Titled]); and closes those it answers "block" for through `.socket.sock`.
  * Reconnects whenever Hyprland goes away, and lists what's open again when it's back.
  */
 class HyprlandWindows(
@@ -265,6 +269,10 @@ class HyprlandWindows(
                 // The daemon keeps windows by process: only forget it once its last window is gone.
                 if (gone.pid > 0 && clients.values.none { it.pid == gone.pid }) bus.Removed(gone.pid.toString())
             }
+            is Hyprland.Event.Titled -> {
+                clients.computeIfPresent(e.address) { _, c -> c.copy(title = e.title) }
+                if (e.address == activeAddress) bus.Titled(e.title)
+            }
         }
     }
 
@@ -279,7 +287,7 @@ class HyprlandWindows(
     private fun report(method: String, c: Hyprland.Client) {
         val appId = Hyprland.appId(c, apps()) ?: return
         val answer = when (method) {
-            "Activated" -> bus.Activated(appId, c.resourceClass, c.pid.toString())
+            "Activated" -> bus.Activated(appId, c.resourceClass, c.pid.toString()).also { bus.Titled(c.title) }
             else -> bus.Added(appId, c.resourceClass, c.pid.toString())
         }
         if (debug) System.err.println("$method ${c.address} $appId (class ${c.resourceClass}, pid ${c.pid}): $answer")

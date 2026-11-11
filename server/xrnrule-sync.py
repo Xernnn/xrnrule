@@ -17,7 +17,9 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               a device would take as everything deleted (contract I45)
     GET  /devices             when each device last checked in (X-Device), for the status page
     POST /events              {"events": [{"t": "blocked"|"habit"|"unlock"|"bought"|"break", "at": ms, ...}]} from a
-                              device's local log (X-Device); duplicates are dropped. 120 days kept
+                              device's local log (X-Device); duplicates are dropped, and so is
+                              one stamped more than a day ahead of this server. 120 days kept,
+                              and at most EVENTS_MAX of them
     GET  /events?since=MS     those events, for the weekly review in the habits web app
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out
@@ -67,6 +69,10 @@ FAIL_LIMIT = 10  # wrong logins from one address within FAIL_WINDOW_S, then 429 
 FAIL_WINDOW_S = 15 * 60
 SEEN_WRITE_S = 60  # devices.json is rewritten at most this often per user
 EVENTS_KEEP_DAYS = 120
+EVENTS_AHEAD_MS = 86400 * 1000  # an event stamped further ahead of this server's clock is no time at all
+# The most events kept for one user, oldest dropped first: some 400 a day for the 120 days, about
+# 5 MB of file and 30 MB here, where a device could otherwise send 8 MB a batch without end.
+EVENTS_MAX = 50000
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
@@ -140,12 +146,20 @@ def check_login(header):
     import bcrypt  # only needed once someone logs in, so the tests can run without it
 
     try:
+        checked, spare = False, None
         with open(args.users, encoding="utf-8") as f:
             for line in f:
                 name, _, hashed = line.strip().partition(":")
-                if name == user and hashed and bcrypt.checkpw(password.encode(), hashed.encode()):
-                    auth_cache[key] = (user, time.time() + AUTH_CACHE_S, mtime)
-                    return user
+                spare = hashed or spare
+                if name == user and hashed:
+                    checked = True
+                    if bcrypt.checkpw(password.encode(), hashed.encode()):
+                        auth_cache[key] = (user, time.time() + AUTH_CACHE_S, mtime)
+                        return user
+        if not checked and spare:
+            # A name that isn't there takes as long as a wrong password for one that is, or
+            # the time an answer takes says which names exist. The result is never used.
+            bcrypt.checkpw(password.encode(), spare.encode())
     except (OSError, ValueError):
         pass
     return None
@@ -241,6 +255,30 @@ def client_address(handler):
     return f"{ipaddress.IPv6Address(int(ip) >> 64 << 64)}/64"
 
 
+def from_another_site(headers):
+    """Whether a request came from another site's page. A browser that was once given the password
+    in its own sign-in box sends it again with a form any site posts here, and a text/plain form
+    body can be JSON. The browser says where the page was in Sec-Fetch-Site; one too old for that
+    still sends Origin with a POST, held against this host's name (or the proxy's X-Forwarded-Host).
+    The devices send neither. The extensions' pages are another origin, and may write."""
+    origin = (headers.get("Origin") or "").strip().lower()
+    if origin.startswith(("chrome-extension://", "moz-extension://")):
+        return False
+    site = (headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if site:
+        return site in ("cross-site", "same-site")
+    scheme, _, host = origin.partition("://")
+    if scheme not in ("http", "https"):
+        return False  # no Origin, or "null"
+    ours = [headers.get("Host") or "", *(headers.get("X-Forwarded-Host") or "").split(",")]
+    return host_key(host) not in {host_key(h) for h in ours if h.strip()}
+
+
+def host_key(host):
+    """A host as Origin and Host both write it: lower case, without the default port."""
+    return host.strip().lower().removesuffix(":443").removesuffix(":80")
+
+
 def locked_out(addr):
     """Whether this address has used up its wrong logins for now."""
     now = time.monotonic()
@@ -317,9 +355,11 @@ def event_key(e):
     return (e.get("d"), e.get("t"), e.get("at"), e.get("block"), e.get("target"), e.get("ms"))
 
 
-def clean_event(raw, device):
-    """A device's event as stored, or None if it isn't one we know."""
+def clean_event(raw, device, latest):
+    """A device's event as stored, or None if it isn't one we know or is stamped after [latest]."""
     if not isinstance(raw, dict) or raw.get("t") not in EVENT_TYPES or not isinstance(raw.get("at"), int):
+        return None
+    if raw["at"] > latest:  # it would never age out, and would count as today's every day
         return None
     e = {"d": device, "t": raw["t"], "at": raw["at"]}
     for k in ("block", "target", "name"):
@@ -332,7 +372,9 @@ def clean_event(raw, device):
 
 
 def load_events(user):
-    """The user's events (cached), dropping any past EVENTS_KEEP_DAYS. Call under events_lock."""
+    """The user's events (cached), oldest first, dropping any past EVENTS_KEEP_DAYS, any stamped
+    more than EVENTS_AHEAD_MS ahead and any past the newest EVENTS_MAX (from before those were
+    refused). Call under events_lock."""
     if user not in events:
         kept = []
         try:
@@ -344,10 +386,14 @@ def load_events(user):
                         pass
         except OSError:
             pass
+        kept.sort(key=lambda e: e.get("at", 0))  # the file is in the order events came in
         events[user] = kept
-    cutoff = int((time.time() - EVENTS_KEEP_DAYS * 86400) * 1000)
-    if events[user] and events[user][0].get("at", 0) < cutoff:
-        events[user] = [e for e in events[user] if e.get("at", 0) >= cutoff]
+    now = time.time()
+    cutoff = int((now - EVENTS_KEEP_DAYS * 86400) * 1000)
+    latest = int(now * 1000) + EVENTS_AHEAD_MS
+    have = events[user]
+    if have and (have[0].get("at", 0) < cutoff or have[-1].get("at", 0) > latest or len(have) > EVENTS_MAX):
+        events[user] = [e for e in have if cutoff <= e.get("at", 0) <= latest][-EVENTS_MAX:]
         rewrite_events(user)
     return events[user]
 
@@ -366,20 +412,27 @@ def add_events(user, device, raw_events):
     with events_lock:
         stored = load_events(user)
         known = {event_key(e) for e in stored}
+        latest = int(time.time() * 1000) + EVENTS_AHEAD_MS
         new = []
         for raw in raw_events:
-            e = clean_event(raw, device)
+            e = clean_event(raw, device, latest)
             if e and event_key(e) not in known:
                 known.add(event_key(e))
                 new.append(e)
         if new:
-            path = events_path(user)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                for e in new:
-                    f.write(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n")
             stored.extend(new)
             stored.sort(key=lambda e: e.get("at", 0))
+            if len(stored) > EVENTS_MAX:
+                # The oldest go, as they would with age; a tenth at once, so that a full log isn't
+                # written out again for every batch.
+                del stored[:len(stored) - EVENTS_MAX * 9 // 10]
+                rewrite_events(user)
+            else:
+                path = events_path(user)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    for e in new:
+                        f.write(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n")
         return len(new)
 
 
@@ -435,12 +488,30 @@ def etag_version(header):
     return (header or "").strip().removeprefix("W/").strip('"')
 
 
+# The request line and X-Forwarded-For come from the caller. Written to the log as they are, a
+# control character in them could rewrite the terminal the log is read in, or (a \r) start a line
+# of its own for xrnhub's log reader. Escaped as http.server's own log_message, replaced here, does.
+LOG_ESCAPES = str.maketrans({**{c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))}, "\\": "\\\\"})
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "xrnrule-sync/1"
+    sys_version = ""  # the Server header named the Python version too
+    timeout = 120  # seconds of silence before a connection is dropped, so a stalled client can't hold a thread
 
     def log_message(self, fmt, *a):
-        who = self.headers.get("X-Forwarded-For", self.client_address[0]) if self.headers else "-"
-        sys.stderr.write(f"{who} {fmt % a}\n")
+        headers = getattr(self, "headers", None)  # none yet on a request line that didn't parse
+        who = headers.get("X-Forwarded-For", self.client_address[0]) if headers else "-"
+        sys.stderr.write(f"{who} {fmt % a}".translate(LOG_ESCAPES) + "\n")
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        # Before the login, which a page elsewhere can have the browser pass for it.
+        if self.command not in ("GET", "HEAD", "OPTIONS") and from_another_site(self.headers):
+            self.send(403, "refused: sent from another site's page")
+            return False
+        return True
 
     def route(self):
         path, _, query = self.path.partition("?")
@@ -504,12 +575,14 @@ class Handler(BaseHTTPRequestHandler):
         addr = client_address(self)
         password = self.headers.get("Authorization")
         if not (reserve_guess(addr) if password else not locked_out(addr)):
-            time.sleep(FAIL_DELAY_S)
+            if password:
+                time.sleep(FAIL_DELAY_S)
             self.send(429, "too many wrong passwords; try again later", headers={"Retry-After": str(FAIL_WINDOW_S)})
             return None
         user = check_login(password)
         if not user:
-            time.sleep(FAIL_DELAY_S)
+            if password:  # a request with none guessed nothing, and needn't hold a thread for it
+                time.sleep(FAIL_DELAY_S)
             # The status page logs in with its own form: a challenge would pop the browser's dialog.
             challenge = {} if self.headers.get("X-Xrn-Client") else {"WWW-Authenticate": 'Basic realm="xrnrule"'}
             self.send(401, "login required", headers=challenge)

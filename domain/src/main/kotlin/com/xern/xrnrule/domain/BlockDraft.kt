@@ -364,6 +364,15 @@ data class BlockDraft(
         return BlockEdits.loosens(old, toBlock(old.id, old.name)) || itemsLoosen(oldItems, toItems(old.id, oldItems))
     }
 
+    /**
+     * I39: this form saved over [stored], the block as it is at save time, rather than as it was
+     * when the page opened: another device may have tightened or locked it meanwhile, and the
+     * page's older values saved over that loosen it. What the page doesn't show (the lock, the
+     * laptop's apps, the credit's lifetime) comes from [stored] too, so it isn't put back either.
+     * Judge [saveLoosens] by [stored]'s checklist as it is then, too.
+     */
+    fun onto(stored: Block): BlockDraft = copy(existing = stored)
+
     companion object {
         /** The form for [existing] (null: a new block) and its checklist [items]. */
         fun of(existing: Block?, items: List<ChecklistItem>, habits: List<Habit>): BlockDraft {

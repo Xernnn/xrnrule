@@ -8,10 +8,12 @@ import android.os.SystemClock
 import com.xern.xrnrule.app.data.HabitSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Copy of `org.isoron.uhabits.xrnrule.XrnruleContract` in xrnloops, our Loop fork (`../xrnloops`).
@@ -72,14 +74,11 @@ class LoopHabits(
 
     /** A tick made in xrnloops: it goes to the habit server, and from there here. */
     fun changed(onDone: () -> Unit = {}) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                pushFromLoop()
-                habits.request(0)?.join()
-            } finally {
-                onDone()
-            }
+        val round = scope.launch(Dispatchers.IO) {
+            pushFromLoop()
+            habits.request(0)?.join()
         }
+        scope.finishWithin(BROADCAST_MS, round, onDone)
     }
 
     /**
@@ -115,5 +114,24 @@ class LoopHabits(
 
     private companion object {
         const val CHECK_MS = 30 * 60 * 1000L
+
+        /** Under the 10 s Android gives a broadcast receiver that went async. */
+        const val BROADCAST_MS = 8_000L
+    }
+}
+
+/**
+ * Calls [onDone] once [work] is over, or after [withinMs] if it isn't by then; [work] goes on
+ * either way. A receiver that went async ([android.content.BroadcastReceiver.goAsync]) must be
+ * finished in time, or Android takes the app for hung, and a habit server that takes the
+ * connection but never answers holds a round a quarter of a minute per call.
+ */
+internal fun CoroutineScope.finishWithin(withinMs: Long, work: Job, onDone: () -> Unit) {
+    launch {
+        try {
+            withTimeoutOrNull(withinMs) { work.join() }
+        } finally {
+            onDone()
+        }
     }
 }

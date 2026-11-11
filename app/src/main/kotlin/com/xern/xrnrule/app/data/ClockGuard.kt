@@ -1,6 +1,8 @@
 package com.xern.xrnrule.app.data
 
+import android.content.ContentResolver
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.SystemClock
 import android.provider.Settings
 import com.xern.xrnrule.domain.Clock
@@ -24,11 +26,13 @@ class AndroidClock : Clock {
  * off, every such jump is a manual change and is added to [skewMs], which [nowWallMs] takes back
  * off; once automatic time is on again the clock is trusted and the skew cleared. Jumps made while
  * xrnrule wasn't running are caught at the next [check] too, unless the phone rebooted in
- * between: the monotonic clock restarts then, so there is nothing to compare against.
+ * between (Android's boot count says so, [TimeSettings.bootCount]): the monotonic clock restarts
+ * then, so there is nothing to compare against.
  */
-class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
+class ClockGuard(private val prefs: SharedPreferences, private val raw: Clock, private val phone: TimeSettings) : Clock {
 
-    private val prefs = context.getSharedPreferences("clock_guard", Context.MODE_PRIVATE)
+    constructor(context: Context, raw: Clock) :
+        this(context.getSharedPreferences("clock_guard", Context.MODE_PRIVATE), raw, AndroidTimeSettings(context.contentResolver))
 
     /** How far the phone's clock has been moved by hand, in ms (positive = set ahead). */
     @Volatile
@@ -61,7 +65,11 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
         val offset = raw.nowWallMs() - mono
         val lastMono = prefs.getLong(KEY_MONO, Long.MAX_VALUE)
         val lastOffset = prefs.getLong(KEY_OFFSET, offset)
-        val sameBoot = mono >= lastMono // otherwise the two offsets aren't comparable
+        val boot = phone.bootCount()
+        val lastBoot = if (prefs.contains(KEY_BOOT)) prefs.getInt(KEY_BOOT, 0) else null
+        // Otherwise the two offsets aren't comparable. The monotonic clock alone can't tell: a boot
+        // looked at later into it than the last look was into its own passes for the same one.
+        val sameBoot = mono >= lastMono && (boot == null || lastBoot == null || boot == lastBoot)
         val jumped = sameBoot && abs(offset - lastOffset) > TOLERANCE_MS
         var skew = skewMs
         if (automaticTime()) {
@@ -70,22 +78,21 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
             skew += offset - lastOffset
         }
         // The baseline only needs writing when it moved: offsets don't change between clock sets.
-        val write = skew != skewMs || jumped || !sameBoot || !prefs.contains(KEY_MONO)
+        val write = skew != skewMs || jumped || !sameBoot || !prefs.contains(KEY_MONO) || boot != lastBoot
         skewMs = skew
         if (write) {
-            prefs.edit()
+            val edit = prefs.edit()
                 .putLong(KEY_SKEW, skew)
                 .putLong(KEY_OFFSET, offset)
                 .putLong(KEY_MONO, mono)
-                .apply()
+            if (boot != null) edit.putInt(KEY_BOOT, boot) else edit.remove(KEY_BOOT)
+            edit.apply()
         }
     }
 
-    fun automaticTime(): Boolean =
-        Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME, 1) == 1
+    fun automaticTime(): Boolean = phone.automaticTime()
 
-    fun automaticTimeZone(): Boolean =
-        Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME_ZONE, 1) == 1
+    fun automaticTimeZone(): Boolean = phone.automaticTimeZone()
 
     private companion object {
         const val KEY_ZONE = "zone"
@@ -93,8 +100,29 @@ class ClockGuard(private val context: Context, private val raw: Clock) : Clock {
         const val KEY_SKEW = "skew"
         const val KEY_OFFSET = "offset"
         const val KEY_MONO = "mono"
+        const val KEY_BOOT = "boot"
 
         /** Clock drift and network corrections stay well under this; a hand-set change doesn't. */
         const val TOLERANCE_MS = 5_000L
     }
+}
+
+/** What [ClockGuard] reads of the phone's settings. */
+interface TimeSettings {
+    /** Whether the phone sets its clock itself (from the network). */
+    fun automaticTime(): Boolean
+
+    /** Whether the phone sets its time zone itself. */
+    fun automaticTimeZone(): Boolean
+
+    /** Which boot this is: a new number at every boot, null where the phone keeps none. */
+    fun bootCount(): Int?
+}
+
+class AndroidTimeSettings(private val resolver: ContentResolver) : TimeSettings {
+    override fun automaticTime(): Boolean = Settings.Global.getInt(resolver, Settings.Global.AUTO_TIME, 1) == 1
+
+    override fun automaticTimeZone(): Boolean = Settings.Global.getInt(resolver, Settings.Global.AUTO_TIME_ZONE, 1) == 1
+
+    override fun bootCount(): Int? = Settings.Global.getInt(resolver, Settings.Global.BOOT_COUNT, -1).takeIf { it >= 0 }
 }

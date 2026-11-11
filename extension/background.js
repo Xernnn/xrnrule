@@ -100,12 +100,35 @@ async function cachedRules() {
   return rulesCache;
 }
 
+/** Every kind of window, so an undocked DevTools window in front is one of ours too. */
+const WINDOW_TYPES = ["normal", "popup", "panel", "app", "devtools"];
+
+/**
+ * Whether a window this extension can see has focus; null if the browser won't say. Told to
+ * xrnrule with every rule fetch (once a minute): with none, the browser window in front is one the
+ * extension can't see, a private window it may not run in or another profile's, and the laptop
+ * treats that as the extension being off (I49). Our pages and the browser's own (about:, the new
+ * tab page, xrnrule's block page) are windows it sees, though no content script runs in them.
+ */
+async function seesFocus() {
+  if (typeof chrome.windows?.getLastFocused !== "function") return null;
+  try {
+    return !!(await chrome.windows.getLastFocused({ windowTypes: WINDOW_TYPES }))?.focused;
+  } catch {} // a browser that takes fewer window types: ask without
+  try {
+    return !!(await chrome.windows.getLastFocused())?.focused;
+  } catch {
+    return false; // no window it can see is open at all, only private ones: none focused
+  }
+}
+
 let refreshing = null;
 /** Fetches the rule list and applies it; one at a time. */
 function refreshRules() {
   refreshing ??= (async () => {
     try {
-      const rules = await call("/ext/rules");
+      const focused = await seesFocus();
+      const rules = await call(focused == null ? "/ext/rules" : `/ext/rules?focused=${focused ? 1 : 0}`);
       rulesCache = rules;
       await chrome.storage.local.set({ rules });
       await applyRules(rules);
@@ -215,7 +238,16 @@ chrome.tabs.onUpdated.addListener((_id, info, tab) => {
 
 // ---- pages ---------------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+/**
+ * A message from one of our own pages (the popup, the options page, block.html), not from the
+ * content script in a web page. A content script runs in the page's own process: if that page
+ * ever got hold of it, it must not be able to point the extension at another port or reload it.
+ */
+const fromOwnPage = (sender) => typeof sender?.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  // The options page's: what xrnrule's port is, and "Check now".
+  if ((msg?.type === "setPort" || msg?.type === "checkUpdate") && !fromOwnPage(sender)) return false;
   switch (msg?.type) {
     case "beat":
       beat(msg.host ?? null, !!msg.focused, !!msg.standIn, !!msg.playing).then(reply);
@@ -248,7 +280,16 @@ async function start() {
 
 chrome.runtime.onStartup.addListener(start);
 chrome.runtime.onInstalled.addListener(start);
-chrome.alarms.create("rules", { periodInMinutes: 1 });
+// Made only when it isn't there. Made again at every start of the worker, it put the next poll a
+// minute off each time, and a worker woken more often than that, with no page beating to keep it
+// up, never polled: no rule list, and no word that the extension still sees the window in front.
+(async () => {
+  let alarm = null;
+  try {
+    alarm = await chrome.alarms.get("rules");
+  } catch {} // can't tell: make it
+  if (!alarm) chrome.alarms.create("rules", { periodInMinutes: 1 });
+})();
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "rules") {
     refreshRules();

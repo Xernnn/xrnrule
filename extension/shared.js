@@ -90,32 +90,39 @@ self.Xrn = (() => {
    * The rule list as declarativeNetRequest rules, numbered from [base]: a redirect for each
    * blocked target, and above it an allow rule for each exception with a path, which
    * excludedRequestDomains can't say. [back] is the block page's "where it came from" part.
+   * Then, while there's room, a blocked target embedded in another page (a video player) is
+   * refused: only as a page of its own is it sent to the block page, which stands in for it.
    */
   function redirectRules(rules, page, ownPage, base) {
     const out = [];
     const add = (rule) => { if (out.length < MAX_RULES) out.push({ id: base + out.length, ...rule }); };
-    for (const r of rules?.blocked ?? []) {
+    const where = (r) => {
       const hosts = (r.except || []).filter((e) => !e.includes("/"));
+      return {
+        regexFilter: urlPattern(r.domain),
+        requestDomains: [hostPart(r.domain)],
+        // An exception must hold here too, or the network layer would block music.youtube.com
+        // while every other part lets it through.
+        ...(hosts.length ? { excludedRequestDomains: hosts } : {}),
+      };
+    };
+    for (const r of rules?.blocked ?? []) {
       add({
         priority: 1,
         // \\0 is the whole URL asked for: the block page goes back there once the site opens.
         action: { type: "redirect", redirect: { regexSubstitution: blockUrl(page, ownPage, r.domain, "\\0") } },
-        condition: {
-          regexFilter: urlPattern(r.domain),
-          requestDomains: [hostPart(r.domain)],
-          // An exception must hold here too, or the network layer would block music.youtube.com
-          // while every other part lets it through.
-          ...(hosts.length ? { excludedRequestDomains: hosts } : {}),
-          resourceTypes: ["main_frame"],
-        },
+        condition: { ...where(r), resourceTypes: ["main_frame"] },
       });
       for (const e of (r.except || []).filter((x) => x.includes("/"))) {
         add({
           priority: 2,
           action: { type: "allow" },
-          condition: { regexFilter: urlPattern(e), requestDomains: [hostPart(e)], resourceTypes: ["main_frame"] },
+          condition: { regexFilter: urlPattern(e), requestDomains: [hostPart(e)], resourceTypes: ["main_frame", "sub_frame"] },
         });
       }
+    }
+    for (const r of rules?.blocked ?? []) {
+      add({ priority: 1, action: { type: "block" }, condition: { ...where(r), resourceTypes: ["sub_frame"] } });
     }
     return out;
   }

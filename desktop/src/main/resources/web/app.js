@@ -589,7 +589,7 @@ async function submitForm() {
     hoursMore: d.hours.moreWindows,
   });
   if (result.error) showFormError(result.error);
-  else if (result.token) startGuard(result.token, result.waitMs, "Saving (it makes the block easier to get past)");
+  else if (result.token) startGuard(result.token, result.waitMs, result.label ?? "Saving (it makes the block easier to get past)");
   else {
     closeForm();
     refresh();
@@ -728,7 +728,7 @@ function alerts() {
     if (state.windowSystem === "hyprland") out.push(["Desktop apps aren't being watched", "Hyprland's sockets haven't answered. Is HYPRLAND_INSTANCE_SIGNATURE in the service's environment? systemctl --user show-environment"]);
     else out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
   }
-  if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering. Turn it on in the browser's extensions page."]);
+  if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering for the window in front. Turn it on in the browser's extensions page, allow it in private windows, or use a profile that has it."]);
   if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow the xrnrule extension in incognito on the browser's extensions page."]);
   if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);

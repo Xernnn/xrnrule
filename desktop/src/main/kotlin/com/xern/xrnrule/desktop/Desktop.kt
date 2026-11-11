@@ -24,8 +24,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-/** One window as KWin (or Hyprland) reports it: the `.desktop` id when it has one, else its WM class. */
-data class AppWindow(val appId: String, val resourceClass: String, val pid: Long)
+/**
+ * One window as KWin (or Hyprland) reports it: the `.desktop` id when it has one, else its WM
+ * class. [title]: Hyprland's; the KWin script doesn't send one, so there it is always "".
+ */
+data class AppWindow(val appId: String, val resourceClass: String, val pid: Long, val title: String = "")
 
 /**
  * What the KWin script (`desktop/kwin`) calls over D-Bus, and [HyprlandWindows] calls directly. Arguments are strings: a JS number
@@ -40,6 +43,12 @@ interface DesktopBus : DBusInterface {
     fun Added(appId: String, resourceClass: String, pid: String): String
 
     fun Removed(pid: String)
+
+    /**
+     * The window in front is called [title], on coming in front and on every change. Only
+     * [HyprlandWindows] says; the KWin script sends no caption.
+     */
+    fun Titled(title: String)
 }
 
 /**
@@ -77,9 +86,36 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
             field = value
             // Focus went to an app that isn't a browser: whatever tab was in front no longer is.
             if (value != null && !isBrowser(value.appId) && heartbeat?.fromBlockPage != true) heartbeat = null
-            browsers.front(value?.appId, value != null && isBrowser(value.appId), store.clock.nowMonotonicMs())
+            watchFront()
         }
+
+    /**
+     * A locked screen is nothing in use, and no browser is in front to close (I49): under the lock
+     * a browser may not count its window as focused, and the extension would say so. The silence
+     * starts again at unlocking, as after a sleep.
+     */
     @Volatile var locked = false
+        set(value) {
+            field = value
+            watchFront()
+        }
+
+    /** The window in front is called [title] now ([DesktopBus.Titled]). */
+    fun titled(title: String) {
+        active = active?.copy(title = title)
+    }
+
+    /**
+     * The browser in front as I49 watches it: none while the screen is locked, nor while one of a
+     * browser's own windows the extension can't see is in front ([isOwnWindow]).
+     */
+    private fun browserInFront(): String? = active?.takeUnless { locked || isOwnWindow(it.title) }?.appId?.takeIf(::isBrowser)
+
+    private fun watchFront() {
+        val browser = browserInFront()
+        browsers.front(browser, browser != null, store.clock.nowMonotonicMs())
+    }
+
     @Volatile private var heartbeat: Heartbeat? = null
     @Volatile private var heartbeatAtMono = 0L
     /** I47: pages playing sound out of sight, by when each last said so. */
@@ -103,10 +139,12 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
      */
     fun onHeartbeat(beat: Heartbeat) {
         val now = store.clock.nowMonotonicMs()
-        // A block page says the extension is there only while it's the page in front, being waited
-        // on where the extension's own pages can't speak. Left open in another tab it beats on with
-        // the extension turned off, and the browser would never be closed for that (I49).
-        if (!beat.fromBlockPage || beat.focused) browsers.heard(now)
+        // I49: the extension is there for the window in front only when a page of it speaks from
+        // that window, focused ([BrowserWatch.spoke] below), or it says a window it can see has focus
+        // ([heardExtension]). Its pages in a window behind beat on, unfocused, while a private window
+        // it may not run in, or another profile's, is in front. The block page is ours, not the
+        // extension's: it opens in any window, the extension on or off, and kept in front it would
+        // keep such a browser open.
         // It stands in for an app only while that app is blocked here (I4). Its address is anyone's
         // to type: for a habit app (I16) it would run that app's timer with the app never opened.
         if (beat.fromBlockPage && beat.app != null && beat.app !in store.world.value.appliedShield.blockedPackages) return
@@ -126,8 +164,16 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         update()
     }
 
-    /** The extension asked for its rules: alive, even on a page that doesn't beat. */
-    fun heardExtension() = browsers.heard(store.clock.nowMonotonicMs())
+    /**
+     * The extension asked for its rules (once a minute), saying whether a window it can see has
+     * [focused]: alive for the window in front even where no page of it beats (about:, the new tab
+     * page, our block page). Not while no window it can see has focus: a private window it may not
+     * run in, or another profile's, is in front (I49). Null: a version up to 2.3.5, which doesn't
+     * say; or the laptop waking up, which isn't a silent extension.
+     */
+    fun heardExtension(focused: Boolean? = null) {
+        if (focused != false) browsers.heard(store.clock.nowMonotonicMs())
+    }
 
     @Synchronized
     fun update() {
@@ -150,11 +196,9 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         }
     }
 
-    /** A browser is in front but the extension has gone quiet: website blocking isn't working. */
-    fun extensionMissing(): Boolean {
-        val app = active?.appId ?: return false
-        return isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
-    }
+    /** A browser is in front but the extension has gone quiet for it: website blocking isn't working. */
+    fun extensionMissing(): Boolean =
+        browserInFront() != null && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
 
     companion object {
         const val FRESH_MS = 6_000L
@@ -174,6 +218,20 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
          * for Zen and close it after 10 s as a browser without the extension (I49).
          */
         fun isBrowser(appId: String): Boolean = appId.lowercase().split(NOT_A_WORD).any { it in BROWSERS }
+
+        /**
+         * A browser's own window that the extension can't list, by its title: Picture-in-Picture
+         * ("Picture-in-Picture" in Firefox and Zen, "Picture in picture" in Chromium) and an
+         * undocked DevTools ("Developer Tools — …" in Firefox and Zen, "DevTools - …" in
+         * Chromium), in English. No page of the extension is focused there and it sees no focused
+         * window of its own, so kept in front (clicked to pause a video) the browser was taken for
+         * one with the extension off and closed mid-video (I49). In front, it is no browser in
+         * front. That opens nothing new: any other app in front already stops that clock, with the
+         * extension on or off, and with it on, its page behind still counts a video playing (I47).
+         */
+        fun isOwnWindow(title: String): Boolean =
+            title == "Picture-in-Picture" || title == "Picture in picture" ||
+                title == "Developer Tools" || title.startsWith("Developer Tools — ") || title.startsWith("DevTools - ")
 
         private val NOT_A_WORD = Regex("[^a-z0-9]+")
     }
@@ -252,6 +310,11 @@ class Enforcer(
 
     override fun Removed(pid: String) {
         pid.toLongOrNull()?.let { windows.remove(it) }
+    }
+
+    override fun Titled(title: String) {
+        foreground.titled(title)
+        foreground.update()
     }
 
     private fun verdict(w: AppWindow?): String {

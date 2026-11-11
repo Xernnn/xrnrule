@@ -31,7 +31,9 @@ class HyprlandTest {
         assertEquals(Event.Closed("0x559dc0c9f680"), Hyprland.parseEvent("closewindow>>559dc0c9f680"))
         // The v1 event and the rest aren't needed: v2 names the window exactly.
         assertNull(Hyprland.parseEvent("activewindow>>zen,YouTube"))
-        assertNull(Hyprland.parseEvent("windowtitlev2>>559dc0c9f680,foot"))
+        assertNull(Hyprland.parseEvent("windowtitle>>559dc0c9f680"))
+        assertEquals(Event.Titled("0x559dc0c9f680", "foot: ~/a, b"), Hyprland.parseEvent("windowtitlev2>>559dc0c9f680,foot: ~/a, b"))
+        assertEquals(Event.Titled("0x559dc0c9f680", ""), Hyprland.parseEvent("windowtitlev2>>559dc0c9f680,"))
         assertNull(Hyprland.parseEvent("garbage"))
         assertNull(Hyprland.parseEvent("closewindow>>not-hex"))
     }
@@ -190,6 +192,9 @@ class HyprlandTest {
         override fun Added(appId: String, resourceClass: String, pid: String) =
             (if (appId == "xrnruletest") "block" else "ok").also { calls += "Added $appId $pid" }
         override fun Removed(pid: String) { calls += "Removed $pid" }
+        /** Apart from [calls], which the tests compare whole. */
+        val titles: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        override fun Titled(title: String) { titles += title }
         override fun getObjectPath() = "/Desktop"
     }
 
@@ -240,6 +245,37 @@ class HyprlandTest {
             hypr.dropListeners()
             waitFor("the second listing") { connections == 2 && bus.calls.size >= 3 }
             assertEquals(listOf("Activated  0", "Added zen 10", "Activated zen 10"), bus.calls.toList())
+        } finally {
+            hypr.stop()
+            runtime.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theTitleOfTheWindowInFrontIsReported() {
+        val runtime = Files.createTempDirectory("xrnrule-hypr").toFile()
+        val hypr = FakeHyprland(runtime, "sig")
+        try {
+            hypr.clients = """[{"address": "0xaaa", "class": "zen", "title": "YouTube — Zen Browser", "pid": 10},
+                {"address": "0xbbb", "class": "zen", "title": "", "pid": 10}]"""
+            hypr.active = """{"address": "0xaaa", "class": "zen", "pid": 10}"""
+            val bus = Calls()
+            val env = mapOf("XDG_RUNTIME_DIR" to runtime.path, "HYPRLAND_INSTANCE_SIGNATURE" to "sig")
+            HyprlandWindows(Hyprland.Sockets(env)).start(bus)
+            waitFor("the listing") { bus.titles.size == 1 && hypr.listening == 1 }
+            assertEquals(listOf("YouTube — Zen Browser"), bus.titles.toList())
+
+            // Zen's Picture-in-Picture window gets its title, then comes in front with it.
+            hypr.emit("windowtitlev2>>bbb,Picture-in-Picture")
+            hypr.emit("activewindowv2>>bbb")
+            waitFor("its title") { bus.titles.size == 2 }
+            assertEquals("Picture-in-Picture", bus.titles.last())
+
+            // A window behind is renamed: nothing to tell. The one in front: told.
+            hypr.emit("windowtitlev2>>aaa,Other — Zen Browser")
+            hypr.emit("windowtitlev2>>bbb,Picture in picture")
+            waitFor("the new title") { bus.titles.size == 3 }
+            assertEquals(listOf("YouTube — Zen Browser", "Picture-in-Picture", "Picture in picture"), bus.titles.toList())
         } finally {
             hypr.stop()
             runtime.deleteRecursively()

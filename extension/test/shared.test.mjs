@@ -82,7 +82,7 @@ test("redirectRules: a plain host, a path, and exceptions of both kinds", () => 
     { domain: "x.com", except: ["x.com/messages"] },
   ] };
   const out = X.redirectRules(rules, null, "own.html", 1000);
-  assert.deepEqual([...out].map((r) => r.id), [1000, 1001, 1002, 1003]);
+  assert.deepEqual([...out].map((r) => r.id), [1000, 1001, 1002, 1003, 1004, 1005, 1006]); // then the embeds
   assert.equal(out[0].condition.regexFilter, "^https?://.*");
   assert.deepEqual([...out[0].condition.excludedRequestDomains], ["old.reddit.com"]);
   const path = new RegExp(out[1].condition.regexFilter);
@@ -95,6 +95,23 @@ test("redirectRules: a plain host, a path, and exceptions of both kinds", () => 
   assert.equal(out[2].condition.excludedRequestDomains, undefined, "a path can't go in that list");
   assert.equal(out[3].action.type, "allow");
   assert.ok(out[3].priority > out[2].priority);
+});
+
+test("redirectRules: a blocked site embedded in another page is refused, an exception still holding", () => {
+  const rules = { blocked: [{ domain: "youtube.com", except: ["music.youtube.com", "youtube.com/watch"] }] };
+  const out = X.redirectRules(rules, "http://127.0.0.1:47321/block", "own.html", 1000);
+  const embeds = out.filter((r) => r.condition.resourceTypes.includes("sub_frame"));
+  const refused = embeds.find((r) => r.action.type === "block");
+  assert.ok(refused, "a YouTube player inside another page doesn't play");
+  assert.deepEqual([...refused.condition.requestDomains], ["youtube.com"]);
+  assert.deepEqual([...refused.condition.excludedRequestDomains], ["music.youtube.com"]);
+  assert.equal(new RegExp(refused.condition.regexFilter).test("https://www.youtube.com/embed/abc"), true);
+  const allowed = embeds.find((r) => r.action.type === "allow");
+  assert.ok(allowed && allowed.priority > refused.priority, "an exception with a path holds for an embed too");
+  // Only a page of its own goes to the block page, which stands in for the site (I4): never a frame.
+  for (const r of out.filter((x) => x.action.type === "redirect")) assert.deepEqual([...r.condition.resourceTypes], ["main_frame"]);
+  // Embeds come last, so with too many rules it's they that are left out.
+  assert.equal(out.at(-1), refused);
 });
 
 test("blockUrl prefers the engine's page and carries the way back in the hash", () => {

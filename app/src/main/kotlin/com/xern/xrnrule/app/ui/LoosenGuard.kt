@@ -25,7 +25,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
+import com.xern.xrnrule.domain.EnforcementTier
 
 /**
  * A change that makes a block easier to get past, held until [LoosenGuardDialog] lets it through
@@ -40,6 +42,23 @@ data class LoosenRequest(
     val blockIds: List<String> = emptyList(),
     val apply: () -> Unit,
 )
+
+/**
+ * I6, §2.3: a change whose block's unlock would open other blocks ([BlockEdits.opens]) goes
+ * through their guard: the request for those of [opened] that need it now, or null if none does.
+ */
+fun openingRequest(store: WorldStore, opened: List<Block>, title: String, apply: () -> Unit): LoosenRequest? {
+    val guarded = opened.filter { BlockEdits.guardNeeded(store.engine, store.world.value, it, store.clock) }
+    if (guarded.isEmpty()) return null
+    val names = andList(guarded.map { it.name })
+    return LoosenRequest(
+        title,
+        "Its unlock would open what $names block${if (guarded.size == 1) "s" else ""} too.",
+        hardcore = guarded.any { it.enforcementTier == EnforcementTier.HARDCORE },
+        blockIds = guarded.map { it.id },
+        apply = apply,
+    )
+}
 
 /** How long a SOFT block makes you wait before a loosening change goes through. */
 const val LOOSEN_WAIT_MS = 60_000L
