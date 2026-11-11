@@ -44,6 +44,7 @@ import gzip
 import hashlib
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
@@ -537,7 +538,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         known = etag_version(self.headers.get("If-None-Match"))
         try:
-            wait = min(max(float(query.get("wait", 0)), 0), MAX_WAIT_S)
+            wait = float(query.get("wait", 0))
+            if not math.isfinite(wait):  # NaN is past every comparison: the wait below would never end
+                raise ValueError
+            wait = min(max(wait, 0), MAX_WAIT_S)
         except ValueError:
             return self.send(400, "bad wait")
         try:

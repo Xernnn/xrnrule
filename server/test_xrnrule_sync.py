@@ -156,6 +156,24 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(304, status)
         self.assertGreaterEqual(time.monotonic() - start, 0.4)
 
+    def test_a_wait_that_is_no_number_is_refused(self):
+        _, _, headers = self.call("GET", "/state")
+        # NaN is past every comparison: the long poll would never see its time run out.
+        for bad in ("nan", "-nan", "x"):
+            req = urllib.request.Request(self.base + f"/state?wait={bad}")
+            req.add_header("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+            req.add_header("If-None-Match", headers["ETag"])
+            try:
+                with urllib.request.urlopen(req, timeout=3) as r:
+                    status = r.status
+            except urllib.error.HTTPError as e:
+                status = e.code
+            except OSError:
+                status = None  # no answer in time
+                self.call("PUT", "/state", {"woken": bad}, {"If-Match": "*"})  # lets the stuck poll go
+                _, _, headers = self.call("GET", "/state")
+            self.assertEqual(400, status, bad)
+
     def test_login_and_open_paths(self):
         self.assertEqual(401, self.call("GET", "/state", password=WRONG)[0])
         status, _, headers = self.call("GET", "/state", password=WRONG, headers={"X-Xrn-Client": "web"})
