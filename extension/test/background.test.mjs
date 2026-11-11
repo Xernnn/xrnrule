@@ -134,3 +134,22 @@ test("the rules alarm is made only when it isn't there, so a start of the worker
   await settle();
   assert.deepEqual(created, ["rules"]);
 });
+
+test("setPort and checkUpdate are taken from the extension's own pages only, not a content script", async () => {
+  const listeners = [];
+  const bg = answering({ "chrome.runtime.onMessage.addListener": (fn) => { listeners.push(fn); } });
+  const [onMessage] = listeners;
+  const page = { id: "test", tab: { id: 7 }, frameId: 0, url: "https://evil.example/" };
+  let replied = false;
+  assert.equal(onMessage({ type: "setPort", port: 9999 }, page, () => { replied = true; }), false);
+  assert.equal(onMessage({ type: "checkUpdate" }, page, () => { replied = true; }), false);
+  await settle();
+  assert.equal(bg.stored.port, undefined, "the port stays");
+  assert.equal(replied, false);
+  // A page's content script still reports the site in front.
+  assert.ok(await new Promise((resolve) => onMessage({ type: "beat", host: "example.com", focused: true }, page, resolve)));
+  // The options page, in a tab of its own, may.
+  const options = { id: "test", tab: { id: 8 }, url: "chrome-extension://test/options.html" };
+  await new Promise((resolve) => onMessage({ type: "setPort", port: 9999 }, options, resolve));
+  assert.equal(bg.stored.port, 9999);
+});

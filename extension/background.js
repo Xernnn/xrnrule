@@ -238,7 +238,16 @@ chrome.tabs.onUpdated.addListener((_id, info, tab) => {
 
 // ---- pages ---------------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+/**
+ * A message from one of our own pages (the popup, the options page, block.html), not from the
+ * content script in a web page. A content script runs in the page's own process: if that page
+ * ever got hold of it, it must not be able to point the extension at another port or reload it.
+ */
+const fromOwnPage = (sender) => typeof sender?.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  // The options page's: what xrnrule's port is, and "Check now".
+  if ((msg?.type === "setPort" || msg?.type === "checkUpdate") && !fromOwnPage(sender)) return false;
   switch (msg?.type) {
     case "beat":
       beat(msg.host ?? null, !!msg.focused, !!msg.standIn, !!msg.playing).then(reply);
