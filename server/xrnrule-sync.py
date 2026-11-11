@@ -17,7 +17,8 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               a device would take as everything deleted (contract I45)
     GET  /devices             when each device last checked in (X-Device), for the status page
     POST /events              {"events": [{"t": "blocked"|"habit"|"unlock"|"bought"|"break", "at": ms, ...}]} from a
-                              device's local log (X-Device); duplicates are dropped. 120 days kept
+                              device's local log (X-Device); duplicates are dropped, and so is
+                              one stamped more than a day ahead of this server. 120 days kept
     GET  /events?since=MS     those events, for the weekly review in the habits web app
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out
@@ -67,6 +68,7 @@ FAIL_LIMIT = 10  # wrong logins from one address within FAIL_WINDOW_S, then 429 
 FAIL_WINDOW_S = 15 * 60
 SEEN_WRITE_S = 60  # devices.json is rewritten at most this often per user
 EVENTS_KEEP_DAYS = 120
+EVENTS_AHEAD_MS = 86400 * 1000  # an event stamped further ahead of this server's clock is no time at all
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
@@ -349,9 +351,11 @@ def event_key(e):
     return (e.get("d"), e.get("t"), e.get("at"), e.get("block"), e.get("target"), e.get("ms"))
 
 
-def clean_event(raw, device):
-    """A device's event as stored, or None if it isn't one we know."""
+def clean_event(raw, device, latest):
+    """A device's event as stored, or None if it isn't one we know or is stamped after [latest]."""
     if not isinstance(raw, dict) or raw.get("t") not in EVENT_TYPES or not isinstance(raw.get("at"), int):
+        return None
+    if raw["at"] > latest:  # it would never age out, and would count as today's every day
         return None
     e = {"d": device, "t": raw["t"], "at": raw["at"]}
     for k in ("block", "target", "name"):
@@ -364,7 +368,8 @@ def clean_event(raw, device):
 
 
 def load_events(user):
-    """The user's events (cached), dropping any past EVENTS_KEEP_DAYS. Call under events_lock."""
+    """The user's events (cached), oldest first, dropping any past EVENTS_KEEP_DAYS and any stamped
+    more than EVENTS_AHEAD_MS ahead (from before those were refused). Call under events_lock."""
     if user not in events:
         kept = []
         try:
@@ -376,10 +381,14 @@ def load_events(user):
                         pass
         except OSError:
             pass
+        kept.sort(key=lambda e: e.get("at", 0))  # the file is in the order events came in
         events[user] = kept
-    cutoff = int((time.time() - EVENTS_KEEP_DAYS * 86400) * 1000)
-    if events[user] and events[user][0].get("at", 0) < cutoff:
-        events[user] = [e for e in events[user] if e.get("at", 0) >= cutoff]
+    now = time.time()
+    cutoff = int((now - EVENTS_KEEP_DAYS * 86400) * 1000)
+    latest = int(now * 1000) + EVENTS_AHEAD_MS
+    have = events[user]
+    if have and (have[0].get("at", 0) < cutoff or have[-1].get("at", 0) > latest):
+        events[user] = [e for e in have if cutoff <= e.get("at", 0) <= latest]
         rewrite_events(user)
     return events[user]
 
@@ -398,9 +407,10 @@ def add_events(user, device, raw_events):
     with events_lock:
         stored = load_events(user)
         known = {event_key(e) for e in stored}
+        latest = int(time.time() * 1000) + EVENTS_AHEAD_MS
         new = []
         for raw in raw_events:
-            e = clean_event(raw, device)
+            e = clean_event(raw, device, latest)
             if e and event_key(e) not in known:
                 known.add(event_key(e))
                 new.append(e)

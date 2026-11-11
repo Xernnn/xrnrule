@@ -447,6 +447,29 @@ class SyncServerTest(unittest.TestCase):
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
 
+    def test_an_event_stamped_far_ahead_of_the_clock_is_refused(self):
+        # One would never age out, and xrnhub would count it among today's every day.
+        now = int(time.time() * 1000)
+        batch = {"events": [
+            {"t": "blocked", "at": now + 3600 * 1000, "target": "hour-fast.example"},  # a clock an hour fast
+            {"t": "blocked", "at": now + 2 * 86400 * 1000, "target": "days-ahead.example"},
+            {"t": "blocked", "at": 10**20, "target": "no-time.example"},
+        ]}
+        self.assertEqual(1, srv.add_events("ahead", "phone", batch["events"]))  # as POST /events does
+        with srv.events_lock:
+            self.assertEqual(["hour-fast.example"], [e["target"] for e in srv.load_events("ahead")])
+        # One kept before this rule goes when the log is next read in, and the file with it.
+        path = os.path.join(srv.args.data, "users", "earlier", "events.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            for at, target in ((10**20, "no-time.example"), (now - 1000, "real.example")):
+                f.write(json.dumps({"d": "phone", "t": "blocked", "at": at, "target": target}) + "\n")
+        with srv.events_lock:
+            srv.events.pop("earlier", None)
+            self.assertEqual(["real.example"], [e["target"] for e in srv.load_events("earlier")])
+        with open(path) as f:
+            self.assertNotIn("no-time.example", f.read())
+
     def test_a_page_on_another_site_cant_write_with_the_browsers_password(self):
         # A browser sends the password it was once given with a form another site posts here,
         # and a text/plain form body can be JSON.
