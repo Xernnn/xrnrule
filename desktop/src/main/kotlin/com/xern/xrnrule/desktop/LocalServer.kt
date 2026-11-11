@@ -732,9 +732,15 @@ class LocalServer(
 
     private fun body(ex: HttpExchange): String = ex.requestBody.use { it.readBytes().decodeToString() }
 
-    /** A website's own icon ([SiteIconCache]); 404 until the laptop has it. */
+    /**
+     * A website's own icon ([SiteIconCache]); 404 until the laptop has it. Only for a site a block
+     * names, or a host under one (the block page shows the host it stands in for): an `<img>` on
+     * any web page can ask, and would have the daemon fetch any host's home page and keep a file
+     * for each. [secure] keeps such a page from telling by the answer which sites are blocked.
+     */
     private fun siteIcon(ex: HttpExchange, host: String) {
-        val icon = siteIcons.icon(host) ?: return send(ex, 404, "no icon yet")
+        val named = store.world.value.blocks.any { b -> (b.targetSites + b.exceptSites).any { Sites.matches(host, Sites.hostOf(it)) } }
+        val icon = (if (named) siteIcons.icon(host) else null) ?: return send(ex, 404, "no icon yet")
         ex.responseHeaders.add("Content-Type", icon.type) // a raster type, from the bytes themselves
         ex.responseHeaders.add("Cache-Control", "private, max-age=86400")
         secure(ex)
@@ -753,10 +759,12 @@ class LocalServer(
 
     /**
      * No other site may frame these pages (a click there could press our buttons), run scripts
-     * in them that aren't ours, or learn from a Referer where a blocked tab went back from.
+     * in them that aren't ours, learn from a Referer where a blocked tab went back from, or load
+     * what we answer as its own image or script, which would tell it, for one, an icon from a 404.
      */
     private fun secure(ex: HttpExchange) {
         ex.responseHeaders.add("Content-Security-Policy", CONTENT_POLICY)
+        ex.responseHeaders.add("Cross-Origin-Resource-Policy", "same-origin")
         ex.responseHeaders.add("X-Frame-Options", "DENY")
         ex.responseHeaders.add("X-Content-Type-Options", "nosniff")
         ex.responseHeaders.add("Referrer-Policy", "no-referrer")

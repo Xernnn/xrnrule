@@ -6,6 +6,10 @@ import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.PersistPort
+import com.xern.xrnrule.domain.SiteIcons
+import com.xern.xrnrule.domain.Trigger
+import com.xern.xrnrule.domain.TriggerType
+import com.xern.xrnrule.domain.TriggerUnit
 import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +26,7 @@ import java.net.ServerSocket
 import java.net.URI
 import java.nio.file.Files
 import java.time.ZoneId
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The daemon's door on `127.0.0.1`, over HTTP as the extension and any web page reach it: what
@@ -43,8 +48,15 @@ class LocalServerTest {
         dir.deleteRecursively()
     }
 
-    /** A daemon holding [blocks], with [known] the browsers that have had the extension (I49). */
-    private inner class Daemon(blocks: List<Block> = emptyList(), known: String? = null) {
+    /**
+     * A daemon holding [blocks], with [known] the browsers that have had the extension (I49), and
+     * [fetcher] what fetches site icons (nothing, by default).
+     */
+    private inner class Daemon(
+        blocks: List<Block> = emptyList(),
+        known: String? = null,
+        fetcher: (String, Int) -> SiteIcons.Fetched? = { _, _ -> null },
+    ) {
         val clock = TestClock()
         val port = ServerSocket(0).use { it.localPort }
         private val config = Config(server = "", user = "", password = "", port = port, dataDir = dir)
@@ -70,7 +82,7 @@ class LocalServerTest {
             }
             val enforcer = Enforcer(store, quiet, config).also { it.foreground = foreground }
             val shared = SharedSyncClient(config, store, telemetry, scope)
-            LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), SiteIconCache(icons, scope), telemetry).start()
+            LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), SiteIconCache(icons, scope, fetcher), telemetry).start()
         }
 
         /** The answer's status code. [xrnrule]: with the header that only our pages and the extension can send. */
@@ -129,5 +141,33 @@ class LocalServerTest {
             assertEquals(200, d.get("/ext/rules"))
             assertNull(d.foreground.browsers.toClose(d.clock.mono))
         }
+    }
+
+    private fun await(what: String, ok: () -> Boolean) {
+        val until = System.currentTimeMillis() + 10_000
+        while (!ok()) {
+            check(System.currentTimeMillis() < until) { "timed out waiting for: $what" }
+            Thread.sleep(20)
+        }
+    }
+
+    @Test
+    fun aSiteIconIsOnlyLookedForForASiteABlockNames() {
+        val looked = ConcurrentHashMap.newKeySet<String>()
+        val block = Block(
+            "b", "B", targetSites = setOf("youtube.com"), exceptSites = setOf("music.youtube.com"),
+            trigger = Trigger(TriggerType.TIMER, 60_000, TriggerUnit.MS),
+        )
+        val d = Daemon(listOf(block), fetcher = { url, _ -> looked += URI(url).host; null })
+        // Any web page can ask, in an <img>, with no X-Xrnrule: no host of its choosing is fetched.
+        assertEquals(404, d.get("/api/site-icon?host=tracker.example", xrnrule = false))
+        // A block's sites are, and a host under one: the block page shows the host it stands in for.
+        for (host in listOf("youtube.com", "m.youtube.com", "music.youtube.com")) {
+            assertEquals(404, d.get("/api/site-icon?host=$host", xrnrule = false))
+        }
+        await("the block's sites looked for") { looked.containsAll(listOf("youtube.com", "m.youtube.com", "music.youtube.com")) }
+        Thread.sleep(300) // a fetch started before those would have come by now
+        assertFalse(looked.toString(), "tracker.example" in looked)
+        assertFalse("nothing kept for it", File(d.icons, "tracker.example.miss").exists())
     }
 }

@@ -20,7 +20,12 @@ import java.util.concurrent.ConcurrentHashMap
  * images from nowhere else; only raster images ([SiteIcons.imageType]) are kept, so what is
  * served can't carry script.
  */
-class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
+class SiteIconCache(
+    private val dir: File,
+    private val scope: CoroutineScope,
+    /** What fetches a URL (at most `maxBytes` of it, or null): null is the web, over https. */
+    private val fetcher: ((url: String, maxBytes: Int) -> SiteIcons.Fetched?)? = null,
+) {
     private val memory = ConcurrentHashMap<String, SiteIcons.Icon>()
     private val asked = ConcurrentHashMap.newKeySet<String>()
 
@@ -44,11 +49,14 @@ class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
         same
     }
 
-    /** [host]'s icon if the laptop has it; otherwise null, and it is looked for (once per run). */
+    /**
+     * [host]'s icon if the laptop has it; otherwise null, and it is looked for (once per run, for
+     * at most [MAX_HOSTS] hosts a run).
+     */
     fun icon(host: String): SiteIcons.Icon? {
         if (!SiteIcons.fetchable(host)) return null
         memory[host]?.let { return it }
-        if (!asked.add(host)) return null
+        if (!admit(host)) return null
         val file = File(dir, host)
         val miss = File(dir, "$host.miss")
         val kept = runCatching { file.takeIf { it.isFile }?.readBytes() }.getOrNull()
@@ -62,19 +70,39 @@ class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
         return kept
     }
 
+    /** Not looked for yet this run, and room for it: a page can name endless subdomains of a blocked site. */
+    @Synchronized
+    private fun admit(host: String): Boolean = host !in asked && asked.size < MAX_HOSTS && asked.add(host)
+
+    /** At most [MAX_HOSTS] hosts stay on disk: those found or missed longest ago go first. */
+    private fun makeRoom(host: String) {
+        val byHost = dir.listFiles().orEmpty()
+            .filter { it.isFile && !it.name.startsWith(".") && !it.name.endsWith(".part") }
+            .groupBy { it.name.removeSuffix(".miss") }
+        if (host in byHost || byHost.size < MAX_HOSTS) return
+        byHost.entries.sortedBy { (_, files) -> files.maxOf { it.lastModified() } }.take(byHost.size - MAX_HOSTS + 1)
+            .forEach { (old, files) ->
+                files.forEach { it.delete() }
+                memory.remove(old)
+            }
+    }
+
     private fun fetch(host: String, file: File, miss: File, had: Boolean) {
         try {
-            val icon = SiteIcons.find(host, ::get)
-            dir.mkdirs()
-            if (icon == null) {
-                if (!had) miss.writeBytes(ByteArray(0))
-                return
+            val icon = SiteIcons.find(host, fetcher ?: ::get)
+            synchronized(this) { // room made and taken at once
+                dir.mkdirs()
+                makeRoom(host)
+                if (icon == null) {
+                    if (!had) miss.writeBytes(ByteArray(0))
+                    return
+                }
+                val part = File(dir, "$host.part")
+                part.writeBytes(icon.bytes)
+                part.renameTo(file)
+                miss.delete()
+                memory[host] = icon
             }
-            val part = File(dir, "$host.part")
-            part.writeBytes(icon.bytes)
-            part.renameTo(file)
-            miss.delete()
-            memory[host] = icon
         } catch (e: Exception) {
             System.err.println("icon of $host: $e")
         }
@@ -98,5 +126,10 @@ class SiteIconCache(private val dir: File, private val scope: CoroutineScope) {
         } catch (_: Exception) {
             null
         }
+    }
+
+    companion object {
+        /** The most hosts looked for in a run, and kept on disk. */
+        const val MAX_HOSTS = 200
     }
 }
