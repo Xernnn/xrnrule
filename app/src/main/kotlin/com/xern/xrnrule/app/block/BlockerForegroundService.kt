@@ -303,10 +303,10 @@ class BlockerForegroundService : LifecycleService() {
         container.websites.quiet = silentBrowser != null
         // The extension speaks from whichever browser is in front when it does: that's the one it
         // lives in. Only a report from well after that browser came in front counts: one from
-        // the moment of switching is the last browser's.
-        inFront?.takeIf { (_, since) ->
-            SiteSightings.lastReportWasSite && SiteSightings.reportedAtElapsed >= since + BROWSER_SETTLE_MS
-        }?.let { (pkg, _) -> container.websites.extensionBrowser = pkg }
+        // the moment of switching is the last browser's. And only the extension's own: the block
+        // page speaks from any browser that opens it.
+        inFront?.takeIf { (_, since) -> SiteSightings.voice.namedSiteSince(since + BROWSER_SETTLE_MS) }
+            ?.let { (pkg, _) -> container.websites.extensionBrowser = pkg }
         // I49: a browser that can't block sites, once one that can is known. Never that one itself:
         // it's where the extension gets fixed.
         val other = inFront?.takeIf { (pkg, since) ->

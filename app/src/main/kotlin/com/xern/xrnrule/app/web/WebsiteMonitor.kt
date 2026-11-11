@@ -12,6 +12,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
+ * When the extension last said a website is in front (`elapsedRealtime`): how the blocker service
+ * learns which browser it lives in, the one in front when it speaks (I49). The app's own block
+ * page reports too, from whichever browser opened it, the extension's or not, so its reports say
+ * nothing about that. Pure, so it can be tested without a phone.
+ */
+class ExtensionVoice {
+    @Volatile
+    private var siteAtElapsed: Long? = null
+
+    /** A report of what's in front: [site] if it named a website, [standIn] if the block page sent it. */
+    fun report(site: Boolean, standIn: Boolean, atElapsed: Long) {
+        if (!standIn) siteAtElapsed = atElapsed.takeIf { site }
+    }
+
+    /** Whether the extension's last word was a website, said no earlier than [sinceElapsed]. */
+    fun namedSiteSince(sinceElapsed: Long): Boolean = siteAtElapsed?.let { it >= sinceElapsed } == true
+}
+
+/**
  * The site the xrnrule browser extension (in Quetta) last said is in front, handed from
  * [ExtensionServer] to the blocker service. The extension only speaks from a visible page, every
  * 2.5 s; a page that stops (closed, the browser sent to the background) is forgotten after
@@ -58,6 +77,9 @@ object SiteSightings {
     var lastReportWasSite: Boolean = false
         private set
 
+    /** What the extension itself said last, for telling which browser it lives in. */
+    val voice = ExtensionVoice()
+
     fun heard() {
         lastHeardElapsed = SystemClock.elapsedRealtime()
         everHeard = true
@@ -86,6 +108,7 @@ object SiteSightings {
         heard()
         reportedAtElapsed = lastHeardElapsed
         lastReportWasSite = host != null
+        voice.report(site = host != null, standIn = standIn, atElapsed = lastHeardElapsed)
         val left = leaving?.takeIf { (site, at) ->
             host != null && Sites.hostOf(site) == Sites.hostOf(host) && lastHeardElapsed - at < LEAVE_MS
         }
