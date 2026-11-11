@@ -368,6 +368,31 @@ class SyncServerTest(unittest.TestCase):
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
 
+    def test_a_page_on_another_site_cant_write_with_the_browsers_password(self):
+        # A browser sends the password it was once given with a form another site posts here,
+        # and a text/plain form body can be JSON.
+        now = int(time.time() * 1000)
+        forged = {"events": [{"t": "blocked", "at": now, "target": "forged.example"}]}
+        def post(path, body, headers):
+            return self.call("POST", path, body, {"Content-Type": "text/plain", "X-Device": "x", **headers})[0]
+        for elsewhere in ({"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"},
+                          {"Sec-Fetch-Site": "same-site", "Origin": "https://other.homeserver.example"},
+                          {"Origin": "https://evil.example"}):  # a browser from before Sec-Fetch-Site
+            self.assertEqual(403, post("/events", forged, elsewhere), elsewhere)
+            self.assertEqual(403, post("/session", None, elsewhere), elsewhere)
+        self.assertNotIn("forged.example", self.call("GET", f"/events?since={now - 1000}")[1])
+        # Reads, this host's own pages (behind the proxy too), the extensions and the devices still do.
+        self.assertEqual(200, self.call("GET", "/state", headers={"Sec-Fetch-Site": "cross-site"})[0])
+        empty = {"events": []}
+        for ours in ({"Sec-Fetch-Site": "same-origin", "Origin": "https://homeserver.example"},
+                     {"Origin": f"http://127.0.0.1:{self.httpd.server_address[1]}"},
+                     {"Origin": "https://HomeServer.example", "X-Forwarded-Host": "homeserver.example:443"},
+                     {"Sec-Fetch-Site": "cross-site", "Origin": "chrome-extension://abcdefghijklmnop"},
+                     {"Sec-Fetch-Site": "cross-site", "Origin": "moz-extension://8c2f5e7a-0000-4000-8000-000000000000"},
+                     {"Sec-Fetch-Site": "none"},
+                     {}):
+            self.assertEqual(200, post("/events", empty, ours), ours)
+
     def web(self, method, path, cookie=None, client=True, auth=None):
         """A request as the web pages make it: no password, the login cookie and X-Xrn-Client."""
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
