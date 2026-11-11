@@ -91,6 +91,17 @@ class BlockEditsTest {
     }
 
     @Test
+    fun aLimitBelowZeroIsNoLimitAtAll() {
+        // Minutes times 60 000 that overflowed came out negative, and the engine reads any limit
+        // that isn't above zero as none: as loosening as taking the limit off.
+        val limit = modeBlock("l", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000)
+        assertTrue(BlockEdits.loosens(limit, limit.copy(dailyAllowanceMs = -1)))
+        assertTrue(BlockEdits.loosens(limit, limit.copy(dailyAllowanceMs = Long.MIN_VALUE)))
+        val opens = limit.copy(opensPerDay = 3)
+        assertTrue(BlockEdits.loosens(opens, opens.copy(opensPerDay = -1)))
+    }
+
+    @Test
     fun onlyAnIdleLockdownIsFreeToEdit() {
         val engine = BlockEngine()
         val clock = FakeClock()
