@@ -1127,6 +1127,38 @@ class InvariantTests {
     }
 
     @Test
+    fun i28_aDayThatHasNotBegunDoesNotForgetTodaysUnlocks() {
+        val (phone, laptop, server) = twoDevices(listOf(checklistBlock("c1", unlockMs = 5L * 60_000)), mapOf("c1" to items("c1", 1)))
+        phone.on(BlockEvent.ToggleChecklistItem("c1-i0", true))
+        phone.on(BlockEvent.Redeem("c1"))
+        advanceAll(5L * 60_000, phone, laptop)
+        phone.on(BlockEvent.Tick)
+        settle(phone, laptop, server)
+        assertEquals(5L * 60_000, engine.unlockUsedTodayMs(phone.world, phone.clock))
+
+        // Booted from another system 13 h ahead, into tomorrow, the laptop syncs once before NTP
+        // puts its clock back: it reports tomorrow, with nothing unlocked. The phone hears of it.
+        laptop.clock.advanceWallOnly(13L * 60 * 60_000)
+        laptop.on(BlockEvent.BootOrColdStart)
+        laptop.sync(server)
+        phone.sync(server)
+        laptop.clock.advanceWallOnly(-13L * 60 * 60_000)
+        laptop.on(BlockEvent.Tick)
+        settle(phone, laptop, server)
+
+        assertEquals("today's unlock still counts toward the cap (I9)", 5L * 60_000, engine.unlockUsedTodayMs(phone.world, phone.clock))
+        assertEquals(5L * 60_000, engine.unlockUsedTodayMs(laptop.world, laptop.clock))
+
+        // I34: nor today's overrides, for a day another device granted one on with its clock ahead.
+        val today = phone.clock.epochDay()
+        phone.world = phone.world.copy(overrideEpochDay = today, overrideLog = mapOf("c1@1" to 60_000L))
+        val ahead = SharedState.of(phone.world).copy(overrideEpochDay = today + 1, overrideLog = emptyMap())
+        phone.on(BlockEvent.SharedStateMerged(phone.base, ahead))
+        assertEquals(today, phone.world.overrideEpochDay)
+        assertEquals(mapOf("c1@1" to 60_000L), phone.world.overrideLog)
+    }
+
+    @Test
     fun i28_sharedSessionCountsOnceTowardCap() {
         val (phone, laptop, server) = twoDevices(listOf(checklistBlock("c1", unlockMs = 5L * 60_000)), mapOf("c1" to items("c1", 1)))
         phone.on(BlockEvent.ToggleChecklistItem("c1-i0", true))
