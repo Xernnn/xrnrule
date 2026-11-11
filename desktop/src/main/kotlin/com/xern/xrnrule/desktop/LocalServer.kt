@@ -106,7 +106,7 @@ class LocalServer(
             ex.requestMethod == "GET" && path == "/api/apps" -> send(ex, 200, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(DesktopApps.App.serializer()), DesktopApps.all()))
             ex.requestMethod == "GET" && path == "/ext/check" -> send(ex, 200, siteVerdict(query["host"]))
             ex.requestMethod == "GET" && path == "/ext/rules" -> {
-                foreground.heardExtension()
+                foreground.heardExtension(query["focused"]?.let { it == "1" })
                 send(ex, 200, json.encodeToString(ExtensionApi.SiteRules.serializer(), ExtensionApi.rules(store.world.value, blockPage)))
             }
             ex.requestMethod == "POST" && path == "/ext/heartbeat" -> {

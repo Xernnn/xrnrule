@@ -100,12 +100,35 @@ async function cachedRules() {
   return rulesCache;
 }
 
+/** Every kind of window, so an undocked DevTools window in front is one of ours too. */
+const WINDOW_TYPES = ["normal", "popup", "panel", "app", "devtools"];
+
+/**
+ * Whether a window this extension can see has focus; null if the browser won't say. Told to
+ * xrnrule with every rule fetch (once a minute): with none, the browser window in front is one the
+ * extension can't see, a private window it may not run in or another profile's, and the laptop
+ * treats that as the extension being off (I49). Our pages and the browser's own (about:, the new
+ * tab page, xrnrule's block page) are windows it sees, though no content script runs in them.
+ */
+async function seesFocus() {
+  if (typeof chrome.windows?.getLastFocused !== "function") return null;
+  try {
+    return !!(await chrome.windows.getLastFocused({ windowTypes: WINDOW_TYPES }))?.focused;
+  } catch {} // a browser that takes fewer window types: ask without
+  try {
+    return !!(await chrome.windows.getLastFocused())?.focused;
+  } catch {
+    return false; // no window it can see is open at all, only private ones: none focused
+  }
+}
+
 let refreshing = null;
 /** Fetches the rule list and applies it; one at a time. */
 function refreshRules() {
   refreshing ??= (async () => {
     try {
-      const rules = await call("/ext/rules");
+      const focused = await seesFocus();
+      const rules = await call(focused == null ? "/ext/rules" : `/ext/rules?focused=${focused ? 1 : 0}`);
       rulesCache = rules;
       await chrome.storage.local.set({ rules });
       await applyRules(rules);

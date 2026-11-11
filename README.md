@@ -124,8 +124,9 @@ it has nothing to go back to, so the rest of the browser stays yours.
 The extension's settings page shows its version and where it updates from, with **Check now**.
 The phone app warns when the browser the extension lives in goes quiet, without ever blocking
 that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
-off is closed after two minutes in front. Browsers can't be seen inside other apps: a page opened
-in an app's own in-app browser isn't blocked.
+off is closed after two minutes in front, and so is one whose window in front the extension can't
+see: a private window it isn't allowed in, or another profile without it. Browsers can't be seen
+inside other apps: a page opened in an app's own in-app browser isn't blocked.
 
 ## Updates
 

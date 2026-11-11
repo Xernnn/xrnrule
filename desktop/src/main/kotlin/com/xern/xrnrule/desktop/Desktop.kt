@@ -77,9 +77,25 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
             field = value
             // Focus went to an app that isn't a browser: whatever tab was in front no longer is.
             if (value != null && !isBrowser(value.appId) && heartbeat?.fromBlockPage != true) heartbeat = null
-            browsers.front(value?.appId, value != null && isBrowser(value.appId), store.clock.nowMonotonicMs())
+            watchFront()
         }
+
+    /**
+     * A locked screen is nothing in use, and no browser is in front to close (I49): under the lock
+     * a browser may not count its window as focused, and the extension would say so. The silence
+     * starts again at unlocking, as after a sleep.
+     */
     @Volatile var locked = false
+        set(value) {
+            field = value
+            watchFront()
+        }
+
+    private fun watchFront() {
+        val app = active?.appId?.takeUnless { locked }
+        browsers.front(app, app != null && isBrowser(app), store.clock.nowMonotonicMs())
+    }
+
     @Volatile private var heartbeat: Heartbeat? = null
     @Volatile private var heartbeatAtMono = 0L
     /** I47: pages playing sound out of sight, by when each last said so. */
@@ -103,10 +119,12 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
      */
     fun onHeartbeat(beat: Heartbeat) {
         val now = store.clock.nowMonotonicMs()
-        // A block page says the extension is there only while it's the page in front, being waited
-        // on where the extension's own pages can't speak. Left open in another tab it beats on with
-        // the extension turned off, and the browser would never be closed for that (I49).
-        if (!beat.fromBlockPage || beat.focused) browsers.heard(now)
+        // I49: the extension is there for the window in front only when a page of it speaks from
+        // that window, focused ([BrowserWatch.spoke] below), or it says a window it can see has focus
+        // ([heardExtension]). Its pages in a window behind beat on, unfocused, while a private window
+        // it may not run in, or another profile's, is in front. The block page is ours, not the
+        // extension's: it opens in any window, the extension on or off, and kept in front it would
+        // keep such a browser open.
         // It stands in for an app only while that app is blocked here (I4). Its address is anyone's
         // to type: for a habit app (I16) it would run that app's timer with the app never opened.
         if (beat.fromBlockPage && beat.app != null && beat.app !in store.world.value.appliedShield.blockedPackages) return
@@ -126,8 +144,16 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         update()
     }
 
-    /** The extension asked for its rules: alive, even on a page that doesn't beat. */
-    fun heardExtension() = browsers.heard(store.clock.nowMonotonicMs())
+    /**
+     * The extension asked for its rules (once a minute), saying whether a window it can see has
+     * [focused]: alive for the window in front even where no page of it beats (about:, the new tab
+     * page, our block page). Not while no window it can see has focus: a private window it may not
+     * run in, or another profile's, is in front (I49). Null: a version up to 2.3.5, which doesn't
+     * say; or the laptop waking up, which isn't a silent extension.
+     */
+    fun heardExtension(focused: Boolean? = null) {
+        if (focused != false) browsers.heard(store.clock.nowMonotonicMs())
+    }
 
     @Synchronized
     fun update() {
@@ -150,10 +176,10 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         }
     }
 
-    /** A browser is in front but the extension has gone quiet: website blocking isn't working. */
+    /** A browser is in front but the extension has gone quiet for it: website blocking isn't working. */
     fun extensionMissing(): Boolean {
         val app = active?.appId ?: return false
-        return isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
+        return !locked && isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
     }
 
     companion object {

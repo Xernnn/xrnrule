@@ -150,9 +150,41 @@ class DesktopTest {
         }
         assertTrue(fg.extensionMissing())
         assertEquals("zen", fg.browsers.toClose(clock.mono))
-        // In front it is being waited on, where the extension's own pages can't speak: the browser stays.
-        fg.onHeartbeat(Foreground.Heartbeat(host = "youtube.com", focused = true, fromBlockPage = true))
+    }
+
+    @Test
+    fun i49_aBlockPageInFrontIsNotTheExtensionAnsweringEither() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val fg = Foreground(Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined)), known)
+        fg.active = AppWindow("zen", "zen", 10)
+        // The page is ours: it opens in a private window the extension can't see, or with the
+        // extension off, and kept in front it kept the browser open, with sound from a window
+        // behind it never counted (I47). With the extension on, its minute poll speaks for it.
+        repeat(70) {
+            clock.mono += 2_000
+            fg.onHeartbeat(Foreground.Heartbeat(host = "youtube.com", focused = true, fromBlockPage = true))
+        }
+        assertTrue(fg.extensionMissing())
+        assertEquals("zen", fg.browsers.toClose(clock.mono))
+    }
+
+    @Test
+    fun i49_aLockedScreenClosesNoBrowser() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val fg = Foreground(Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined)), known)
+        fg.active = AppWindow("zen", "zen", 10)
+        // Under the lock a browser may not count its window as focused: nothing speaks for it.
+        fg.locked = true
+        clock.mono += 10 * 60_000
+        assertFalse(fg.extensionMissing())
         assertEquals(null, fg.browsers.toClose(clock.mono))
+        // Unlocked, its silence starts again, as after a sleep.
+        fg.locked = false
+        assertEquals(null, fg.browsers.toClose(clock.mono))
+        clock.mono += BrowserWatch.SILENT_GRACE_MS
+        assertEquals("zen", fg.browsers.toClose(clock.mono))
     }
 
     @Test
