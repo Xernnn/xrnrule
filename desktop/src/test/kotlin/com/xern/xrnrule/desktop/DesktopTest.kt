@@ -118,6 +118,24 @@ class DesktopTest {
     }
 
     @Test
+    fun i49_aBlockPageLeftInTheBackgroundIsNotTheExtensionAnswering() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val fg = Foreground(Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined)), known)
+        fg.active = AppWindow("zen", "zen", 10)
+        // The extension turned off, with a block page still open in another tab: it beats on, out of sight.
+        repeat(70) {
+            clock.mono += 2_000
+            fg.onHeartbeat(Foreground.Heartbeat(host = "youtube.com", focused = false, fromBlockPage = true))
+        }
+        assertTrue(fg.extensionMissing())
+        assertEquals("zen", fg.browsers.toClose(clock.mono))
+        // In front it is being waited on, where the extension's own pages can't speak: the browser stays.
+        fg.onHeartbeat(Foreground.Heartbeat(host = "youtube.com", focused = true, fromBlockPage = true))
+        assertEquals(null, fg.browsers.toClose(clock.mono))
+    }
+
+    @Test
     fun configReadsPasswordFileAndDerivesUrls() {
         val dir = Files.createTempDirectory("xrnrule").toFile()
         val pw = File(dir, "pw").apply { writeText("secret\n") }

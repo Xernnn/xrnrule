@@ -26,7 +26,7 @@ class BrowserWatch(known: Set<String> = emptySet(), startedAtMs: Long = 0) {
         front = next
     }
 
-    /** Anything from the extension or a block page: it's alive. */
+    /** Anything from the extension, or a block page in front: it's alive. */
     @Synchronized
     fun heard(nowMs: Long) {
         lastHeard = nowMs

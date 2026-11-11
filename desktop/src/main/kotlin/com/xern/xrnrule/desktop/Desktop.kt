@@ -103,7 +103,10 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
      */
     fun onHeartbeat(beat: Heartbeat) {
         val now = store.clock.nowMonotonicMs()
-        browsers.heard(now)
+        // A block page says the extension is there only while it's the page in front, being waited
+        // on where the extension's own pages can't speak. Left open in another tab it beats on with
+        // the extension turned off, and the browser would never be closed for that (I49).
+        if (!beat.fromBlockPage || beat.focused) browsers.heard(now)
         if (!beat.fromBlockPage && beat.focused && browsers.spoke(now)) {
             runCatching { browsersFile?.writeText(browsers.known.joinToString("\n")) }
         }
