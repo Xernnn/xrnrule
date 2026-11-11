@@ -1153,7 +1153,12 @@ class BlockEngine {
             b.copy(state = state)
         }
 
-        val newerDay = shared.unlockEpochDay > world.dailyUsageEpochDay
+        // I28, I34: a day that hasn't begun by this device's clock comes from one that ran ahead (as
+        // with the use reports, §2.4). Taking it would forget what today has had.
+        val today = clock.epochDay()
+        val takeUnlocks = shared.unlockEpochDay in world.dailyUsageEpochDay..today
+        val newerDay = takeUnlocks && shared.unlockEpochDay > world.dailyUsageEpochDay
+        val takeOverrides = shared.overrideEpochDay in world.overrideEpochDay..today // I34, likewise
         return world.copy(
             blocks = blocks,
             progress = progress,
@@ -1163,14 +1168,14 @@ class BlockEngine {
             lockdowns = lockdowns,
             pause = pause,
             overrides = overrides,
-            overrideEpochDay = maxOf(shared.overrideEpochDay, world.overrideEpochDay),
-            overrideLog = if (shared.overrideEpochDay >= world.overrideEpochDay) shared.overrideLog else world.overrideLog,
+            overrideEpochDay = if (takeOverrides) shared.overrideEpochDay else world.overrideEpochDay,
+            overrideLog = if (takeOverrides) shared.overrideLog else world.overrideLog,
             emergencyLog = world.emergencyLog + shared.emergencyLog,
             lastPauseEpochDay = shared.lastPauseEpochDay,
             settings = shared.settings,
             dailyUnlockUsedMs = if (newerDay) 0 else world.dailyUnlockUsedMs,
-            dailyUsageEpochDay = maxOf(shared.unlockEpochDay, world.dailyUsageEpochDay),
-            unlockLog = if (shared.unlockEpochDay >= world.dailyUsageEpochDay) shared.unlockLog else world.unlockLog,
+            dailyUsageEpochDay = if (takeUnlocks) shared.unlockEpochDay else world.dailyUsageEpochDay,
+            unlockLog = if (takeUnlocks) shared.unlockLog else world.unlockLog,
             otherAllowance = shared.allowance
                 .mapValues { (_, byDevice) -> byDevice - world.deviceId }
                 .filterValues { it.isNotEmpty() },

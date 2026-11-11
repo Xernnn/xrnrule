@@ -1,11 +1,19 @@
 package com.xern.xrnrule.desktop
 
+import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEngine
+import com.xern.xrnrule.domain.BlockEvent
+import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.Clock
+import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.PersistPort
+import com.xern.xrnrule.domain.Trigger
+import com.xern.xrnrule.domain.TriggerType
+import com.xern.xrnrule.domain.TriggerUnit
 import com.xern.xrnrule.domain.World
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import org.junit.Assert.assertEquals
@@ -33,6 +41,18 @@ class DesktopTest {
         Foreground(Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined)))
 
     private fun Foreground.current(): Pair<String?, String?>? = sent
+
+    /** A store in which the laptop app [app] is blocked right now, by a schedule that is always on. */
+    private fun blocking(app: String, clock: TestClock): Store {
+        val block = Block("b", "B", targetDesktopApps = setOf(app), trigger = Trigger(TriggerType.TIMER, 0, TriggerUnit.MS), mode = BlockMode.SCHEDULE)
+        val saved = object : PersistPort {
+            override fun loadWorld() = World(blocks = listOf(block), deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
+            override fun save(world: World) = Unit
+        }
+        return Store(BlockEngine(), saved, clock, CoroutineScope(Dispatchers.Unconfined)).also {
+            runBlocking { it.dispatchAndGet(BlockEvent.BootOrColdStart) }
+        }
+    }
 
     @Test
     fun focusedTabSpeaksForTheForeground_unfocusedOneDoesNot() {
@@ -63,7 +83,7 @@ class DesktopTest {
     @Test
     fun blockPageStandsInForTheBlockedAppAndLockMeansNothing() {
         val clock = TestClock()
-        val fg = foreground(clock)
+        val fg = Foreground(blocking("steam", clock))
         fg.active = AppWindow("helium-browser", "helium", 10)
         fg.onHeartbeat(Foreground.Heartbeat(app = "steam", focused = true, fromBlockPage = true))
         assertEquals("steam" to null, fg.current())
@@ -115,6 +135,36 @@ class DesktopTest {
         )) {
             assertTrue(app, closedAfterAWhile(app))
         }
+    }
+
+    @Test
+    fun i49_aBlockPageLeftInTheBackgroundIsNotTheExtensionAnswering() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val fg = Foreground(Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined)), known)
+        fg.active = AppWindow("zen", "zen", 10)
+        // The extension turned off, with a block page still open in another tab: it beats on, out of sight.
+        repeat(70) {
+            clock.mono += 2_000
+            fg.onHeartbeat(Foreground.Heartbeat(host = "youtube.com", focused = false, fromBlockPage = true))
+        }
+        assertTrue(fg.extensionMissing())
+        assertEquals("zen", fg.browsers.toClose(clock.mono))
+        // In front it is being waited on, where the extension's own pages can't speak: the browser stays.
+        fg.onHeartbeat(Foreground.Heartbeat(host = "youtube.com", focused = true, fromBlockPage = true))
+        assertEquals(null, fg.browsers.toClose(clock.mono))
+    }
+
+    @Test
+    fun i16_theBlockPageStandsInOnlyForAnAppThatIsBlocked() {
+        val fg = Foreground(blocking("steam", TestClock()))
+        // /block?app=… is anyone's to type: named after a habit app, it would run that app's timer unopened.
+        fg.onHeartbeat(Foreground.Heartbeat(app = "com.reading.app", focused = true, fromBlockPage = true))
+        fg.update()
+        assertEquals(null to null, fg.current())
+        // Steam is blocked: waiting on its block page counts as waiting on it (I4).
+        fg.onHeartbeat(Foreground.Heartbeat(app = "steam", focused = true, fromBlockPage = true))
+        assertEquals("steam" to null, fg.current())
     }
 
     @Test

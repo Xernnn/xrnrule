@@ -39,11 +39,26 @@ self.Xrn = (() => {
     }
   }
 
+  /**
+   * A path as the site reads it: "/%73horts" is "/shorts" to a server and "//shorts" often is too,
+   * so neither spelling gets past a rule for "/shorts" (I46). Only what an escape may stand for
+   * without changing the path is unescaped (letters, digits, "-._~"). No "//" is left either:
+   * xrnrule takes what follows "://" for the host.
+   */
+  function plainPath(path) {
+    return path
+      .replace(/%([0-9a-f]{2})/gi, (escape, hex) => {
+        const c = String.fromCharCode(parseInt(hex, 16));
+        return /[A-Za-z0-9._~-]/.test(c) ? c : escape;
+      })
+      .replace(/\/{2,}/g, "/");
+  }
+
   /** "https://www.YouTube.com/Shorts/?x=1" -> "youtube.com/shorts": what a page is matched by. */
   function locationOf(url) {
     const host = hostOf(url);
     if (!host) return null;
-    return host + new URL(url).pathname.toLowerCase().replace(/\/+$/, "").slice(0, MAX_PATH);
+    return host + plainPath(new URL(url).pathname).toLowerCase().replace(/\/+$/, "").slice(0, MAX_PATH);
   }
 
   const hostPart = (location) => location.split("/")[0];

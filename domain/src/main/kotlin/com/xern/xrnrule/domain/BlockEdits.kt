@@ -105,9 +105,9 @@ object BlockEdits {
         )
     }
 
-    /** I19/I32: a bigger daily limit (0 is none at all), a longer row, or a shorter break. */
+    /** I19/I32: a bigger daily limit (0 or less is none at all), a longer row, or a shorter break. */
     private fun allowanceLoosens(old: Block, new: Block): Boolean {
-        fun bigger(o: Long, n: Long) = o > 0 && (n == 0L || n > o)
+        fun bigger(o: Long, n: Long) = o > 0 && (n <= 0L || n > o)
         return bigger(old.dailyAllowanceMs, new.dailyAllowanceMs) ||
             bigger(old.opensPerDay.toLong(), new.opensPerDay.toLong()) || // I52
             new.openWaitS < old.openWaitS || // I53

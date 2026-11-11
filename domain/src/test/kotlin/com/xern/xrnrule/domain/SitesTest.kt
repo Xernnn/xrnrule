@@ -50,6 +50,20 @@ class SitesTest {
     }
 
     @Test
+    fun onlyALeadingSchemeIsTakenOff() {
+        // "://" further in is part of the path or the query: the page is still the first host's.
+        assertEquals("limited.com", Sites.normalize("limited.com/x/https://other.com"))
+        assertEquals("limited.com", Sites.normalize("limited.com?to=http://other.com"))
+        assertEquals("limited.com", Sites.normalize("LIMITED.com:8080/x#https://other.com"))
+        assertEquals("limited.com/x/https://other.com", Sites.normalizeTarget("limited.com/x/https://other.com"))
+        assertEquals("limited.com", Sites.normalizeTarget("limited.com?to=http://other.com/path"))
+        assertEquals("limited.com/go", Sites.normalizeTarget("HTTPS://limited.com/go?to=https://other.com/path"))
+        // A scheme in front of the scheme is still in front.
+        assertEquals("youtube.com", Sites.normalize("view-source:https://youtube.com/watch"))
+        assertEquals("youtube.com/watch", Sites.normalizeTarget("view-source:https://youtube.com/watch"))
+    }
+
+    @Test
     fun normalizeTargetKeepsThePath() {
         assertEquals("youtube.com/shorts", Sites.normalizeTarget("https://www.YouTube.com/Shorts/?x=1#y"))
         assertEquals("youtube.com/shorts", Sites.normalizeTarget("youtube.com/shorts"))

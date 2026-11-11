@@ -43,7 +43,9 @@ import base64
 import gzip
 import hashlib
 import hmac
+import ipaddress
 import json
+import math
 import mimetypes
 import os
 import re
@@ -208,7 +210,8 @@ def check_session(cookie_header):
     except ValueError:  # also a bad base64 or UTF-8
         return None
     tag = password_tag(user)
-    if tag is None or not hmac.compare_digest(session_mac(f"{who}.{expires}", tag), mac):
+    # As bytes: compare_digest raises on a str that isn't ASCII, and a cookie can hold anything.
+    if tag is None or not hmac.compare_digest(session_mac(f"{who}.{expires}", tag).encode(), mac.encode()):
         return None
     return user
 
@@ -219,13 +222,23 @@ def session_cookie(value, max_age):
 
 
 def client_address(handler):
-    """The caller's address. Behind the local proxy (Funnel) that's the first X-Forwarded-For hop;
-    the header is only trusted from a loopback peer, since anyone else could make it up."""
+    """The caller's address. Behind the local proxy (Funnel) that's the last X-Forwarded-For hop,
+    the one the proxy added: anything before it came from the caller, who could make up a new
+    address for every password guess. Only trusted from a loopback peer, for the same reason.
+    An IPv6 address counts as its /64: a line comes with at least that many, so counted one by one
+    its owner had a new address for every guess and never reached the limit."""
     peer = handler.client_address[0]
     forwarded = handler.headers.get("X-Forwarded-For")
-    if forwarded and peer in ("127.0.0.1", "::1"):
-        return forwarded.split(",")[0].strip()
-    return peer
+    addr = forwarded.split(",")[-1].strip() if forwarded and peer in ("127.0.0.1", "::1") else peer
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return addr
+    if ip.version == 4:
+        return addr
+    if ip.ipv4_mapped:
+        return str(ip.ipv4_mapped)
+    return f"{ipaddress.IPv6Address(int(ip) >> 64 << 64)}/64"
 
 
 def locked_out(addr):
@@ -240,13 +253,21 @@ def locked_out(addr):
         return len(recent) >= FAIL_LIMIT
 
 
-def note_failure(addr):
+def reserve_guess(addr):
+    """Counts a password from this address as wrong before it is checked; False if the address
+    has used up its wrong logins. Counted afterwards, guesses sent at once all passed the check
+    while the first were still in bcrypt. A right one clears the count (see Handler.login)."""
     now = time.monotonic()
     with fail_lock:
         if len(failures) > 10000:  # a flood from many addresses: forget the stale ones
             for a in [a for a, ts in failures.items() if now - ts[-1] >= FAIL_WINDOW_S]:
                 del failures[a]
-        failures.setdefault(addr, []).append(now)
+        recent = [t for t in failures.get(addr, ()) if now - t < FAIL_WINDOW_S]
+        if len(recent) >= FAIL_LIMIT:
+            failures[addr] = recent
+            return False
+        failures[addr] = recent + [now]
+        return True
 
 
 def devices_path(user):
@@ -481,14 +502,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(401, "login required")
             return user
         addr = client_address(self)
-        if locked_out(addr):
+        password = self.headers.get("Authorization")
+        if not (reserve_guess(addr) if password else not locked_out(addr)):
             time.sleep(FAIL_DELAY_S)
             self.send(429, "too many wrong passwords; try again later", headers={"Retry-After": str(FAIL_WINDOW_S)})
             return None
-        user = check_login(self.headers.get("Authorization"))
+        user = check_login(password)
         if not user:
-            if self.headers.get("Authorization"):
-                note_failure(addr)
             time.sleep(FAIL_DELAY_S)
             # The status page logs in with its own form: a challenge would pop the browser's dialog.
             challenge = {} if self.headers.get("X-Xrn-Client") else {"WWW-Authenticate": 'Basic realm="xrnrule"'}
@@ -529,7 +549,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         known = etag_version(self.headers.get("If-None-Match"))
         try:
-            wait = min(max(float(query.get("wait", 0)), 0), MAX_WAIT_S)
+            wait = float(query.get("wait", 0))
+            if not math.isfinite(wait):  # NaN is past every comparison: the wait below would never end
+                raise ValueError
+            wait = min(max(wait, 0), MAX_WAIT_S)
         except ValueError:
             return self.send(400, "bad wait")
         try:
@@ -575,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
             raw = body["events"]
             if not isinstance(raw, list):
                 raise ValueError
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, RecursionError):  # RecursionError: nested too deep
             return self.send(400, 'body must be {"events": [...]}')
         device = (self.headers.get("X-Device") or "")[:64]
         if not device:
@@ -603,7 +626,7 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise ValueError
-        except ValueError:
+        except (ValueError, RecursionError):  # RecursionError: nested too deep
             return self.send(400, "body must be a JSON object")
         want = (self.headers.get("If-Match") or "").strip()
         if not want:

@@ -326,7 +326,9 @@ class LocalServer(
             }
             "remove" -> {
                 val itemId = body["itemId"]!!.jsonPrimitive.content
-                loosening(old, null) { store.edit { w -> BlockForms.removeItem(w, itemId) } }
+                // Its own task only: this block's wait, lock and tier are the ones checked below.
+                if (store.world.value.items(blockId).none { it.id == itemId }) return error("That task is gone.")
+                loosening(old, null) { store.edit { w -> BlockForms.removeItem(w, blockId, itemId) } }
             }
             else -> error("unknown change")
         }

@@ -244,6 +244,12 @@ lại mãi (đã xảy ra ngày 2026-11-05 với bản ghi 0 ms của laptop; v�
 laptop khởi động với đồng hồ nhanh 11 giờ, thắng mọi vòng tới tận ngày đó, nên phần đã dùng hôm nay
 không bao giờ được tính).
 
+Cũng vậy với `unlockLog` và `overrideLog`: khi nhận, ngày của bản đã trộn mà chưa bắt đầu ở đây
+(`unlockEpochDay`/`overrideEpochDay` lớn hơn hôm nay theo đồng hồ máy này) thì máy này giữ ngày và
+log của nó, và đẩy lại bản đó. Không thế thì bản "ngày mai" rỗng của một máy chạy trước xóa các lần
+mở khóa và override của hôm nay, tức là hạn mức ngày (I9) và số override mỗi ngày (I34) được đặt lại.
+Test: `i28_aDayThatHasNotBegunDoesNotForgetTodaysUnlocks`.
+
 Nhận kết quả (I27): credit/session/lockdown/pause mới được neo monotonic theo wall; `state` của
 block suy ra lại (có session → `UNLOCKED`, có credit → `EARNED`, không → `ARMED`; mode khác HABIT
 luôn `ARMED`); rời EARNED/UNLOCKED theo cách này thì reset như I10; vào `UNLOCKED` theo cách này thì habit item mà máy đã redeem đã tiêu

@@ -3,6 +3,7 @@
     python3 -m unittest server/test_xrnrule_sync.py     (from the repo root)
 """
 import base64
+import concurrent.futures
 import gzip
 import hashlib
 import http.client
@@ -14,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -154,6 +156,24 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(304, status)
         self.assertGreaterEqual(time.monotonic() - start, 0.4)
 
+    def test_a_wait_that_is_no_number_is_refused(self):
+        _, _, headers = self.call("GET", "/state")
+        # NaN is past every comparison: the long poll would never see its time run out.
+        for bad in ("nan", "-nan", "x"):
+            req = urllib.request.Request(self.base + f"/state?wait={bad}")
+            req.add_header("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+            req.add_header("If-None-Match", headers["ETag"])
+            try:
+                with urllib.request.urlopen(req, timeout=3) as r:
+                    status = r.status
+            except urllib.error.HTTPError as e:
+                status = e.code
+            except OSError:
+                status = None  # no answer in time
+                self.call("PUT", "/state", {"woken": bad}, {"If-Match": "*"})  # lets the stuck poll go
+                _, _, headers = self.call("GET", "/state")
+            self.assertEqual(400, status, bad)
+
     def test_login_and_open_paths(self):
         self.assertEqual(401, self.call("GET", "/state", password=WRONG)[0])
         status, _, headers = self.call("GET", "/state", password=WRONG, headers={"X-Xrn-Client": "web"})
@@ -220,6 +240,16 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(400, put(gzip.compress(b'{"a":1}')[:-12]))  # cut short
         self.assertEqual(412, put(gzip.compress(b'{"a":1}')))  # read fine; only the version is off
 
+    def test_json_nested_too_deep_is_a_400(self):
+        deep = b"[" * 200_000
+        for method, path in (("PUT", "/state"), ("POST", "/events")):
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+            conn.request(method, path, body=deep, headers={
+                "Authorization": "Basic " + base64.b64encode(b"sonn:secret").decode(), "If-Match": "*", "X-Device": "phone"})
+            with conn.getresponse() as r:  # no answer at all raises here
+                self.assertEqual(400, r.status, path)
+            conn.close()
+
     def test_a_broken_content_length_is_a_400(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         conn.putrequest("PUT", "/state")
@@ -252,6 +282,39 @@ class SyncServerTest(unittest.TestCase):
         # Locked out now, even with the right password; everyone else isn't.
         self.assertEqual(429, self.call("GET", "/state", headers=guesser)[0])
         self.assertEqual(200, self.call("GET", "/state", headers={"X-Forwarded-For": "203.0.113.10"})[0])
+
+    def test_a_made_up_first_hop_doesnt_dodge_the_lockout(self):
+        for i in range(srv.FAIL_LIMIT):
+            forwarded = {"X-Forwarded-For": f"198.51.100.{i}, 203.0.113.40"}  # what a proxy appends to
+            self.assertEqual(401, self.call("GET", "/state", password=WRONG, headers=forwarded)[0])
+        forwarded = {"X-Forwarded-For": "198.51.100.200, 203.0.113.40"}
+        self.assertEqual(429, self.call("GET", "/state", headers=forwarded)[0])
+
+    def test_an_ipv6_guesser_is_its_64_not_each_address_in_it(self):
+        def guess(forwarded):
+            return self.call("GET", "/state", password=WRONG, headers={"X-Forwarded-For": forwarded})[0]
+        for i in range(srv.FAIL_LIMIT):
+            self.assertEqual(401, guess(f"2001:db8:1:2::{i + 1:x}"))
+        self.assertEqual(429, guess("2001:db8:1:2:aaaa::1"))
+        self.assertEqual(401, guess("2001:db8:1:3::1"))  # the /64 next door isn't held
+        self.assertEqual(401, guess("::ffff:203.0.113.41"))  # an IPv4 caller written as IPv6
+        self.assertIn("203.0.113.41", srv.failures)  # ...is counted as that IPv4 address
+
+    def test_guesses_sent_at_once_still_stop_at_the_limit(self):
+        def slow_wrong(header):  # bcrypt takes a while: every guess is in flight at once
+            time.sleep(0.3)
+            return None
+        guesser = {"X-Forwarded-For": "203.0.113.30"}
+        limit, n = 3, 12  # a limit the test server's listen backlog lets every guess reach at once
+        start = threading.Barrier(n)
+        def guess(_):
+            start.wait()
+            return self.call("GET", "/state", password=WRONG, headers=guesser)[0]
+        with unittest.mock.patch.object(srv, "check_login", slow_wrong), unittest.mock.patch.object(srv, "FAIL_LIMIT", limit):
+            with concurrent.futures.ThreadPoolExecutor(n) as pool:
+                statuses = list(pool.map(guess, range(n)))
+        self.assertEqual(limit, statuses.count(401))
+        self.assertEqual(n - limit, statuses.count(429))
 
     def test_a_right_password_clears_earlier_mistakes(self):
         typo = {"X-Forwarded-For": "203.0.113.20"}
@@ -364,6 +427,17 @@ class SyncServerTest(unittest.TestCase):
             with open(srv.args.users, "w") as f:
                 f.write(old)
         self.assertEqual(200, self.web("GET", "/state", cookie)[0])
+
+    def test_a_cookie_that_isnt_ascii_is_refused_not_a_crash(self):
+        who, expires, mac = self.sign_in().split(".")
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+        conn.putrequest("GET", "/state")
+        conn.putheader("X-Xrn-Client", "web")
+        conn.putheader("Cookie", f"{srv.SESSION_COOKIE}={who}.{expires}.{mac[:-1]}".encode() + b"\xe9")
+        conn.endheaders()
+        with conn.getresponse() as r:  # no answer at all raises here
+            self.assertEqual(401, r.status)
+        conn.close()
 
     def test_the_session_key_is_private_and_shared_by_every_server_on_the_users_file(self):
         path = os.path.join(os.path.dirname(srv.args.users), "session.key")
