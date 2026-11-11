@@ -407,4 +407,44 @@ class SharedStateTest {
         assertEquals(10L, merge(base, spent(5, 20), spent(6, 10)).items.getValue(item.id).spentAmount)
         assertEquals(6L, merge(base, spent(5, 20), spent(6, 10)).items.getValue(item.id).spentEpochDay)
     }
+
+    @Test
+    fun aNumberBelowZeroFromElsewhereIsReadAsWhatItMeans() {
+        // No form makes these; another device's could, or a copy edited on the server. An unlock
+        // of negative length, once redeemed, couldn't be ended by the sweep (an empty range to
+        // coerce into), so every event after it threw, at every start too: the engine was down.
+        val clock = FakeClock()
+        val block = checklistBlock("c1")
+        val phone = Device("phone", buildWorld(listOf(block), mapOf("c1" to items("c1", 1)), clock), clock)
+        val server = FakeServer()
+        phone.sync(server)
+        val there = block.copy(
+            reward = block.reward.copy(unlockDurationMs = -60_000),
+            dailyAllowanceMs = -1,
+            opensPerDay = -1,
+            lockdownMs = -1,
+            editedAtWall = t + 1,
+        )
+        server.write(server.state.copy(blocks = mapOf("c1" to there)))
+        phone.sync(server)
+        val got = phone.block("c1")
+        assertEquals("an unlock of no length", 0L, got.reward.unlockDurationMs)
+        assertEquals("no daily limit", 0L, got.dailyAllowanceMs)
+        assertEquals("no opens rule", 0, got.opensPerDay)
+        assertEquals(0L, got.lockdownMs)
+        phone.on(BlockEvent.ToggleChecklistItem("c1-i0", true))
+        phone.on(BlockEvent.Redeem("c1"))
+        clock.advance(1_000)
+        phone.on(BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, phone.block("c1").state)
+
+        // A session sent as one, and a wait timer below zero, the same.
+        server.write(SharedState.of(phone.world).copy(sessions = mapOf("c1" to session("c1", clock.nowWallMs(), ms = -60_000))))
+        phone.sync(server)
+        phone.on(BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, phone.block("c1").state)
+        val timer = timerBlock("t1")
+        assertEquals(0L, BlockEdits.sane(timer.copy(trigger = timer.trigger.copy(requiredAmount = -5))).trigger.requiredAmount)
+        assertEquals("all items stays all items", Defaults.ALL_ITEMS, BlockEdits.sane(block).trigger.requiredAmount)
+    }
 }

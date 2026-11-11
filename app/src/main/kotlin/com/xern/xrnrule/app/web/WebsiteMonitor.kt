@@ -2,6 +2,7 @@ package com.xern.xrnrule.app.web
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
@@ -28,6 +29,45 @@ class ExtensionVoice {
 
     /** Whether the extension's last word was a website, said no earlier than [sinceElapsed]. */
     fun namedSiteSince(sinceElapsed: Long): Boolean = siteAtElapsed?.let { it >= sinceElapsed } == true
+}
+
+/**
+ * I49: the browsers the extension has spoken from ([ExtensionVoice]), kept in [prefs]: these are
+ * never blocked for lacking it. Pure, so it can be tested without a phone.
+ */
+class ExtensionBrowsers(private val prefs: SharedPreferences) {
+
+    init {
+        // Before c445ec4 the block page's own reports named a browser too, so a browser without
+        // the extension that had it open a few seconds was learned for good. Nothing saved tells
+        // such a one from the real one: the set is forgotten once and learned again from the
+        // extension's reports. Until then no browser is blocked for lacking the extension.
+        if (prefs.getInt(KEY_LEARNED, 0) < FROM_THE_EXTENSION_ONLY) {
+            prefs.edit().remove(KEY_BROWSER).remove(KEY_BROWSERS).putInt(KEY_LEARNED, FROM_THE_EXTENSION_ONLY).apply()
+        }
+    }
+
+    /** The one it spoke from last. */
+    val latest: String? get() = prefs.getString(KEY_BROWSER, null)
+
+    private val all: Set<String> get() = prefs.getStringSet(KEY_BROWSERS, null) ?: setOfNotNull(latest)
+
+    fun learn(browser: String) {
+        val all = all
+        if (browser != latest || browser !in all) prefs.edit().putString(KEY_BROWSER, browser).putStringSet(KEY_BROWSERS, all + browser).apply()
+    }
+
+    /** A browser with no extension, once some browser is known to have one. */
+    fun lacksExtension(browser: String): Boolean = all.let { it.isNotEmpty() && browser !in it }
+
+    private companion object {
+        const val KEY_BROWSER = "browser"
+        const val KEY_BROWSERS = "browsers"
+
+        /** How the saved browsers were learned: 1 (or none saved), from any report; 2, from the extension's own. */
+        const val KEY_LEARNED = "browsersLearned"
+        const val FROM_THE_EXTENSION_ONLY = 2
+    }
 }
 
 /**
@@ -194,23 +234,17 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
     @Volatile
     var quiet: Boolean = false
 
+    private val browsers = ExtensionBrowsers(prefs)
+
     /** The browser the extension lives in, learned from which browser is in front when it calls. */
     var extensionBrowser: String?
-        get() = prefs.getString(KEY_BROWSER, null)
+        get() = browsers.latest
         set(value) {
-            if (value == null) return
-            val all = extensionBrowsers
-            if (value != extensionBrowser || value !in all) {
-                prefs.edit().putString(KEY_BROWSER, value).putStringSet(KEY_BROWSERS, all + value).apply()
-            }
+            if (value != null) browsers.learn(value)
         }
 
-    /** I49: every browser the extension has spoken from: these are never blocked for lacking it. */
-    private val extensionBrowsers: Set<String>
-        get() = prefs.getStringSet(KEY_BROWSERS, null) ?: setOfNotNull(prefs.getString(KEY_BROWSER, null))
-
     /** I49: a browser with no extension, once some browser is known to have one. */
-    fun lacksExtension(browser: String): Boolean = extensionBrowsers.let { it.isNotEmpty() && browser !in it }
+    fun lacksExtension(browser: String): Boolean = browsers.lacksExtension(browser)
 
     /** Whether the extension may run in incognito tabs; null until a version that says has spoken. */
     @Volatile
@@ -248,8 +282,6 @@ class ExtensionWebsiteMonitor(private val context: Context) : WebsiteMonitor {
             ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Xernnn/xrnrule#the-browser-extension"))
 
     private companion object {
-        const val KEY_BROWSER = "browser"
-        const val KEY_BROWSERS = "browsers"
         const val KEY_HEARD = "heardAt"
         const val KEY_VERSION = "version"
         const val QUETTA = "net.quetta.browser"

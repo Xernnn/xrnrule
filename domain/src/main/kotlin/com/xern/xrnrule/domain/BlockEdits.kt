@@ -40,8 +40,11 @@ object BlockEdits {
         if (!oldHabit && newHabit) return old.hasLimit && new.limitComesFirst
         if (!oldHabit) return false
         val oldTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
+        // I11: a checklist's "all of them" asks for more than any number of them.
+        fun items(amount: Long) = if (amount == Defaults.ALL_ITEMS) Long.MAX_VALUE else amount
         return new.trigger.type != old.trigger.type ||
             (oldTimer && new.trigger.requiredAmount < old.trigger.requiredAmount) ||
+            (!oldTimer && items(new.trigger.requiredAmount) < items(old.trigger.requiredAmount)) ||
             (old.trigger.combineMode == CombineMode.AND && new.trigger.combineMode == CombineMode.OR) ||
             new.trigger.habitPackages != old.trigger.habitPackages ||
             new.reward.unlockDurationMs > old.reward.unlockDurationMs ||
@@ -57,6 +60,31 @@ object BlockEdits {
         val before = hours(old) ?: return false
         val after = hours(new) ?: return true
         return schedulesLoosen(before, after)
+    }
+
+    /**
+     * I6, §2.3: the other blocks in [world] that saving [new] over [old] (null: a new block) makes
+     * easier to get past. Any HABIT block that is UNLOCKED opens its targets for every HABIT block
+     * on them, so one sharing a target with another is a second way past that one: made, given
+     * one of its targets or another device, or made easier ([loosened]: its settings, checklist or
+     * habit) while sharing one. The save goes through their guard too, and a lock refuses it (I39).
+     */
+    fun opens(world: World, old: Block?, new: Block, loosened: Boolean = old != null && loosens(old, new)): List<Block> {
+        if (new.mode != BlockMode.HABIT) return emptyList()
+        val was = old?.takeIf { it.mode == BlockMode.HABIT && !loosened && it.devices.covers(new.devices) }
+        return world.blocks.filter { other ->
+            if (other.id == new.id || other.mode != BlockMode.HABIT) return@filter false
+            val reach = reach(new, other)
+            reach.isNotEmpty() && (was == null || !reach(was, other).containsAll(reach))
+        }
+    }
+
+    /** I6: what of [other]'s targets [block]'s unlock opens: the apps both block, and its sites one of [block]'s is on or under. */
+    private fun reach(block: Block, other: Block): Set<String> {
+        val anywhere = block.devices == Devices.BOTH || other.devices == Devices.BOTH || block.devices == other.devices // I42
+        if (!anywhere) return emptySet()
+        val sites = other.targetSites.filter { site -> block.targetSites.any { Sites.matches(it, site) || Sites.matches(site, it) } }
+        return (block.targetApps intersect other.targetApps).mapTo(mutableSetOf()) { "app:$it" } + sites.map { "site:$it" }
     }
 
     /** I39: whether [block]'s settings are locked at [nowWall]. */
@@ -121,6 +149,31 @@ object BlockEdits {
     private fun schedulesLoosen(old: Schedule, new: Schedule): Boolean =
         !new.activeDays.containsAll(old.activeDays) || new.activeWindow != old.activeWindow ||
             !new.moreWindows.containsAll(old.moreWindows)
+
+    /**
+     * [block] with the numbers below zero no form makes read as what they mean, as [loosens] reads
+     * them: no daily limit, no opens rule, and a lockdown, an unlock or a wait timer of no length.
+     * They only come in decoded (another device's form, an old build, a copy edited on the server),
+     * so they are put right there and in the merge, and the engine never meets one: an unlock of
+     * negative length, once redeemed, made the sweep throw on every event.
+     */
+    fun sane(block: Block): Block {
+        val timer = block.trigger.type != TriggerType.CHECKLIST // a checklist's -1 is "all of them"
+        return block.copy(
+            dailyAllowanceMs = block.dailyAllowanceMs.coerceAtLeast(0),
+            opensPerDay = block.opensPerDay.coerceAtLeast(0),
+            lockdownMs = block.lockdownMs.coerceAtLeast(0),
+            reward = block.reward.copy(unlockDurationMs = block.reward.unlockDurationMs.coerceAtLeast(0)),
+            trigger = if (timer) block.trigger.copy(requiredAmount = block.trigger.requiredAmount.coerceAtLeast(0)) else block.trigger,
+        )
+    }
+
+    /** [sane] for every block of [world], and no credit or unlock of negative length in it. */
+    fun sane(world: World): World = world.copy(
+        blocks = world.blocks.map(::sane),
+        credits = world.credits.mapValues { (_, c) -> c.copy(amountMs = c.amountMs.coerceAtLeast(0)) },
+        sessions = world.sessions.mapValues { (_, s) -> s.copy(durationMs = s.durationMs.coerceAtLeast(0)) },
+    )
 
     /**
      * §2.3: a habit some block asks for ([World.blocksUsing]) gets easier: a smaller unlock's worth

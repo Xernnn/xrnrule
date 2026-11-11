@@ -1,6 +1,7 @@
 package com.xern.xrnrule.app.data
 
 import androidx.core.util.AtomicFile
+import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.HabitEntry
 import com.xern.xrnrule.domain.PersistPort
@@ -63,8 +64,9 @@ class FilePersistPort(private val file: File, private val sharedBase: File? = nu
         savedEntries = entries ?: emptyMap()
         // Without its entries this phone reads the history from the habit server's start again (§2.5).
         val lost = entries == null && world.habitEntries.isEmpty() && world.habitSyncSeq > 0
-        // Entries still inside the world file (written before they had their own) count too.
-        return world.copy(
+        // Entries still inside the world file (written before they had their own) count too. A
+        // number below zero saved by an older build is read as what it means (BlockEdits.sane).
+        return BlockEdits.sane(world).copy(
             habitEntries = world.habitEntries + (entries ?: emptyMap()),
             habitSyncSeq = if (lost) 0 else world.habitSyncSeq,
         )

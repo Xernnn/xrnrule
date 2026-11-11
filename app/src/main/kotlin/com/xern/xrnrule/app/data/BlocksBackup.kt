@@ -1,6 +1,7 @@
 package com.xern.xrnrule.app.data
 
 import com.xern.xrnrule.domain.Block
+import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.Habit
@@ -45,13 +46,15 @@ object BlocksBackups {
     /**
      * Adds the backup's blocks that aren't here yet, fresh and locked. Importing never loosens
      * anything (contract §2.3): existing blocks are left alone and the daily unlock limit can
-     * only go down. Habits come along where there's none with their id; one that is here already
+     * only go down. Except that an added habit block's unlock opens what a habit block here on the
+     * same targets blocks (I6): the import page asks that block's guard first ([com.xern.xrnrule.domain.BlockEdits.opens]).
+     * Habits come along where there's none with their id; one that is here already
      * stays as it is. Throws on a file that isn't a backup.
      */
     fun import(world: World, text: String): Pair<World, Int> {
         val backup = json.decodeFromString(BlocksBackup.serializer(), text)
         val existing = world.blocks.mapTo(HashSet()) { it.id }
-        val added = backup.blocks.filter { it.id !in existing }.map { it.copy(state = BlockState.ARMED) }
+        val added = backup.blocks.filter { it.id !in existing }.map { BlockEdits.sane(it).copy(state = BlockState.ARMED) }
         val checklist = added.associate { b -> b.id to backup.checklist[b.id].orEmpty().map(::fresh) }
             .filterValues { it.isNotEmpty() }
         val cap = minOf(world.settings.dailyCapMs, backup.settings.dailyCapMs)

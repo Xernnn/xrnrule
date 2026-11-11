@@ -3,6 +3,7 @@ package com.xern.xrnrule.domain
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.time.LocalDate
+import java.time.format.DateTimeParseException
 
 /*
  * The habit server's records (contract §2.5) and how this device's habits and entries merge
@@ -92,7 +93,7 @@ data class HabitWriteResult(
 
     fun acceptance() = HabitAcceptance(
         habits = accepted.habits.associate { it.uuid to it.seq },
-        entries = accepted.entries.associate { HabitEntry.key(it.habit, HabitRecords.day(it.date)) to it.seq },
+        entries = accepted.entries.mapNotNull { e -> HabitRecords.day(e.date)?.let { HabitEntry.key(e.habit, it) to e.seq } }.toMap(),
     )
 }
 
@@ -114,7 +115,15 @@ object HabitRecords {
         encodeDefaults = true
     }
 
-    fun day(date: String): Long = LocalDate.parse(date).toEpochDay()
+    /**
+     * The epoch day of a record's `YYYY-MM-DD`, or null for one that isn't a date: that record is
+     * left out, rather than the whole round thrown away (and read again next time) with it.
+     */
+    fun day(date: String): Long? = try {
+        LocalDate.parse(date).toEpochDay()
+    } catch (_: DateTimeParseException) {
+        null
+    }
 
     fun date(epochDay: Long): String = LocalDate.ofEpochDay(epochDay).toString()
 
@@ -238,7 +247,7 @@ private fun World.resendWhatTheServerLost(habits: List<HabitRecord>, entries: Li
             else -> local
         }
     }
-    val serverEntries = entries.associateBy { HabitEntry.key(it.habit, HabitRecords.day(it.date)) }
+    val serverEntries = entries.mapNotNull { e -> HabitRecords.day(e.date)?.let { HabitEntry.key(e.habit, it) to e } }.toMap()
     val kept = list.mapTo(HashSet()) { it.id }
     val merged = habitEntries.mapValues { (key, local) ->
         val record = serverEntries[key]
@@ -295,7 +304,7 @@ private fun World.mergeRecords(habits: List<HabitRecord>, entries: List<EntryRec
     val merged = habitEntries.toMutableMap()
     for (record in entries) {
         val habitId = record.habit
-        val day = HabitRecords.day(record.date)
+        val day = HabitRecords.day(record.date) ?: continue
         val key = HabitEntry.key(habitId, day)
         val local = merged[key]
         val remote = HabitEntry(record.value, record.notes, record.mtime, record.seq)

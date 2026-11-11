@@ -105,6 +105,30 @@ class BlockDraftTest {
     }
 
     @Test
+    fun aSaveIsJudgedAgainstTheBlockAsItIsNow() {
+        // I39: the edit page opened on a 30-minute limit; meanwhile the laptop cut it to 10 and
+        // locked it. Saving the page's 30 was "no change" against what it opened on, so it went
+        // through with no guard and no lock, and its newer stamp won the merge.
+        val clock = FakeClock()
+        val (opened, items) = made(BlockDraft(apps = setOf("com.instagram"), limitOn = true, dailyMinutes = 30))
+        val page = BlockDraft.of(opened, items, habits).copy(name = "Renamed")
+        val lock = BlockLock(untilWall = clock.nowWallMs() + DAY_MS, setAtWall = clock.nowWallMs())
+        val stored = opened.copy(dailyAllowanceMs = 10L * 60_000, lock = lock, targetDesktopApps = setOf("steam"))
+
+        assertTrue("30 minutes over 10 loosens", page.onto(stored).saveLoosens(items))
+        val saved = page.onto(stored).toBlock(stored.id, stored.name)
+        assertEquals("the lock as stored, so it isn't a lock taken off", lock, saved.lock)
+        assertEquals("what the page doesn't show, as stored", setOf("steam"), saved.targetDesktopApps)
+        assertFalse("a rename of the block as it is", BlockDraft.of(stored, items, habits).copy(name = "Renamed").onto(stored).saveLoosens(items))
+
+        // The checklist too: a task added on the laptop meanwhile isn't on the page, and saving drops it.
+        val (habitOpened, habitItems) = made(habitBlock)
+        val habitPage = BlockDraft.of(habitOpened, habitItems, habits)
+        val addedThere = habitItems + ChecklistItem(id = "there", blockId = habitOpened.id, text = "Walk", order = 9)
+        assertTrue(habitPage.onto(habitOpened).saveLoosens(addedThere))
+    }
+
+    @Test
     fun takingOffHardcoreLoosens() {
         val (block, items) = made(habitBlock.copy(hardcore = true))
         assertTrue(BlockDraft.of(block, items, habits).copy(hardcore = false).saveLoosens(items))
