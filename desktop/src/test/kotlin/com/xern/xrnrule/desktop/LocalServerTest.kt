@@ -170,4 +170,21 @@ class LocalServerTest {
         assertFalse(looked.toString(), "tracker.example" in looked)
         assertFalse("nothing kept for it", File(d.icons, "tracker.example.miss").exists())
     }
+
+    @Test
+    fun i49_aPagePollingTheRuleListIsNotTheExtension() {
+        val d = Daemon(known = "zen\n")
+        d.foreground.active = AppWindow("zen", "zen", 10)
+        // The extension is off, and a web page in the browser asks for the rule list. It can't add
+        // X-Xrnrule: that takes a preflight, which is never approved.
+        repeat(13) {
+            d.clock.mono += 10_000
+            assertEquals(403, d.get("/ext/rules", xrnrule = false))
+        }
+        assertTrue(d.foreground.extensionMissing())
+        assertEquals("zen", d.foreground.browsers.toClose(d.clock.mono))
+        // The extension sends it with every call.
+        assertEquals(200, d.get("/ext/rules?focused=1"))
+        assertNull(d.foreground.browsers.toClose(d.clock.mono))
+    }
 }

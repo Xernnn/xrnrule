@@ -95,7 +95,10 @@ class LocalServer(
         val path = ex.requestURI.path
         val query = parseQuery(ex.requestURI.rawQuery)
         if (ex.requestMethod == "OPTIONS") return send(ex, 403, "no") // never approve a cross-origin preflight
-        if (ex.requestMethod == "POST" && ex.requestHeaders.getFirst("X-Xrnrule") == null) return send(ex, 403, "missing X-Xrnrule")
+        // Every write needs X-Xrnrule, and so does the rule list: asking for it says the extension
+        // is there (I49), which a page polling it would otherwise say for a browser with it off.
+        val needsHeader = ex.requestMethod == "POST" || path == "/ext/rules"
+        if (needsHeader && ex.requestHeaders.getFirst("X-Xrnrule") == null) return send(ex, 403, "missing X-Xrnrule")
         when {
             ex.requestMethod == "GET" && path == "/api/state" -> send(ex, 200, json.encodeToString(UiState.serializer(), view(query["app"], query["site"])))
             ex.requestMethod == "GET" && path == "/api/habits" -> send(ex, 200, habits())
