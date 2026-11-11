@@ -350,6 +350,18 @@ class SyncServerTest(unittest.TestCase):
                 self.assertEqual(status, got)
                 self.assertGreaterEqual(took, 0.5, addr)
 
+    def test_a_name_that_isnt_there_costs_a_check_like_one_that_is(self):
+        import bcrypt
+
+        def checks(login):
+            header = "Basic " + base64.b64encode(login.encode()).decode()
+            with unittest.mock.patch.object(bcrypt, "checkpw", wraps=bcrypt.checkpw) as checkpw:
+                self.assertIsNone(srv.check_login(header))
+            return checkpw.call_count
+        self.assertEqual(1, checks("sonn:nope"))
+        self.assertEqual(1, checks("nobody:nope"))  # none: the answer came sooner, and said so
+        self.assertIsNone(srv.check_login("Basic " + base64.b64encode(b"nobody:secret").decode()))
+
     def test_a_right_password_clears_earlier_mistakes(self):
         typo = {"X-Forwarded-For": "203.0.113.20"}
         for _ in range(srv.FAIL_LIMIT - 1):
