@@ -18,7 +18,8 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
     GET  /devices             when each device last checked in (X-Device), for the status page
     POST /events              {"events": [{"t": "blocked"|"habit"|"unlock"|"bought"|"break", "at": ms, ...}]} from a
                               device's local log (X-Device); duplicates are dropped, and so is
-                              one stamped more than a day ahead of this server. 120 days kept
+                              one stamped more than a day ahead of this server. 120 days kept,
+                              and at most EVENTS_MAX of them
     GET  /events?since=MS     those events, for the weekly review in the habits web app
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out
@@ -69,6 +70,9 @@ FAIL_WINDOW_S = 15 * 60
 SEEN_WRITE_S = 60  # devices.json is rewritten at most this often per user
 EVENTS_KEEP_DAYS = 120
 EVENTS_AHEAD_MS = 86400 * 1000  # an event stamped further ahead of this server's clock is no time at all
+# The most events kept for one user, oldest dropped first: some 400 a day for the 120 days, about
+# 5 MB of file and 30 MB here, where a device could otherwise send 8 MB a batch without end.
+EVENTS_MAX = 50000
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
@@ -368,8 +372,9 @@ def clean_event(raw, device, latest):
 
 
 def load_events(user):
-    """The user's events (cached), oldest first, dropping any past EVENTS_KEEP_DAYS and any stamped
-    more than EVENTS_AHEAD_MS ahead (from before those were refused). Call under events_lock."""
+    """The user's events (cached), oldest first, dropping any past EVENTS_KEEP_DAYS, any stamped
+    more than EVENTS_AHEAD_MS ahead and any past the newest EVENTS_MAX (from before those were
+    refused). Call under events_lock."""
     if user not in events:
         kept = []
         try:
@@ -387,8 +392,8 @@ def load_events(user):
     cutoff = int((now - EVENTS_KEEP_DAYS * 86400) * 1000)
     latest = int(now * 1000) + EVENTS_AHEAD_MS
     have = events[user]
-    if have and (have[0].get("at", 0) < cutoff or have[-1].get("at", 0) > latest):
-        events[user] = [e for e in have if cutoff <= e.get("at", 0) <= latest]
+    if have and (have[0].get("at", 0) < cutoff or have[-1].get("at", 0) > latest or len(have) > EVENTS_MAX):
+        events[user] = [e for e in have if cutoff <= e.get("at", 0) <= latest][-EVENTS_MAX:]
         rewrite_events(user)
     return events[user]
 
@@ -415,13 +420,19 @@ def add_events(user, device, raw_events):
                 known.add(event_key(e))
                 new.append(e)
         if new:
-            path = events_path(user)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as f:
-                for e in new:
-                    f.write(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n")
             stored.extend(new)
             stored.sort(key=lambda e: e.get("at", 0))
+            if len(stored) > EVENTS_MAX:
+                # The oldest go, as they would with age; a tenth at once, so that a full log isn't
+                # written out again for every batch.
+                del stored[:len(stored) - EVENTS_MAX * 9 // 10]
+                rewrite_events(user)
+            else:
+                path = events_path(user)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    for e in new:
+                        f.write(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n")
         return len(new)
 
 

@@ -470,6 +470,31 @@ class SyncServerTest(unittest.TestCase):
         with open(path) as f:
             self.assertNotIn("no-time.example", f.read())
 
+    def test_a_user_keeps_at_most_so_many_events_the_newest(self):
+        # A device could send 8 MB of events a batch, and every one was kept, on disk and in memory.
+        now = int(time.time() * 1000)
+        def batch(first, n):
+            return [{"t": "blocked", "at": now - 10**6 + i, "target": f"t{i}"} for i in range(first, first + n)]
+        path = os.path.join(srv.args.data, "users", "busy", "events.jsonl")
+        def on_disk():
+            with open(path) as f:
+                return [json.loads(line)["target"] for line in f]
+        with unittest.mock.patch.object(srv, "EVENTS_MAX", 10, create=True):
+            self.assertEqual(8, srv.add_events("busy", "phone", batch(0, 8)))
+            self.assertEqual(5, srv.add_events("busy", "phone", batch(8, 5)))  # 13: down to the newest 9
+            with srv.events_lock:
+                kept = [e["target"] for e in srv.load_events("busy")]
+            self.assertEqual([f"t{i}" for i in range(4, 13)], kept)
+            self.assertEqual(kept, on_disk())
+            # A log kept before the limit is held to it once it's read in again.
+            with open(path, "a") as f:
+                for e in batch(13, 5):
+                    f.write(json.dumps({"d": "phone", **e}) + "\n")
+            with srv.events_lock:
+                srv.events.pop("busy")
+                self.assertEqual([f"t{i}" for i in range(8, 18)], [e["target"] for e in srv.load_events("busy")])
+            self.assertEqual([f"t{i}" for i in range(8, 18)], on_disk())
+
     def test_a_page_on_another_site_cant_write_with_the_browsers_password(self):
         # A browser sends the password it was once given with a form another site posts here,
         # and a text/plain form body can be JSON.
