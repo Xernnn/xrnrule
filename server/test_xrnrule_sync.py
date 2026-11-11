@@ -240,6 +240,16 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(400, put(gzip.compress(b'{"a":1}')[:-12]))  # cut short
         self.assertEqual(412, put(gzip.compress(b'{"a":1}')))  # read fine; only the version is off
 
+    def test_json_nested_too_deep_is_a_400(self):
+        deep = b"[" * 200_000
+        for method, path in (("PUT", "/state"), ("POST", "/events")):
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+            conn.request(method, path, body=deep, headers={
+                "Authorization": "Basic " + base64.b64encode(b"sonn:secret").decode(), "If-Match": "*", "X-Device": "phone"})
+            with conn.getresponse() as r:  # no answer at all raises here
+                self.assertEqual(400, r.status, path)
+            conn.close()
+
     def test_a_broken_content_length_is_a_400(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         conn.putrequest("PUT", "/state")

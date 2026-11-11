@@ -588,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
             raw = body["events"]
             if not isinstance(raw, list):
                 raise ValueError
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, RecursionError):  # RecursionError: nested too deep
             return self.send(400, 'body must be {"events": [...]}')
         device = (self.headers.get("X-Device") or "")[:64]
         if not device:
@@ -616,7 +616,7 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise ValueError
-        except ValueError:
+        except (ValueError, RecursionError):  # RecursionError: nested too deep
             return self.send(400, "body must be a JSON object")
         want = (self.headers.get("If-Match") or "").strip()
         if not want:
