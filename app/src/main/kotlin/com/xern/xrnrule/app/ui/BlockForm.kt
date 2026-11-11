@@ -249,26 +249,32 @@ fun EditBlockScreen(
     val cap = world.settings.dailyCapMs / 60_000
     var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
-    val hardcore = existing.enforcementTier == EnforcementTier.HARDCORE
+    // Another device may have changed the block while the page is open: whether a save or a
+    // delete needs the password goes by the block as it is now.
+    fun hardcore() = (store.world.value.block(existing.id) ?: existing).enforcementTier == EnforcementTier.HARDCORE
     val hint = form.hint(cap)
 
     fun save() {
-        val updated = form.toBlock(existing.id, existing.name)
-        val newItems = form.toItems(existing.id, oldItems)
+        // I39: judged against the block and its checklist as they are now, not as the page found
+        // them: what another device tightened or locked meanwhile, the page's older values loosen.
+        val now = store.world.value
+        val stored = now.block(existing.id) ?: existing
+        val draft = form.draft().onto(stored)
+        val updated = draft.toBlock(stored.id, stored.name)
         val apply = {
             // Items are rebuilt against the checklist as it is now, so ticks made meanwhile stay.
-            store.edit { w -> w.withBlock(updated, form.toItems(existing.id, w.items(existing.id))) }
+            store.edit { w -> w.withBlock(updated, draft.toItems(stored.id, w.items(stored.id))) }
             onDone()
         }
-        val loosens = form.saveLoosens(oldItems)
+        val loosens = draft.saveLoosens(now.items(stored.id))
         // I6: and its unlock may open more of what other habit blocks block than it did.
-        val opening = openingRequest(store, BlockEdits.opens(store.world.value, existing, updated, loosens), "Save these changes?") { apply() }
-        loosen = if (loosens && BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
+        val opening = openingRequest(store, BlockEdits.opens(now, stored, updated, loosens), "Save these changes?") { apply() }
+        loosen = if (loosens && BlockEdits.guardNeeded(store.engine, now, stored, store.clock)) {
             LoosenRequest(
                 "Save these changes?",
-                "They make ${existing.name} easier to get past." + opening?.let { " " + it.detail }.orEmpty(),
-                hardcore || opening?.hardcore == true,
-                listOf(existing.id) + opening?.blockIds.orEmpty(),
+                "They make ${stored.name} easier to get past." + opening?.let { " " + it.detail }.orEmpty(),
+                hardcore() || opening?.hardcore == true,
+                listOf(stored.id) + opening?.blockIds.orEmpty(),
             ) { apply() }
         } else {
             opening
@@ -291,7 +297,7 @@ fun EditBlockScreen(
             TextButton(
                 onClick = {
                     if (BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
-                        loosen = LoosenRequest("Delete ${existing.name}?", "It stops blocking for good.", hardcore, listOf(existing.id)) {
+                        loosen = LoosenRequest("Delete ${existing.name}?", "It stops blocking for good.", hardcore(), listOf(existing.id)) {
                             store.edit { it.deleteBlock(existing.id) }
                             onDone()
                         }

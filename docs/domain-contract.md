@@ -201,6 +201,9 @@ vẫn qua guard thường. Đặt hay kéo dài khóa là chặt hơn; `untilWal
 đi là nới lỏng, và lúc đang khóa chỉ làm được bằng **mở khẩn cấp** (I40). `lock` không bao giờ về
 null: hết hạn thì ở lại (đã qua), không chặn gì. Đồng hồ là wall của mỗi máy, đã bỏ chỉnh tay
 (ClockGuard, ở cả điện thoại lẫn laptop, I54); laptop từ chối sửa nới lỏng block đang khóa theo đồng hồ đó.
+Một lần lưu được xét so với block và checklist **như đang lưu lúc bấm lưu**, không như lúc mở trang
+sửa (`BlockDraft.onto`): máy khác khóa hay sửa chặt hơn trong lúc trang còn mở thì giá trị cũ của
+trang là nới lỏng, và những gì trang không hiện (khóa, app laptop) giữ như đang lưu.
 
 ### 2.4 Nhiều thiết bị: trạng thái chung
 
