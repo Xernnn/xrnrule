@@ -10,7 +10,7 @@ object Sites {
     fun normalize(input: String): String? {
         var s = input.trim().lowercase()
         if (s.isEmpty() || s.any { it.isWhitespace() }) return null
-        s = s.substringAfter("://", s)
+        s = s.replaceFirst(SCHEME, "")
         s = s.takeWhile { it != '/' && it != '?' && it != '#' }
         s = s.substringAfterLast('@').substringBefore(':').trimEnd('.')
         s = s.removePrefix("www.")
@@ -53,7 +53,7 @@ object Sites {
      */
     fun normalizeTarget(input: String): String? {
         val host = normalize(input) ?: return null
-        val rest = input.trim().substringAfter("://")
+        val rest = input.trim().replaceFirst(SCHEME, "")
         val at = rest.indexOfFirst { it == '/' || it == '?' || it == '#' }
         if (at < 0 || rest[at] != '/') return host
         val path = rest.substring(at).takeWhile { it != '?' && it != '#' }.lowercase().trimEnd('/')
@@ -78,6 +78,12 @@ object Sites {
     }
 
     private const val MAX_PATH = 200
+
+    /**
+     * "https://" in front, "view-source:https://" too. Only in front: a "://" further in belongs
+     * to the path or the query, and what follows it isn't the page's host.
+     */
+    private val SCHEME = Regex("^(?:[a-z][a-z0-9+.-]*:)+//", RegexOption.IGNORE_CASE)
 
     /**
      * The override phrase as compared (I34): no accents (a Vietnamese keyboard may add them), no
