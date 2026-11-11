@@ -183,6 +183,14 @@ mức), chuyển `selfPaced` sang `true` (mở khóa trải ra cả ngày, I41),
 `overrideWaitMs`, tăng `overrideGrantMs` hay `overridesPerDay` (`BlockEdits.settingsLoosen`). Ngoại lệ duy nhất: lockdown **không đang chạy** thì
 sửa/xóa tự do (`BlockEdits.guardNeeded`). Test: `BlockEditsTest`.
 
+**Mở block khác** (I6). Block `HABIT` nào `UNLOCKED` cũng mở target cho mọi block `HABIT` phủ nó,
+nên một block `HABIT` phủ chung target với một block `HABIT` khác là thêm một đường qua block kia.
+Vậy **nới lỏng block kia** là: tạo block đó (cả nhập từ file sao lưu), thêm cho nó một target của
+block kia hay một thiết bị (I42), hoặc nới lỏng nó (cấu hình, checklist, habit nó dùng) khi đã phủ
+chung. Sửa đó qua guard của block kia như mọi sửa nới lỏng (chờ, mật khẩu hardcore), và bị **từ
+chối** khi block kia đang khóa (I39). Phủ chung: cùng một app, hay một site nằm trên hoặc dưới một
+site của block kia. `BlockEdits.opens`. Test: `BlockEditsTest.aHabitBlockOnAnothersTargetIsAWayPastIt`.
+
 **Khóa có hạn** (I39): `block.lock = BlockLock(untilWall, setAtWall)`. Khi `now_wall < untilWall`
 block **đang khóa** (`BlockEdits.locked`): mọi sửa nới lỏng **cấu hình của nó** (sửa block hay
 checklist của nó, tắt, xóa, sửa nới lỏng một habit mà habit item của nó dùng) bị **từ chối**,
@@ -318,7 +326,7 @@ mà server đã nhận lệnh xóa thì hiện lại (máy không giữ tombston
 | **I3** | Nếu `(now_wall - session.startedAtWall) < (now_mono - session.startedAtMonotonic) - SKEW_TOLERANCE_MS` → tamper → UNLOCKED → ARMED ngay. `SKEW_TOLERANCE_MS = 5_000`. | `redeem → wall lùi 1h, mono +1phút → tick → ARMED, reason=TAMPER` |
 | **I4** | `HabitProgress.accumulatedMs` chỉ tăng khi `foregroundPackage ∈ countedPackages` (= `trigger.habitPackages` nếu khác rỗng, không thì `block.targetPackages` — xem I16) **và** timer đang chạy, block đang ARMED. Shield đang hiện vẫn được cộng: TIMER không có `habitPackages` chính là "chờ N phút trước màn chặn". Khi app đếm giờ rời foreground → ngừng cộng. | `feed foreground events: target 10s, other 10s, target 10s → accumulated == 20s` |
 | **I5** | Trong lúc ARMED (kể cả khi timer đang chạy / đang tick to-do) `shieldState(block) == ON`. | `mọi trạng thái ARMED/EARNED → shieldOn == true; chỉ UNLOCKED → false` |
-| **I6** | `isAppUnlocked(pkg) == blocks.any { pkg ∈ it.targets && it.state == UNLOCKED }`. | `2 block cùng phủ pkg, 1 UNLOCKED 1 ARMED → isAppUnlocked == true` |
+| **I6** | `isAppUnlocked(pkg) == blocks.any { pkg ∈ it.targets && it.state == UNLOCKED }`. Vậy block `HABIT` mới (hay sửa) phủ chung target với block khác là nới lỏng block kia (§2.3, `BlockEdits.opens`). | `2 block cùng phủ pkg, 1 UNLOCKED 1 ARMED → isAppUnlocked == true` |
 | **I7** | Engine không bao giờ trả về "shield changed" trước khi `PersistPort.save()` được gọi cho state mới. Áp dụng cho **cả tick/untick ChecklistItem**. | test dùng fake `PersistPort` ghi lại thứ tự call; assert save trước shield-callback |
 | **I8** | `rebuild(fromStorage)` tái tạo đúng trạng thái + tính lại credit/session theo mono hiện tại; `shieldPlan()` được gọi *trước* khi phát signal "UI ready". | `persist EARNED gần hết hạn → rebuild sau 2h1phút → ARMED` |
 | **I9** | `redeem` bị từ chối nếu `committed + amount > dailyCapMs` (mặc định 60 phút), với `committed = usedToday + Σ durationMs` của mọi session **đang mở** (mỗi session đang mở giữ chỗ trọn độ dài của nó, kể cả session tự điều tiết I41: không thế thì mở nhiều block cùng lúc sẽ vượt hạn mức), và `usedToday = dailyUnlockUsedMs + Σ unlockLog` của ngày `dailyUsageEpochDay` (0 nếu là ngày khác; `dailyUnlockUsedMs` chỉ còn cho dữ liệu cũ, xem I28). Block ở lại EARNED. | `dailyUsed=58phút, credit=5phút, cap=60 → redeem → vẫn EARNED, reason=CAP_REACHED`; `i09_openUnlocksCountTowardCap`: ba block 30 phút, cap 60, mở hai cái → cái thứ ba bị từ chối |

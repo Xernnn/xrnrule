@@ -59,6 +59,31 @@ object BlockEdits {
         return schedulesLoosen(before, after)
     }
 
+    /**
+     * I6, §2.3: the other blocks in [world] that saving [new] over [old] (null: a new block) makes
+     * easier to get past. Any HABIT block that is UNLOCKED opens its targets for every HABIT block
+     * on them, so one sharing a target with another is a second way past that one: made, given
+     * one of its targets or another device, or made easier ([loosened]: its settings, checklist or
+     * habit) while sharing one. The save goes through their guard too, and a lock refuses it (I39).
+     */
+    fun opens(world: World, old: Block?, new: Block, loosened: Boolean = old != null && loosens(old, new)): List<Block> {
+        if (new.mode != BlockMode.HABIT) return emptyList()
+        val was = old?.takeIf { it.mode == BlockMode.HABIT && !loosened && it.devices.covers(new.devices) }
+        return world.blocks.filter { other ->
+            if (other.id == new.id || other.mode != BlockMode.HABIT) return@filter false
+            val reach = reach(new, other)
+            reach.isNotEmpty() && (was == null || !reach(was, other).containsAll(reach))
+        }
+    }
+
+    /** I6: what of [other]'s targets [block]'s unlock opens: the apps both block, and its sites one of [block]'s is on or under. */
+    private fun reach(block: Block, other: Block): Set<String> {
+        val anywhere = block.devices == Devices.BOTH || other.devices == Devices.BOTH || block.devices == other.devices // I42
+        if (!anywhere) return emptySet()
+        val sites = other.targetSites.filter { site -> block.targetSites.any { Sites.matches(it, site) || Sites.matches(site, it) } }
+        return (block.targetApps intersect other.targetApps).mapTo(mutableSetOf()) { "app:$it" } + sites.map { "site:$it" }
+    }
+
     /** I39: whether [block]'s settings are locked at [nowWall]. */
     fun locked(block: Block, nowWall: Long): Boolean = block.lock.let { it != null && nowWall < it.untilWall }
 

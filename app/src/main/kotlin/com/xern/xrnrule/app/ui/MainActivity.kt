@@ -344,6 +344,7 @@ private fun XrnruleScreens(container: AppContainer) {
                 NewBlockScreen(
                     store = store,
                     websites = container.websites,
+                    guard = hardcoreGuard,
                     onDone = { nav.leave(entry) },
                 )
             }

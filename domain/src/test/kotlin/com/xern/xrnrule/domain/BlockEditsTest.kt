@@ -102,6 +102,49 @@ class BlockEditsTest {
     }
 
     @Test
+    fun aHabitBlockOnAnothersTargetIsAWayPastIt() {
+        // I6: any UNLOCKED HABIT block opens its targets for every HABIT block on them, so a
+        // second one on a locked block's target, with a habit of one tap, opened it at once.
+        val clock = FakeClock()
+        val now = clock.nowWallMs()
+        val strict = timerBlock("strict", target = "com.insta", requiredMs = 60L * 60_000)
+            .copy(targetSites = setOf("youtube.com"), lock = BlockLock(untilWall = now + DAY_MS, setAtWall = now))
+        val world = World(blocks = listOf(strict))
+        fun opened(w: World, old: Block?, new: Block, loosened: Boolean = old != null && BlockEdits.loosens(old, new)) =
+            BlockEdits.opens(w, old, new, loosened).map { it.id }
+
+        val easy = checklistBlock("easy", target = "com.insta")
+        assertEquals("a new block on its app", listOf("strict"), opened(world, null, easy))
+        assertEquals("so the lock refuses it", "strict", BlockEdits.lockedBy(world, opened(world, null, easy), now)?.id)
+        val under = checklistBlock("easy", target = "com.other").copy(targetSites = setOf("m.youtube.com"))
+        assertEquals("on a site under one of its sites", listOf("strict"), opened(world, null, under))
+        val path = checklistBlock("easy", target = "com.other").copy(targetSites = setOf("youtube.com/shorts"))
+        assertEquals("on a path of one of its sites", listOf("strict"), opened(world, null, path))
+        val apart = checklistBlock("easy", target = "com.other").copy(targetSites = setOf("notyoutube.com"))
+        assertEquals("nothing in common", emptyList<String>(), opened(world, null, apart))
+        val limit = modeBlock("easy", BlockMode.ALLOWANCE, targetPackages = setOf("com.insta"), dailyAllowanceMs = 10L * 60_000)
+        assertEquals("a block with no unlock opens nothing", emptyList<String>(), opened(world, null, limit))
+        val hours = World(blocks = listOf(modeBlock("hours", BlockMode.SCHEDULE, targetPackages = setOf("com.insta"))))
+        assertEquals("an unlock never opens a strict mode (I22)", emptyList<String>(), opened(hours, null, easy))
+        val laptop = World(blocks = listOf(strict.copy(devices = Devices.LAPTOP)))
+        assertEquals("nowhere both hold", emptyList<String>(), opened(laptop, null, easy.copy(devices = Devices.PHONE)))
+
+        // Edits: given its target or another device, or made easier while sharing one.
+        val both = world.copy(blocks = listOf(strict, apart))
+        assertEquals("renamed", emptyList<String>(), opened(both, apart, apart.copy(name = "Renamed")))
+        assertEquals("given its app", listOf("strict"), opened(both, apart, apart.copy(targetPackages = setOf("com.other", "com.insta"))))
+        val sharing = world.copy(blocks = listOf(strict, easy))
+        assertEquals("already sharing, made stricter", emptyList<String>(), opened(sharing, easy, easy.copy(name = "Renamed", targetPackages = setOf("com.insta", "com.x"))))
+        assertEquals("already sharing, made easier", listOf("strict"), opened(sharing, easy, easy.copy(reward = Reward(unlockDurationMs = 60L * 60_000))))
+        assertEquals("its checklist made easier", listOf("strict"), opened(sharing, easy, easy, loosened = true))
+        val phone = easy.copy(devices = Devices.PHONE)
+        assertEquals("held on one more device", listOf("strict"), opened(sharing, phone, phone.copy(devices = Devices.BOTH)))
+        val schedule = modeBlock("easy", BlockMode.SCHEDULE, targetPackages = setOf("com.insta"))
+        assertEquals("given a habit", listOf("strict"), opened(sharing, schedule, easy))
+        assertEquals("not itself", emptyList<String>(), opened(world, strict, strict.copy(reward = Reward(unlockDurationMs = 60L * 60_000))))
+    }
+
+    @Test
     fun onlyAnIdleLockdownIsFreeToEdit() {
         val engine = BlockEngine()
         val clock = FakeClock()

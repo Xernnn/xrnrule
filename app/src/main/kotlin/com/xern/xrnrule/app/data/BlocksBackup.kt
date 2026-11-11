@@ -45,7 +45,9 @@ object BlocksBackups {
     /**
      * Adds the backup's blocks that aren't here yet, fresh and locked. Importing never loosens
      * anything (contract §2.3): existing blocks are left alone and the daily unlock limit can
-     * only go down. Habits come along where there's none with their id; one that is here already
+     * only go down. Except that an added habit block's unlock opens what a habit block here on the
+     * same targets blocks (I6): the import page asks that block's guard first ([com.xern.xrnrule.domain.BlockEdits.opens]).
+     * Habits come along where there's none with their id; one that is here already
      * stays as it is. Throws on a file that isn't a backup.
      */
     fun import(world: World, text: String): Pair<World, Int> {

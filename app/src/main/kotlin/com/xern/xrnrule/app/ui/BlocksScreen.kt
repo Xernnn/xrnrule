@@ -248,6 +248,7 @@ fun BlocksScreen(
                             },
                         )
                     },
+                    onLoosen = { loosen = it },
                 )
             }
         }
@@ -430,6 +431,8 @@ private fun BlockCard(
     onDelete: () -> Unit,
     guard: HardcoreGuard,
     onUnhardcore: () -> Unit,
+    /** A change from the card that has to wait for a guard first (§2.3). */
+    onLoosen: (LoosenRequest) -> Unit,
     /** Shown from a link: outlined for a moment. */
     outlined: Boolean = false,
 ) {
@@ -492,7 +495,7 @@ private fun BlockCard(
                 }
                 else -> StrictBody(block, world, store)
             }
-            MissingCompanion(block, appLabels, store)
+            MissingCompanion(block, appLabels, store, onLoosen)
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Edit") }, onClick = { menu = false; onOpen() })
@@ -778,7 +781,7 @@ private fun HeadlineText(headline: BlockTexts.Headline) {
  * usually without meaning to. "Not now" stays, per block and app.
  */
 @Composable
-private fun MissingCompanion(block: Block, appLabels: Map<String, String>, store: WorldStore) {
+private fun MissingCompanion(block: Block, appLabels: Map<String, String>, store: WorldStore, onLoosen: (LoosenRequest) -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("hints", Context.MODE_PRIVATE) }
     var dismissed by remember { mutableStateOf(prefs.getStringSet(KEY_NOT_NOW, null).orEmpty()) }
@@ -797,7 +800,10 @@ private fun MissingCompanion(block: Block, appLabels: Map<String, String>, store
             prefs.edit().putStringSet(KEY_NOT_NOW, dismissed).apply()
         }) { Text("Not now") }
         TextButton(onClick = {
-            store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == block.id) it.copy(targetPackages = it.targetPackages + missing) else it }) }
+            val add = { store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == block.id) it.copy(targetPackages = it.targetPackages + missing) else it }) } }
+            // I6: another habit block on that app is one this block's unlock would open too.
+            val opened = BlockEdits.opens(store.world.value, block, block.copy(targetPackages = block.targetPackages + missing))
+            openingRequest(store, opened, "Add ${appLabels[missing] ?: missing} to ${block.name}?") { add() }?.let(onLoosen) ?: add()
         }) { Text("Add") }
     }
 }

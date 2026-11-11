@@ -114,6 +114,7 @@ import java.util.UUID
 fun NewBlockScreen(
     store: WorldStore,
     websites: WebsiteMonitor,
+    guard: HardcoreGuard,
     onDone: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -123,13 +124,19 @@ fun NewBlockScreen(
     LaunchedEffect(world.habits) { form.knownHabits = world.habits }
     val cap = world.settings.dailyCapMs / 60_000
     val hint = form.hint(cap)
+    var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
 
     fun save() {
         val id = UUID.randomUUID().toString()
         val block = form.toBlock(id, autoName(form, apps))
         val items = form.toItems(id, emptyList())
-        store.edit { it.withBlock(block, items).withLockdownStarted(id, store.clock) } // "for a while" starts now
-        onDone()
+        val apply = {
+            store.edit { it.withBlock(block, items).withLockdownStarted(id, store.clock) } // "for a while" starts now
+            onDone()
+        }
+        // I6: a habit block on another one's targets is a way past that one, so it asks that one's guard.
+        loosen = openingRequest(store, BlockEdits.opens(store.world.value, null, block), "Save this block?") { apply() }
+        if (loosen == null) apply()
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
@@ -140,6 +147,7 @@ fun NewBlockScreen(
             Gap(24)
         }
     }
+    loosen?.let { request -> LoosenGuardDialog(request, guard, store, onDismiss = { loosen = null }) }
 }
 
 /** Habits First's bar: Cancel, the title in the middle, Save. */
@@ -253,11 +261,19 @@ fun EditBlockScreen(
             onDone()
         }
         val loosens = form.saveLoosens(oldItems)
-        if (loosens && BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
-            loosen = LoosenRequest("Save these changes?", "They make ${existing.name} easier to get past.", hardcore, listOf(existing.id)) { apply() }
+        // I6: and its unlock may open more of what other habit blocks block than it did.
+        val opening = openingRequest(store, BlockEdits.opens(store.world.value, existing, updated, loosens), "Save these changes?") { apply() }
+        loosen = if (loosens && BlockEdits.guardNeeded(store.engine, store.world.value, existing, store.clock)) {
+            LoosenRequest(
+                "Save these changes?",
+                "They make ${existing.name} easier to get past." + opening?.let { " " + it.detail }.orEmpty(),
+                hardcore || opening?.hardcore == true,
+                listOf(existing.id) + opening?.blockIds.orEmpty(),
+            ) { apply() }
         } else {
-            apply()
+            opening
         }
+        if (loosen == null) apply()
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
