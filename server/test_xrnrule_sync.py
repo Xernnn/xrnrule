@@ -8,9 +8,11 @@ import gzip
 import hashlib
 import http.client
 import importlib.util
+import io
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -260,6 +262,48 @@ class SyncServerTest(unittest.TestCase):
             self.assertEqual(400, r.status)
         conn.close()
 
+    def test_a_connection_that_goes_quiet_is_let_go(self):
+        # With no timeout, a client that stopped half way through its request held a thread for good.
+        self.assertGreater(srv.Handler.timeout, srv.MAX_WAIT_S)  # and longer than any long poll
+        with unittest.mock.patch.object(srv.Handler, "timeout", 0.3):
+            with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                s.sendall(b"GET /state HTTP/1.1\r\nHost: x\r\n")  # and then nothing
+                start = time.monotonic()
+                self.assertEqual(b"", s.recv(100))
+                self.assertLess(time.monotonic() - start, 5)
+
+    def test_an_unparseable_request_gets_an_answer(self):
+        with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+            s.sendall(b"GARBAGE\r\n\r\n")
+            self.assertIn(b"400", s.recv(200))
+
+    def test_the_log_shows_a_callers_control_characters_escaped(self):
+        # The request line and X-Forwarded-For are the caller's. Written raw, an escape sequence
+        # rewrote the terminal, and a \r started a line of its own where xrnhub reads the log.
+        forged = b'2026-11-06_01:09:14.23919 198.51.100.66 "POST /api/changes HTTP/1.1" 200 -'
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+            for raw in (b"GET /a\x1b[2Jb HTTP/1.1\r\nX-Forwarded-For: 203.0.113.70\x1b]0;hi\x07\r\n\r\n",
+                        b"GET /a\r" + forged + b" HTTP/1.1\r\n\r\n"):
+                with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                    s.sendall(raw)
+                    while s.recv(4096):
+                        pass
+        text = log.getvalue()
+        self.assertIn("203.0.113.70\\x1b]0;hi\\x07", text)
+        self.assertIn("/a\\x1b[2Jb", text)
+        self.assertIn("/a\\x0d2026-11-06", text)
+        self.assertEqual([], [c for c in text if c != "\n" and (ord(c) < 0x20 or 0x7F <= ord(c) < 0xA0)])
+
+    def test_no_answer_names_the_python_version(self):
+        # The Server header said "<name>/1 Python/3.x.y" on every answer, error pages included.
+        for method in ("GET", "PATCH"):  # PATCH: http.server's own 501 page
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+            conn.request(method, "/health")
+            res = conn.getresponse()
+            res.read()
+            conn.close()
+            self.assertNotIn("Python", res.getheader("Server"), method)
+
     def test_pages_cannot_be_framed_or_sniffed(self):
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertEqual("DENY", r.headers["X-Frame-Options"])
@@ -316,6 +360,41 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(limit, statuses.count(401))
         self.assertEqual(n - limit, statuses.count(429))
 
+    def test_a_request_with_no_password_isnt_held(self):
+        # The hold after a wrong password slows a guesser down. One that sent no password guessed
+        # nothing, and each held a thread for the hold all the same.
+        def timed(addr, password=None):
+            conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+            headers = {"X-Forwarded-For": addr}
+            if password:
+                headers["Authorization"] = "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode()
+            start = time.monotonic()
+            conn.request("GET", "/state", headers=headers)
+            status = conn.getresponse().status
+            conn.close()
+            return status, time.monotonic() - start
+        srv.failures["203.0.113.61"] = [time.monotonic()] * srv.FAIL_LIMIT  # locked out
+        with unittest.mock.patch.object(srv, "FAIL_DELAY_S", 0.5):
+            for addr, status in (("203.0.113.60", 401), ("203.0.113.61", 429)):
+                got, took = timed(addr)
+                self.assertEqual(status, got)
+                self.assertLess(took, 0.4, addr)
+                got, took = timed(addr, WRONG)
+                self.assertEqual(status, got)
+                self.assertGreaterEqual(took, 0.5, addr)
+
+    def test_a_name_that_isnt_there_costs_a_check_like_one_that_is(self):
+        import bcrypt
+
+        def checks(login):
+            header = "Basic " + base64.b64encode(login.encode()).decode()
+            with unittest.mock.patch.object(bcrypt, "checkpw", wraps=bcrypt.checkpw) as checkpw:
+                self.assertIsNone(srv.check_login(header))
+            return checkpw.call_count
+        self.assertEqual(1, checks("sonn:nope"))
+        self.assertEqual(1, checks("nobody:nope"))  # none: the answer came sooner, and said so
+        self.assertIsNone(srv.check_login("Basic " + base64.b64encode(b"nobody:secret").decode()))
+
     def test_a_right_password_clears_earlier_mistakes(self):
         typo = {"X-Forwarded-For": "203.0.113.20"}
         for _ in range(srv.FAIL_LIMIT - 1):
@@ -367,6 +446,79 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual([("laptop", "unlock", 300000), ("phone", "unlock", 300000)],
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
+
+    def test_an_event_stamped_far_ahead_of_the_clock_is_refused(self):
+        # One would never age out, and xrnhub would count it among today's every day.
+        now = int(time.time() * 1000)
+        batch = {"events": [
+            {"t": "blocked", "at": now + 3600 * 1000, "target": "hour-fast.example"},  # a clock an hour fast
+            {"t": "blocked", "at": now + 2 * 86400 * 1000, "target": "days-ahead.example"},
+            {"t": "blocked", "at": 10**20, "target": "no-time.example"},
+        ]}
+        self.assertEqual(1, srv.add_events("ahead", "phone", batch["events"]))  # as POST /events does
+        with srv.events_lock:
+            self.assertEqual(["hour-fast.example"], [e["target"] for e in srv.load_events("ahead")])
+        # One kept before this rule goes when the log is next read in, and the file with it.
+        path = os.path.join(srv.args.data, "users", "earlier", "events.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            for at, target in ((10**20, "no-time.example"), (now - 1000, "real.example")):
+                f.write(json.dumps({"d": "phone", "t": "blocked", "at": at, "target": target}) + "\n")
+        with srv.events_lock:
+            srv.events.pop("earlier", None)
+            self.assertEqual(["real.example"], [e["target"] for e in srv.load_events("earlier")])
+        with open(path) as f:
+            self.assertNotIn("no-time.example", f.read())
+
+    def test_a_user_keeps_at_most_so_many_events_the_newest(self):
+        # A device could send 8 MB of events a batch, and every one was kept, on disk and in memory.
+        now = int(time.time() * 1000)
+        def batch(first, n):
+            return [{"t": "blocked", "at": now - 10**6 + i, "target": f"t{i}"} for i in range(first, first + n)]
+        path = os.path.join(srv.args.data, "users", "busy", "events.jsonl")
+        def on_disk():
+            with open(path) as f:
+                return [json.loads(line)["target"] for line in f]
+        with unittest.mock.patch.object(srv, "EVENTS_MAX", 10, create=True):
+            self.assertEqual(8, srv.add_events("busy", "phone", batch(0, 8)))
+            self.assertEqual(5, srv.add_events("busy", "phone", batch(8, 5)))  # 13: down to the newest 9
+            with srv.events_lock:
+                kept = [e["target"] for e in srv.load_events("busy")]
+            self.assertEqual([f"t{i}" for i in range(4, 13)], kept)
+            self.assertEqual(kept, on_disk())
+            # A log kept before the limit is held to it once it's read in again.
+            with open(path, "a") as f:
+                for e in batch(13, 5):
+                    f.write(json.dumps({"d": "phone", **e}) + "\n")
+            with srv.events_lock:
+                srv.events.pop("busy")
+                self.assertEqual([f"t{i}" for i in range(8, 18)], [e["target"] for e in srv.load_events("busy")])
+            self.assertEqual([f"t{i}" for i in range(8, 18)], on_disk())
+
+    def test_a_page_on_another_site_cant_write_with_the_browsers_password(self):
+        # A browser sends the password it was once given with a form another site posts here,
+        # and a text/plain form body can be JSON.
+        now = int(time.time() * 1000)
+        forged = {"events": [{"t": "blocked", "at": now, "target": "forged.example"}]}
+        def post(path, body, headers):
+            return self.call("POST", path, body, {"Content-Type": "text/plain", "X-Device": "x", **headers})[0]
+        for elsewhere in ({"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"},
+                          {"Sec-Fetch-Site": "same-site", "Origin": "https://other.homeserver.example"},
+                          {"Origin": "https://evil.example"}):  # a browser from before Sec-Fetch-Site
+            self.assertEqual(403, post("/events", forged, elsewhere), elsewhere)
+            self.assertEqual(403, post("/session", None, elsewhere), elsewhere)
+        self.assertNotIn("forged.example", self.call("GET", f"/events?since={now - 1000}")[1])
+        # Reads, this host's own pages (behind the proxy too), the extensions and the devices still do.
+        self.assertEqual(200, self.call("GET", "/state", headers={"Sec-Fetch-Site": "cross-site"})[0])
+        empty = {"events": []}
+        for ours in ({"Sec-Fetch-Site": "same-origin", "Origin": "https://homeserver.example"},
+                     {"Origin": f"http://127.0.0.1:{self.httpd.server_address[1]}"},
+                     {"Origin": "https://HomeServer.example", "X-Forwarded-Host": "homeserver.example:443"},
+                     {"Sec-Fetch-Site": "cross-site", "Origin": "chrome-extension://abcdefghijklmnop"},
+                     {"Sec-Fetch-Site": "cross-site", "Origin": "moz-extension://8c2f5e7a-0000-4000-8000-000000000000"},
+                     {"Sec-Fetch-Site": "none"},
+                     {}):
+            self.assertEqual(200, post("/events", empty, ours), ours)
 
     def web(self, method, path, cookie=None, client=True, auth=None):
         """A request as the web pages make it: no password, the login cookie and X-Xrn-Client."""
