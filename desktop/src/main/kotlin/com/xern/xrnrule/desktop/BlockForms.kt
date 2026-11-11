@@ -270,6 +270,10 @@ object BlockForms {
     private fun problem(form: Form, hasTargets: Boolean, capMs: Long, creating: Boolean, hasItems: Boolean, onItsDevices: Boolean = true): String? {
         val capMin = capMs / 60_000
         return when {
+            // Each becomes milliseconds: past a Long that wraps around, a daily limit to below zero,
+            // which is no limit at all and which BlockEdits.loosens doesn't take for a bigger one.
+            listOf(form.timerMin, form.unlockMin, form.allowanceMin, form.rowMin, form.rowBreakMin, form.lockdownMin).any { it > MAX_MINUTES } ->
+                "That's more minutes than there are in a year"
             !hasTargets -> "Pick a laptop app or add a website to block"
             !onItsDevices -> "Laptop apps aren't blocked on the phone: add a website, or phone apps on the phone"
             form.name.isBlank() -> "Give the block a name"
@@ -294,6 +298,9 @@ object BlockForms {
             else -> null
         }
     }
+
+    /** The most minutes any field takes: a (leap) year of them. */
+    private const val MAX_MINUTES = 366L * 24 * 60
 
     private fun windows(form: Form): List<Triple<Set<Int>, Int, Int>> =
         listOf(Triple(form.days, form.startMin, form.endMin)) + form.moreWindows.map { Triple(it.days, it.startMin, it.endMin) }
