@@ -290,6 +290,16 @@ class SyncServerTest(unittest.TestCase):
         forwarded = {"X-Forwarded-For": "198.51.100.200, 203.0.113.40"}
         self.assertEqual(429, self.call("GET", "/state", headers=forwarded)[0])
 
+    def test_an_ipv6_guesser_is_its_64_not_each_address_in_it(self):
+        def guess(forwarded):
+            return self.call("GET", "/state", password=WRONG, headers={"X-Forwarded-For": forwarded})[0]
+        for i in range(srv.FAIL_LIMIT):
+            self.assertEqual(401, guess(f"2001:db8:1:2::{i + 1:x}"))
+        self.assertEqual(429, guess("2001:db8:1:2:aaaa::1"))
+        self.assertEqual(401, guess("2001:db8:1:3::1"))  # the /64 next door isn't held
+        self.assertEqual(401, guess("::ffff:203.0.113.41"))  # an IPv4 caller written as IPv6
+        self.assertIn("203.0.113.41", srv.failures)  # ...is counted as that IPv4 address
+
     def test_guesses_sent_at_once_still_stop_at_the_limit(self):
         def slow_wrong(header):  # bcrypt takes a while: every guess is in flight at once
             time.sleep(0.3)
