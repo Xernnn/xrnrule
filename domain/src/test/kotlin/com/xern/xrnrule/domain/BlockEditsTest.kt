@@ -80,6 +80,19 @@ class BlockEditsTest {
     }
 
     @Test
+    fun aChecklistAskingForFewerItemsLoosens() {
+        // An old "any N of them" block (I11): asking for fewer was no change at all, so it needed no
+        // wait, a lock didn't refuse it, and it won the merge against a lock it hadn't heard of.
+        val all = checklistBlock("c", required = Defaults.ALL_ITEMS)
+        val three = checklistBlock("c", required = 3)
+        fun asking(n: Long) = three.copy(trigger = three.trigger.copy(requiredAmount = n))
+        assertTrue("all of them to three", BlockEdits.loosens(all, three))
+        assertTrue("three to two", BlockEdits.loosens(three, asking(2)))
+        assertFalse("three to four", BlockEdits.loosens(three, asking(4)))
+        assertFalse("three to all of them", BlockEdits.loosens(three, all))
+    }
+
+    @Test
     fun strictModesLoosenByTheirOwnNumbers() {
         val limit = modeBlock("l", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000)
         assertTrue(BlockEdits.loosens(limit, limit.copy(dailyAllowanceMs = 60L * 60_000)))

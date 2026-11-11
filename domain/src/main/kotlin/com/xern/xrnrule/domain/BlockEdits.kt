@@ -40,8 +40,11 @@ object BlockEdits {
         if (!oldHabit && newHabit) return old.hasLimit && new.limitComesFirst
         if (!oldHabit) return false
         val oldTimer = old.trigger.type == TriggerType.TIMER || old.trigger.type == TriggerType.COMBINED
+        // I11: a checklist's "all of them" asks for more than any number of them.
+        fun items(amount: Long) = if (amount == Defaults.ALL_ITEMS) Long.MAX_VALUE else amount
         return new.trigger.type != old.trigger.type ||
             (oldTimer && new.trigger.requiredAmount < old.trigger.requiredAmount) ||
+            (!oldTimer && items(new.trigger.requiredAmount) < items(old.trigger.requiredAmount)) ||
             (old.trigger.combineMode == CombineMode.AND && new.trigger.combineMode == CombineMode.OR) ||
             new.trigger.habitPackages != old.trigger.habitPackages ||
             new.reward.unlockDurationMs > old.reward.unlockDurationMs ||

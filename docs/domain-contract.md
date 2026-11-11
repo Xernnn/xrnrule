@@ -165,7 +165,8 @@ Ngoài sự kiện, user còn sửa cấu hình block (lớp app gọi `WorldSto
 **dễ vượt qua hơn** là *nới lỏng* và phải qua guard trước khi áp dụng: chờ đếm ngược (mặc định
 60 giây, rời màn hình là hủy) với block `SOFT`, hoặc nhập mật khẩu hardcore với block
 `HARDCORE`. Sửa chỉ làm chặt hơn thì áp dụng ngay. `BlockEdits.loosens(old, new)` là định nghĩa
-chuẩn (bỏ target, giảm timer, `AND → OR`, đổi habit app, tăng thời gian mở khóa / TTL / hạn mức,
+chuẩn (bỏ target, giảm timer, giảm số mục `CHECKLIST` cần (`requiredAmount`; `-1`, mọi mục, là
+nhiều nhất), `AND → OR`, đổi habit app, tăng thời gian mở khóa / TTL / hạn mức,
 giảm độ dài lockdown, đổi lịch, `HARDCORE → SOFT`, đổi mode hay loại trigger). Ngoài ra cũng
 là nới lỏng: xóa block, xóa một mục checklist, đổi `linkedDay`/`countsGoal` của habit item,
 tăng `dailyCapMs`, và bắt đầu Pause (I25). Với nhiều luật (I44): bỏ hay đổi giờ chặn (kể cả
