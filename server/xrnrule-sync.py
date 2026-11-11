@@ -209,7 +209,8 @@ def check_session(cookie_header):
     except ValueError:  # also a bad base64 or UTF-8
         return None
     tag = password_tag(user)
-    if tag is None or not hmac.compare_digest(session_mac(f"{who}.{expires}", tag), mac):
+    # As bytes: compare_digest raises on a str that isn't ASCII, and a cookie can hold anything.
+    if tag is None or not hmac.compare_digest(session_mac(f"{who}.{expires}", tag).encode(), mac.encode()):
         return None
     return user
 

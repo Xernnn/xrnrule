@@ -408,6 +408,17 @@ class SyncServerTest(unittest.TestCase):
                 f.write(old)
         self.assertEqual(200, self.web("GET", "/state", cookie)[0])
 
+    def test_a_cookie_that_isnt_ascii_is_refused_not_a_crash(self):
+        who, expires, mac = self.sign_in().split(".")
+        conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+        conn.putrequest("GET", "/state")
+        conn.putheader("X-Xrn-Client", "web")
+        conn.putheader("Cookie", f"{srv.SESSION_COOKIE}={who}.{expires}.{mac[:-1]}".encode() + b"\xe9")
+        conn.endheaders()
+        with conn.getresponse() as r:  # no answer at all raises here
+            self.assertEqual(401, r.status)
+        conn.close()
+
     def test_the_session_key_is_private_and_shared_by_every_server_on_the_users_file(self):
         path = os.path.join(os.path.dirname(srv.args.users), "session.key")
         self.assertEqual(0o600, os.stat(path).st_mode & 0o777)
