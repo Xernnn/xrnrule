@@ -52,6 +52,17 @@ test("locationOf keeps the path, without query, case or trailing slash", () => {
   assert.equal(X.locationOf("chrome://extensions"), null);
 });
 
+test("locationOf reads a path as the site does, so another spelling isn't a way past a path rule", () => {
+  // youtube.com/%73horts is youtube.com/shorts to the server, and a doubled slash often is too.
+  assert.equal(X.locationOf("https://www.youtube.com/%73horts/abc"), "youtube.com/shorts/abc");
+  assert.equal(X.locationOf("https://www.youtube.com//shorts//abc/"), "youtube.com/shorts/abc");
+  assert.ok(X.blockedBy({ blocked: [{ domain: "youtube.com/shorts" }] }, X.locationOf("https://youtube.com/%53Horts")));
+  // Only the letters, digits and -._~ an escape may stand for: a space or a slash stays escaped.
+  assert.equal(X.locationOf("https://a.com/a%20b%2Fc/%zz"), "a.com/a%20b%2fc/%zz");
+  // xrnrule takes what follows "://" for the host: a path must never carry one.
+  assert.equal(X.locationOf("https://limited.com/x/https://other.com/"), "limited.com/x/https:/other.com");
+});
+
 test("a target with a path covers that part of the site and nothing else", () => {
   assert.equal(X.matches("youtube.com/shorts", "youtube.com/shorts"), true);
   assert.equal(X.matches("m.youtube.com/shorts/abc", "youtube.com/shorts"), true);
