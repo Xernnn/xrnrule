@@ -188,6 +188,42 @@ class DesktopTest {
     }
 
     @Test
+    fun i49_aBrowsersOwnWindowInFrontIsNoBrowserInFront() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val store = Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined))
+        val fg = Foreground(store, known)
+        val config = Config("", "", "", 0, File("/nonexistent"), openBlockPage = false)
+        val quiet = object : Notifier(config) {
+            override fun notify(title: String, body: String, urgent: Boolean) = Unit
+            override fun blocked(appId: String) = Unit
+        }
+        val enforcer = Enforcer(store, quiet, config).also { it.foreground = fg }
+        // Clicked to pause or seek, as Hyprland reports it: no page of the extension is focused
+        // there, and it sees no focused window of its own. It was closed two minutes in, mid-video.
+        for (title in listOf(
+            "Picture-in-Picture", "Picture in picture",
+            "Developer Tools — YouTube — https://www.youtube.com/watch?v=1", "DevTools - www.youtube.com/watch?v=1",
+        )) {
+            enforcer.Activated("zen", "zen", "10")
+            enforcer.Titled(title)
+            clock.mono += 10 * 60_000
+            assertFalse(title, fg.extensionMissing())
+            assertEquals(title, null, fg.browsers.toClose(clock.mono))
+        }
+        // Back in the browser's own window, it is watched again, its silence from then on.
+        enforcer.Activated("zen", "zen", "10")
+        enforcer.Titled("YouTube — Zen Browser")
+        assertEquals(null, fg.browsers.toClose(clock.mono))
+        clock.mono += BrowserWatch.SILENT_GRACE_MS
+        assertEquals("zen", fg.browsers.toClose(clock.mono))
+        // A page named like one is no such window: the browser's window title has more to it.
+        for (title in listOf("Picture-in-Picture — Zen Browser", "DevTools tips - Chromium", "Developer Tools guide — Zen Browser")) {
+            assertFalse(title, Foreground.isOwnWindow(title))
+        }
+    }
+
+    @Test
     fun i16_theBlockPageStandsInOnlyForAnAppThatIsBlocked() {
         val fg = Foreground(blocking("steam", TestClock()))
         // /block?app=… is anyone's to type: named after a habit app, it would run that app's timer unopened.

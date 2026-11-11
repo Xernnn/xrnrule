@@ -24,8 +24,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-/** One window as KWin (or Hyprland) reports it: the `.desktop` id when it has one, else its WM class. */
-data class AppWindow(val appId: String, val resourceClass: String, val pid: Long)
+/**
+ * One window as KWin (or Hyprland) reports it: the `.desktop` id when it has one, else its WM
+ * class. [title]: Hyprland's; the KWin script doesn't send one, so there it is always "".
+ */
+data class AppWindow(val appId: String, val resourceClass: String, val pid: Long, val title: String = "")
 
 /**
  * What the KWin script (`desktop/kwin`) calls over D-Bus, and [HyprlandWindows] calls directly. Arguments are strings: a JS number
@@ -40,6 +43,12 @@ interface DesktopBus : DBusInterface {
     fun Added(appId: String, resourceClass: String, pid: String): String
 
     fun Removed(pid: String)
+
+    /**
+     * The window in front is called [title], on coming in front and on every change. Only
+     * [HyprlandWindows] says; the KWin script sends no caption.
+     */
+    fun Titled(title: String)
 }
 
 /**
@@ -91,9 +100,20 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
             watchFront()
         }
 
+    /** The window in front is called [title] now ([DesktopBus.Titled]). */
+    fun titled(title: String) {
+        active = active?.copy(title = title)
+    }
+
+    /**
+     * The browser in front as I49 watches it: none while the screen is locked, nor while one of a
+     * browser's own windows the extension can't see is in front ([isOwnWindow]).
+     */
+    private fun browserInFront(): String? = active?.takeUnless { locked || isOwnWindow(it.title) }?.appId?.takeIf(::isBrowser)
+
     private fun watchFront() {
-        val app = active?.appId?.takeUnless { locked }
-        browsers.front(app, app != null && isBrowser(app), store.clock.nowMonotonicMs())
+        val browser = browserInFront()
+        browsers.front(browser, browser != null, store.clock.nowMonotonicMs())
     }
 
     @Volatile private var heartbeat: Heartbeat? = null
@@ -177,10 +197,8 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
     }
 
     /** A browser is in front but the extension has gone quiet for it: website blocking isn't working. */
-    fun extensionMissing(): Boolean {
-        val app = active?.appId ?: return false
-        return !locked && isBrowser(app) && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
-    }
+    fun extensionMissing(): Boolean =
+        browserInFront() != null && browsers.silentFor(store.clock.nowMonotonicMs()) > EXTENSION_SILENCE_MS
 
     companion object {
         const val FRESH_MS = 6_000L
@@ -200,6 +218,20 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
          * for Zen and close it after 10 s as a browser without the extension (I49).
          */
         fun isBrowser(appId: String): Boolean = appId.lowercase().split(NOT_A_WORD).any { it in BROWSERS }
+
+        /**
+         * A browser's own window that the extension can't list, by its title: Picture-in-Picture
+         * ("Picture-in-Picture" in Firefox and Zen, "Picture in picture" in Chromium) and an
+         * undocked DevTools ("Developer Tools — …" in Firefox and Zen, "DevTools - …" in
+         * Chromium), in English. No page of the extension is focused there and it sees no focused
+         * window of its own, so kept in front (clicked to pause a video) the browser was taken for
+         * one with the extension off and closed mid-video (I49). In front, it is no browser in
+         * front. That opens nothing new: any other app in front already stops that clock, with the
+         * extension on or off, and with it on, its page behind still counts a video playing (I47).
+         */
+        fun isOwnWindow(title: String): Boolean =
+            title == "Picture-in-Picture" || title == "Picture in picture" ||
+                title == "Developer Tools" || title.startsWith("Developer Tools — ") || title.startsWith("DevTools - ")
 
         private val NOT_A_WORD = Regex("[^a-z0-9]+")
     }
@@ -278,6 +310,11 @@ class Enforcer(
 
     override fun Removed(pid: String) {
         pid.toLongOrNull()?.let { windows.remove(it) }
+    }
+
+    override fun Titled(title: String) {
+        foreground.titled(title)
+        foreground.update()
     }
 
     private fun verdict(w: AppWindow?): String {
