@@ -271,7 +271,16 @@ async function start() {
 
 chrome.runtime.onStartup.addListener(start);
 chrome.runtime.onInstalled.addListener(start);
-chrome.alarms.create("rules", { periodInMinutes: 1 });
+// Made only when it isn't there. Made again at every start of the worker, it put the next poll a
+// minute off each time, and a worker woken more often than that, with no page beating to keep it
+// up, never polled: no rule list, and no word that the extension still sees the window in front.
+(async () => {
+  let alarm = null;
+  try {
+    alarm = await chrome.alarms.get("rules");
+  } catch {} // can't tell: make it
+  if (!alarm) chrome.alarms.create("rules", { periodInMinutes: 1 });
+})();
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "rules") {
     refreshRules();

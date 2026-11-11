@@ -121,3 +121,16 @@ test("every rule fetch says whether a window the extension can see has focus (I4
   await blind.sandbox.refreshRules();
   assert.ok(blind.urls.at(-1).endsWith("/ext/rules"), blind.urls.at(-1));
 });
+
+test("the rules alarm is made only when it isn't there, so a start of the worker doesn't put the poll off", async () => {
+  const created = [];
+  const create = (name) => { created.push(name); };
+  // Already there, a minute after the last poll: a new start of the worker keeps it.
+  answering({ "chrome.alarms.get": async (name) => (name === "rules" ? { name, periodInMinutes: 1 } : undefined), "chrome.alarms.create": create });
+  await settle();
+  assert.deepEqual(created, []);
+  // None yet (just installed, or dropped at a browser restart): it's made.
+  answering({ "chrome.alarms.get": async () => undefined, "chrome.alarms.create": create });
+  await settle();
+  assert.deepEqual(created, ["rules"]);
+});
