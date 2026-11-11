@@ -2264,6 +2264,30 @@ class InvariantTests {
     }
 
     @Test
+    fun i38_aRecordWithADateThatIsntOneIsLeftOut() {
+        // One malformed date from the server threw inside reduce: the whole page was lost, and the
+        // next round read it again, so nothing after it ever arrived.
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val phone = Device("phone", World(), clock)
+        val bad = EntryRecord("push", "2026-02-30", units(1), "", BASE_WALL, seq = 2)
+        val good = EntryRecord("push", HabitRecords.date(today), units(5), "", BASE_WALL, seq = 3)
+        val push = HabitRecord("push", HabitRecords.data(habit("push", goal = 20)), BASE_WALL, seq = 1)
+        phone.on(BlockEvent.HabitServerPulled(listOf(push), listOf(bad, good), seq = 3))
+        assertEquals(units(5), phone.world.entry("push", today)?.value)
+        assertEquals(3L, phone.world.habitSyncSeq)
+        assertEquals(setOf("push@$today"), phone.world.habitEntries.keys)
+
+        phone.on(BlockEvent.HabitServerPulled(listOf(push), listOf(bad, good), seq = 3, full = true))
+        assertEquals(units(5), phone.world.entry("push", today)?.value)
+        val accepted = HabitWriteResult(accepted = HabitWriteResult.Accepted(entries = listOf(
+            HabitWriteResult.EntrySeq("push", "not a date", 4),
+            HabitWriteResult.EntrySeq("push", HabitRecords.date(today), 5),
+        ))).acceptance()
+        assertEquals(mapOf("push@$today" to 5L), accepted.entries)
+    }
+
+    @Test
     fun i38_dayStartHourComesFromTheServer() {
         val clock = FakeClock(wall = at("2026-01-16T01:00:00Z"))
         val phone = Device("phone", World(), clock)
