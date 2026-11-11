@@ -190,10 +190,11 @@ object BlockForms {
         return world.copy(checklist = world.checklist + (blockId to existing + linkedItem(blockId, habit, existing.size)))
     }
 
-    fun removeItem(world: World, itemId: String): World {
-        val entry = world.checklist.entries.firstOrNull { (_, items) -> items.any { it.id == itemId } } ?: return world
-        val updated = entry.value.filterNot { it.id == itemId }.mapIndexed { i, item -> item.copy(order = i) }
-        return world.copy(checklist = world.checklist + (entry.key to updated))
+    /** Out of [blockId]'s checklist and no other's: the wait, the lock and hardcore were checked for that block. */
+    fun removeItem(world: World, blockId: String, itemId: String): World {
+        val items = world.checklist[blockId]?.takeIf { list -> list.any { it.id == itemId } } ?: return world
+        val updated = items.filterNot { it.id == itemId }.mapIndexed { i, item -> item.copy(order = i) }
+        return world.copy(checklist = world.checklist + (blockId to updated))
     }
 
     fun delete(world: World, blockId: String): World = world.copy(

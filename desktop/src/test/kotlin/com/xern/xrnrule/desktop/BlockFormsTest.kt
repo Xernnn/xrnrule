@@ -127,13 +127,23 @@ class BlockFormsTest {
     }
 
     @Test
+    fun aTaskIsRemovedOnlyFromTheBlockItWasAskedOf() {
+        val a = ok(BlockForms.create(World(), Form(name = "A", sites = listOf("a.com"), items = listOf("easy")), clock))
+        val b = ok(BlockForms.create(a.world, Form(name = "B", sites = listOf("b.com"), items = listOf("hard")), clock))
+        val hard = b.world.items(b.block.id)[0].id
+        // The wait, the lock and hardcore were checked for the block named: not a way into another's tasks.
+        assertEquals(b.world, BlockForms.removeItem(b.world, a.block.id, hard))
+        assertTrue(BlockForms.removeItem(b.world, b.block.id, hard).items(b.block.id).isEmpty())
+    }
+
+    @Test
     fun itemsComeAndGo_andDeletingClearsEverything() {
         val made = ok(BlockForms.create(World(), Form(name = "G", sites = listOf("a.com"), items = listOf("a")), clock))
         var w = BlockForms.addItem(made.world, made.block.id, " Read ")
         w = BlockForms.linkHabit(w, made.block.id, LinkedHabit("u1", "Plank"))
         w = BlockForms.linkHabit(w, made.block.id, LinkedHabit("u1", "Plank")) // once only
         assertEquals(listOf("a", "Read", "Plank"), w.items(made.block.id).map { it.text })
-        w = BlockForms.removeItem(w, w.items(made.block.id)[0].id)
+        w = BlockForms.removeItem(w, made.block.id, w.items(made.block.id)[0].id)
         assertEquals(listOf(0, 1), w.items(made.block.id).map { it.order })
         w = BlockForms.delete(w, made.block.id)
         assertTrue(w.blocks.isEmpty())
