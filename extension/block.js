@@ -13,8 +13,11 @@
   const X = self.Xrn;
   const params = new URLSearchParams(location.search);
   const site = params.get("site") || "";
-  // Raw, as the redirect put it there: decoding could break a URL with a "%" of its own.
+  // Raw, as the redirect put it there: decoding could break a URL with a "%" of its own. Only
+  // followed back to the site this page stands in for: any site may open this page, and could
+  // otherwise send a visitor through it to an address of its choosing.
   const back = location.hash.slice(1);
+  const backHere = /^https?:/.test(back) && X.matches(X.locationOf(back) || "", site.split("/")[0]);
   const android = /Android/i.test(navigator.userAgent);
   /** Served by xrnrule itself, not the extension: it asks xrnrule directly. */
   const served = location.protocol === "http:";
@@ -110,7 +113,7 @@
         leave();
       } else if (!v.blocked && !v.offline) {
         gone = true;
-        if (/^https?:/.test(back)) location.replace(back);
+        if (backHere) location.replace(back);
         else document.getElementById("title").textContent = `${site} is open again`;
       } else if (v.page && !location.href.startsWith(v.page)) {
         // xrnrule answers again and has a block page of its own: that one says more.
