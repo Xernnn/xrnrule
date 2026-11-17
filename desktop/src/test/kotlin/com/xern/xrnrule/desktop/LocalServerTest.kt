@@ -4,6 +4,7 @@ import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockLock
+import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Defaults
@@ -202,6 +203,20 @@ class LocalServerTest {
         // The extension sends it with every call.
         assertEquals(200, d.get("/ext/rules?focused=1"))
         assertNull(d.foreground.browsers.toClose(d.clock.mono))
+    }
+
+    @Test
+    fun i46_minutesCanBeBoughtForABlockOnAPath() {
+        val shorts = Block(
+            "shorts", "Shorts", targetSites = setOf("youtube.com/shorts"),
+            trigger = Trigger(TriggerType.TIMER, 0, TriggerUnit.MS), mode = BlockMode.SCHEDULE,
+        )
+        val d = Daemon(listOf(shorts))
+        // The block page for youtube.com/shorts/… offers to buy minutes; asking was cut to the bare
+        // host, which no block covers, and the answer was that this can't be bought off.
+        val begun = d.postJson("/api/override", """{"op":"begin","site":"https://www.youtube.com/shorts/abc"}""")
+        assertEquals(JsonObject(emptyMap()), begun)
+        assertEquals(setOf("shorts"), d.store.world.value.pendingOverride?.blockIds)
     }
 
     @Test

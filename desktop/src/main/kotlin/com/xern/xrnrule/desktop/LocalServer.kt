@@ -151,7 +151,7 @@ class LocalServer(
         val world = store.world.value
         return when (body["op"]?.jsonPrimitive?.contentOrNull) {
             "begin" -> {
-                val blockers = store.engine.blockersOf(world, body["app"]?.jsonPrimitive?.contentOrNull, body["site"]?.jsonPrimitive?.contentOrNull?.let(Sites::normalize), store.clock)
+                val blockers = store.engine.blockersOf(world, body["app"]?.jsonPrimitive?.contentOrNull, body["site"]?.jsonPrimitive?.contentOrNull?.let(Sites::normalizeTarget), store.clock)
                 store.engine.overrideRejection(world, blockers, store.clock)?.let { return error(overrideText(it.name)) }
                 runBlocking { store.dispatchAndGet(BlockEvent.BeginOverride(blockers.map { it.id }.toSet())) }
                 "{}"
