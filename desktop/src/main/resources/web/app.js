@@ -134,6 +134,21 @@ const siteMatches = (location, target) => {
   const path = location.slice(host.length);
   return !want || path === want || path.startsWith(want + "/");
 };
+/**
+ * Whether [back], the address a blocked tab left, is on [site]'s own host or one under it: only
+ * then does the page go back to it once the site opens. Any page can open /block with an address
+ * after the "#", and would otherwise send a visitor through xrnrule's own page wherever it liked.
+ */
+const backHere = (back, site) => {
+  if (!back || !site || !/^https?:/i.test(back)) return false;
+  let host;
+  try {
+    host = new URL(back).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  return siteMatches(host, site.split("/")[0].toLowerCase());
+};
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
@@ -767,7 +782,7 @@ function render() {
     blocks = blocks.filter((b) => s?.blockers.includes(b.id));
     const what = blockedApp ? appName(blockedApp) : blockedSite;
     const timer = blocks.some((b) => b.reason === "HABIT" && b.state === "ARMED" && (b.trigger === "TIMER" || b.trigger === "COMBINED"));
-    if (!still && backUrl && /^https?:/.test(backUrl)) {
+    if (!still && backHere(backUrl, blockedSite)) {
       location.replace(backUrl);
       return;
     }
