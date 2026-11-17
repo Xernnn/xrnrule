@@ -224,6 +224,41 @@ class DesktopTest {
     }
 
     @Test
+    fun i49_aPageTitledLikeDevToolsIsNoDevTools() {
+        // A bookmarklet, document.title = "DevTools - x": the window's title began like DevTools',
+        // so a browser without the extension was never in front, and every blocked site was open in it.
+        for (title in listOf(
+            "DevTools - x - Chromium", "DevTools - www.youtube.com/watch?v=1 - Brave",
+            "Developer Tools — x — Zen Browser", "Developer Tools — x — https://www.youtube.com/ — Mozilla Firefox",
+            "Developer Tools — https://www.youtube.com/ — Zen Browser Private Browsing",
+        )) {
+            assertFalse(title, Foreground.isOwnWindow(title))
+        }
+        for (title in listOf("Developer Tools — about:blank", "Developer Tools — https://www.youtube.com/")) {
+            assertTrue(title, Foreground.isOwnWindow(title))
+        }
+    }
+
+    @Test
+    fun i49_aBrowserWithoutTheExtensionIsWatchedWhicheverOfItsWindowsIsInFront() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val store = Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined))
+        val fg = Foreground(store, known)
+        val config = Config("", "", "", 0, File("/nonexistent"), openBlockPage = false)
+        val quiet = object : Notifier(config) {
+            override fun notify(title: String, body: String, urgent: Boolean) = Unit
+            override fun blocked(appId: String) = Unit
+        }
+        val enforcer = Enforcer(store, quiet, config).also { it.foreground = fg }
+        // Chromium has never had the extension: its video in Picture-in-Picture, clicked, is still it.
+        enforcer.Activated("chromium", "chromium", "20")
+        enforcer.Titled("Picture in picture")
+        clock.mono += BrowserWatch.OTHER_GRACE_MS
+        assertEquals("chromium", fg.browsers.toClose(clock.mono))
+    }
+
+    @Test
     fun i16_theBlockPageStandsInOnlyForAnAppThatIsBlocked() {
         val fg = Foreground(blocking("steam", TestClock()))
         // /block?app=… is anyone's to type: named after a habit app, it would run that app's timer unopened.
