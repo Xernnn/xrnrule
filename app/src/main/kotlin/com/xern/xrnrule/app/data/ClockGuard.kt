@@ -3,6 +3,7 @@ package com.xern.xrnrule.app.data
 import android.content.ContentResolver
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import com.xern.xrnrule.domain.Clock
@@ -24,10 +25,16 @@ class AndroidClock : Clock {
  *
  * Wall minus monotonic time only moves when the clock is set. While Android's automatic time is
  * off, every such jump is a manual change and is added to [skewMs], which [nowWallMs] takes back
- * off; once automatic time is on again the clock is trusted and the skew cleared. Jumps made while
- * xrnrule wasn't running are caught at the next [check] too, unless the phone rebooted in
- * between (Android's boot count says so, [TimeSettings.bootCount]): the monotonic clock restarts
- * then, so there is nothing to compare against.
+ * off. Turning automatic time on again only says Android may set the clock, not that it has: with
+ * no network (airplane mode) the hand-set time stays. So the skew goes only when the clock comes
+ * back to within [TOLERANCE_MS] of the time it kept, or when the network's time
+ * ([TimeSettings.networkTimeMs]) says what the time is: that one is the time, whatever the wall
+ * clock or the skew say, so it also catches a change made while xrnrule wasn't watching. While
+ * automatic time is on, a jump that brings the clock back towards the time kept is taken off the
+ * skew, and one away from it is the phone setting its own clock, left to the network time to judge.
+ * Jumps made while xrnrule wasn't running are caught at the next [check] too, unless the phone
+ * rebooted in between (Android's boot count says so, [TimeSettings.bootCount]): the monotonic clock
+ * restarts then, so there is nothing to compare against until the network's time is known.
  */
 class ClockGuard(private val prefs: SharedPreferences, private val raw: Clock, private val phone: TimeSettings) : Clock {
 
@@ -62,7 +69,8 @@ class ClockGuard(private val prefs: SharedPreferences, private val raw: Clock, p
     fun check() {
         zones.check(raw.zone(), automaticTimeZone())
         val mono = raw.nowMonotonicMs()
-        val offset = raw.nowWallMs() - mono
+        val wall = raw.nowWallMs()
+        val offset = wall - mono
         val lastMono = prefs.getLong(KEY_MONO, Long.MAX_VALUE)
         val lastOffset = prefs.getLong(KEY_OFFSET, offset)
         val boot = phone.bootCount()
@@ -72,10 +80,15 @@ class ClockGuard(private val prefs: SharedPreferences, private val raw: Clock, p
         val sameBoot = mono >= lastMono && (boot == null || lastBoot == null || boot == lastBoot)
         val jumped = sameBoot && abs(offset - lastOffset) > TOLERANCE_MS
         var skew = skewMs
-        if (automaticTime()) {
+        if (jumped) {
+            val by = offset - lastOffset
+            if (!automaticTime() || abs(skew + by) < abs(skew)) skew += by
+        }
+        val network = phone.networkTimeMs()
+        if (network != null) {
+            skew = (wall - network).takeIf { abs(it) > NETWORK_TOLERANCE_MS } ?: 0
+        } else if (abs(skew) <= TOLERANCE_MS) {
             skew = 0
-        } else if (jumped) {
-            skew += offset - lastOffset
         }
         // The baseline only needs writing when it moved: offsets don't change between clock sets.
         val write = skew != skewMs || jumped || !sameBoot || !prefs.contains(KEY_MONO) || boot != lastBoot
@@ -104,6 +117,13 @@ class ClockGuard(private val prefs: SharedPreferences, private val raw: Clock, p
 
         /** Clock drift and network corrections stay well under this; a hand-set change doesn't. */
         const val TOLERANCE_MS = 5_000L
+
+        /**
+         * How far the clock may be from the network's time and still be taken as right. The phone
+         * may have its time from the mobile network rather than NTP, and the two can differ by some
+         * seconds; the network's time is absolute, so the error never grows past this.
+         */
+        const val NETWORK_TOLERANCE_MS = 60_000L
     }
 }
 
@@ -117,6 +137,13 @@ interface TimeSettings {
 
     /** Which boot this is: a new number at every boot, null where the phone keeps none. */
     fun bootCount(): Int?
+
+    /**
+     * The time by the network (NTP), now: the last time Android fetched carried forward by the
+     * monotonic clock, so setting the clock doesn't move it. Null until one is fetched in this boot
+     * (airplane mode since the boot), and before Android 13.
+     */
+    fun networkTimeMs(): Long?
 }
 
 class AndroidTimeSettings(private val resolver: ContentResolver) : TimeSettings {
@@ -125,4 +152,8 @@ class AndroidTimeSettings(private val resolver: ContentResolver) : TimeSettings 
     override fun automaticTimeZone(): Boolean = Settings.Global.getInt(resolver, Settings.Global.AUTO_TIME_ZONE, 1) == 1
 
     override fun bootCount(): Int? = Settings.Global.getInt(resolver, Settings.Global.BOOT_COUNT, -1).takeIf { it >= 0 }
+
+    /** [SystemClock.currentNetworkTimeClock] throws when the phone has no network time yet. */
+    override fun networkTimeMs(): Long? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) runCatching { SystemClock.currentNetworkTimeClock().millis() }.getOrNull() else null
 }
