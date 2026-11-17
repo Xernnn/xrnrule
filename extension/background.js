@@ -14,13 +14,34 @@
 // page, with shared.js listed before it in the manifest's background.scripts, and has no importScripts.
 if (typeof importScripts === "function" && !self.Xrn) importScripts("shared.js");
 
-const { DEFAULT_PORT, FAIL_CLOSED_MS, CALL_TIMEOUT_MS, locationOf, redirectRules, failClosed, blockedBy, enginePage, blockUrl } = self.Xrn;
+const { DEFAULT_PORT, SITE_ORIGINS, FAIL_CLOSED_MS, CALL_TIMEOUT_MS, locationOf, redirectRules, failClosed, blockedBy, enginePage, blockUrl } = self.Xrn;
 const OWN_PAGE = chrome.runtime.getURL("block.html");
 /** Our redirect rules' ids. Each rewrite removes the whole range first. */
 const DNR_BASE = 1000;
 /** Whether we may run in incognito windows, for xrnrule to warn about; null if the browser won't say. */
 let incognito = null;
 chrome.extension?.isAllowedIncognitoAccess?.().then((allowed) => { incognito = allowed; }, () => {});
+
+/**
+ * Whether the browser lets the extension onto websites (the manifest's host permissions). Both
+ * kinds let the user withhold them: Chromium's "Site access: on specific sites", Zen's switches in
+ * about:addons. Without them no content script runs and no redirect applies, so nothing is blocked
+ * or counted, while this worker could still reach xrnrule on 127.0.0.1. Then it says nothing to
+ * xrnrule at all, not even to fetch the rules: hearing from it is what tells xrnrule this browser
+ * has the extension, and a browser without it is blocked (I49). Read again before every call.
+ */
+async function siteAccess() {
+  if (typeof chrome.permissions?.contains !== "function") return true; // a browser that can't say
+  try {
+    return (await chrome.permissions.contains({ origins: SITE_ORIGINS })) !== false;
+  } catch {
+    return true;
+  }
+}
+// Given back: say so to xrnrule now, not at the next poll a minute on.
+chrome.permissions?.onAdded?.addListener(() => refreshRules());
+// Taken away: the badge says so at once.
+chrome.permissions?.onRemoved?.addListener(() => showAccess());
 
 async function engineUrl() {
   const { port } = await chrome.storage.local.get("port");
@@ -82,11 +103,30 @@ function badge(ok) {
   noteReachable(ok).catch(() => {});
   if (ok === reachable) return;
   reachable = ok;
-  chrome.action.setBadgeText({ text: ok ? "" : "!" });
-  if (!ok) chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
-  chrome.action.setTitle({ title: ok ? "xrnrule" : "xrnrule isn't answering: only what it last blocked stays blocked" });
+  paintBadge();
   // Which block page the redirects name depends on it.
   cachedRules().then((rules) => rules && syncRedirects(rules));
+}
+
+/** Whether the badge shows the site access as there. */
+let accessShown = true;
+/** Reads the site access and shows it on the badge; returns it. */
+async function showAccess() {
+  const access = await siteAccess();
+  if (access !== accessShown) {
+    accessShown = access;
+    paintBadge();
+  }
+  return access;
+}
+
+function paintBadge() {
+  const bad = !accessShown || reachable === false;
+  chrome.action.setBadgeText({ text: bad ? "!" : "" });
+  if (bad) chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
+  chrome.action.setTitle({
+    title: !accessShown ? "xrnrule: no site access" : reachable === false ? "xrnrule isn't answering: only what it last blocked stays blocked" : "xrnrule",
+  });
 }
 
 /** xrnrule's block page, or null for ours: while xrnrule doesn't answer, its page won't load either. */
@@ -127,6 +167,7 @@ let refreshing = null;
 function refreshRules() {
   refreshing ??= (async () => {
     try {
+      if (!(await showAccess())) return; // asking for the rules says the extension is here (I49)
       const focused = await seesFocus();
       const rules = await call(focused == null ? "/ext/rules" : `/ext/rules?focused=${focused ? 1 : 0}`);
       rulesCache = rules;
@@ -196,6 +237,7 @@ async function moveBlockedTabs(rules) {
  * standing in for the site it blocks, so a timer habit counts while you wait there.
  */
 async function beat(host, focused, standIn = false, playing = false) {
+  if (!(await showAccess())) return { ...(await unanswered(host)), access: false };
   try {
     const verdict = await call("/ext/heartbeat", { host, focused, standIn, playing, incognito, version: chrome.runtime.getManifest().version });
     badge(true);
@@ -204,11 +246,15 @@ async function beat(host, focused, standIn = false, playing = false) {
     return verdict;
   } catch {
     badge(false);
-    // Fail closed: what xrnrule last said was blocked stays blocked, and a minute in, all of it.
-    const rules = inForce(await cachedRules());
-    const site = host ? locationOf(`https://${host}`) : null;
-    return { site, blocked: !!blockedBy(rules, site), page: null, showClock: false, offline: true };
+    return unanswered(host);
   }
+}
+
+/** Fail closed: without xrnrule's word, what it last said was blocked stays blocked, and a minute in, all of it. */
+async function unanswered(host) {
+  const rules = inForce(await cachedRules());
+  const site = host ? locationOf(`https://${host}`) : null;
+  return { site, blocked: !!blockedBy(rules, site), page: null, showClock: false, offline: true };
 }
 
 /** The active tab, for switches between tabs and windows: pages beat on their own every few seconds. */
@@ -253,9 +299,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       beat(msg.host ?? null, !!msg.focused, !!msg.standIn, !!msg.playing).then(reply);
       return true; // the reply comes later
     case "check": // the popup: about a host, without saying it's in front
-      call(`/ext/check?host=${encodeURIComponent(msg.host ?? "")}`)
-        .then((v) => reply({ ...v, reachable: true }))
-        .catch(async () => reply({ reachable: false, blocked: !!blockedBy(inForce(await cachedRules()), msg.host) }));
+      showAccess().then(async (access) => {
+        if (!access) return reply({ reachable: false, access: false, blocked: !!blockedBy(inForce(await cachedRules()), msg.host) });
+        call(`/ext/check?host=${encodeURIComponent(msg.host ?? "")}`)
+          .then((v) => reply({ ...v, reachable: true }))
+          .catch(async () => reply({ reachable: false, blocked: !!blockedBy(inForce(await cachedRules()), msg.host) }));
+      });
       return true;
     case "engine":
       engineUrl().then(reply);
@@ -280,6 +329,7 @@ async function start() {
 
 chrome.runtime.onStartup.addListener(start);
 chrome.runtime.onInstalled.addListener(start);
+showAccess(); // at every start of the worker: the badge says at once if the site access is gone
 // Made only when it isn't there. Made again at every start of the worker, it put the next poll a
 // minute off each time, and a worker woken more often than that, with no page beating to keep it
 // up, never polled: no rule list, and no word that the extension still sees the window in front.

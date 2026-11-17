@@ -111,8 +111,8 @@ it has nothing to go back to, so the rest of the browser stays yours.
   takes it as an `.xpi`). Firefox drops a temporary add-on when it closes; to keep it, sign the
   zip with an unlisted upload to addons.mozilla.org, or, in a build that allows unsigned add-ons,
   set `xpinstall.signatures.required` to `false` in `about:config` and install the file. If the
-  toolbar popup says xrnrule isn't allowed on websites, click **Allow on all sites** (Firefox can
-  withhold or revoke an extension's site access in `about:addons`). There is no self-update
+  toolbar popup says **No site access**, click **Allow** (Firefox can withhold or revoke an
+  extension's site access in `about:addons`). There is no self-update
   there: a temporary add-on still reloads when its folder's version changes, an installed `.xpi`
   updates by installing a newer one.
 - **Phone (Quetta):** open `https://<your server>/xrnrule/update/xrnrule.crx` in Quetta →
@@ -124,7 +124,9 @@ it has nothing to go back to, so the rest of the browser stays yours.
 The extension's settings page shows its version and where it updates from, with **Check now**.
 The phone app warns when the browser the extension lives in goes quiet, without ever blocking
 that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
-off is closed after two minutes in front, and so is one whose window in front the extension can't
+off is closed after two minutes in front, and so is one that withholds the extension's site access
+(Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:
+the extension then stops talking to xrnrule), or whose window in front the extension can't
 see: a private window it isn't allowed in, or another profile without it. Browsers can't be seen
 inside other apps: a page opened in an app's own in-app browser isn't blocked.
 

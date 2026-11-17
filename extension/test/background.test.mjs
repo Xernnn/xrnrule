@@ -153,3 +153,42 @@ test("setPort and checkUpdate are taken from the extension's own pages only, not
   await new Promise((resolve) => onMessage({ type: "setPort", port: 9999 }, options, resolve));
   assert.equal(bg.stored.port, 9999);
 });
+
+test("without its site access the extension says nothing to xrnrule, so xrnrule takes the browser as one without it (I49)", async () => {
+  // Chromium's "Site access: on specific sites" with only xrnrule's address, or Zen's https://*/*
+  // switched off: no content script runs and no redirect applies, yet the worker still reached
+  // xrnrule every minute, and on the laptop and the phone alike that is the extension being here.
+  let granted = false;
+  const asked = [];
+  const added = [];
+  const messages = [];
+  const bg = answering({
+    "chrome.permissions.contains": async ({ origins }) => { asked.push([...origins]); return granted; },
+    "chrome.permissions.onAdded.addListener": (fn) => { added.push(fn); },
+    "chrome.runtime.onMessage.addListener": (fn) => { messages.push(fn); },
+    "chrome.windows.getLastFocused": async () => ({ id: 1, focused: true }),
+  });
+  await settle();
+  assert.ok(asked.length, "read at start-up");
+  assert.deepEqual(asked[0], JSON.parse(read("manifest.json")).host_permissions);
+  const [onMessage] = messages;
+  const page = { id: "test", tab: { id: 7 }, frameId: 0, url: "http://example.com/" };
+  const ask = (msg) => new Promise((resolve) => onMessage(msg, page, resolve));
+
+  await bg.sandbox.refreshRules();
+  const beat = await ask({ type: "beat", host: "example.com", focused: true });
+  const check = await ask({ type: "check", host: "example.com" });
+  await settle();
+  assert.deepEqual(bg.urls, [], "no rule fetch, heartbeat or check");
+  assert.equal(beat.access, false);
+  assert.equal(check.access, false);
+
+  // Given back: xrnrule hears from it at once, not at the next poll.
+  granted = true;
+  for (const fn of added) fn({ origins: ["https://*/*"] });
+  await settle();
+  await settle();
+  assert.ok(bg.urls.some((u) => u.endsWith("/ext/rules?focused=1")), bg.urls.join(" "));
+  await ask({ type: "beat", host: "example.com", focused: true });
+  assert.ok(bg.urls.some((u) => u.endsWith("/ext/heartbeat")), bg.urls.join(" "));
+});

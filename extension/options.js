@@ -1,5 +1,15 @@
 // xrnrule extension: the one setting it has, the port xrnrule listens on, and how it updates.
 
+// Withheld site access, as in the popup (popup.js). The request must come from the click itself.
+(async () => {
+  const access = document.getElementById("access");
+  const origins = self.Xrn.SITE_ORIGINS;
+  document.getElementById("grant").addEventListener("click", () => {
+    chrome.permissions.request({ origins }).then((ok) => { if (ok) access.hidden = true; }, () => {});
+  });
+  access.hidden = await chrome.permissions?.contains({ origins }).catch(() => true) ?? true;
+})();
+
 (async () => {
   const input = document.getElementById("port");
   const result = document.getElementById("result");
