@@ -559,6 +559,22 @@ class SyncServerTest(unittest.TestCase):
                 self.assertEqual([f"t{i}" for i in range(8, 18)], [e["target"] for e in srv.load_events("busy")])
             self.assertEqual([f"t{i}" for i in range(8, 18)], on_disk())
 
+    def test_a_batch_doesnt_go_over_the_whole_log_again(self):
+        # The set of every stored event's key, up to 50,000, was built anew for each POST /events.
+        now = int(time.time() * 1000)
+        srv.add_events("long", "phone", [{"t": "blocked", "at": now - 10**6 + i, "target": f"t{i}"} for i in range(500)])
+        with unittest.mock.patch.object(srv, "event_key", wraps=srv.event_key) as keyed:
+            self.assertEqual(1, srv.add_events("long", "phone", [{"t": "blocked", "at": now, "target": "new"}]))
+            self.assertLess(keyed.call_count, 10)
+        # Still each one once, after the log is cut down to its newest as well.
+        self.assertEqual(0, srv.add_events("long", "phone", [{"t": "blocked", "at": now, "target": "new"}]))
+        with unittest.mock.patch.object(srv, "EVENTS_MAX", 100):
+            srv.add_events("long", "phone", [{"t": "blocked", "at": now - 1, "target": "newer"}])
+            with srv.events_lock:
+                self.assertEqual(90, len(srv.load_events("long")))
+            self.assertEqual(0, srv.add_events("long", "phone", [{"t": "blocked", "at": now - 1, "target": "newer"}]))
+            self.assertEqual(1, srv.add_events("long", "phone", [{"t": "blocked", "at": now - 10**6, "target": "t0"}]))
+
     def test_a_page_on_another_site_cant_write_with_the_browsers_password(self):
         # A browser sends the password it was once given with a form another site posts here,
         # and a text/plain form body can be JSON.

@@ -101,6 +101,7 @@ seen = {}  # user -> {device: epoch ms of its last request}, mirrored to devices
 seen_written = {}  # user -> time.monotonic() of the last devices.json write
 events_lock = threading.Lock()
 events = {}  # user -> list of event dicts, oldest first, mirrored to events.jsonl
+event_keys = {}  # user -> the event_key of each of events[user], so a batch needn't go over them all
 session_key = b""  # signs the web pages' login cookies; see load_session_key()
 
 
@@ -439,13 +440,17 @@ def load_events(user):
             pass
         kept.sort(key=lambda e: e.get("at", 0))  # the file is in the order events came in
         events[user] = kept
+        event_keys.pop(user, None)
     now = time.time()
     cutoff = int((now - EVENTS_KEEP_DAYS * 86400) * 1000)
     latest = int(now * 1000) + EVENTS_AHEAD_MS
     have = events[user]
     if have and (have[0].get("at", 0) < cutoff or have[-1].get("at", 0) > latest or len(have) > EVENTS_MAX):
         events[user] = [e for e in have if cutoff <= e.get("at", 0) <= latest][-EVENTS_MAX:]
+        event_keys.pop(user, None)
         rewrite_events(user)
+    if user not in event_keys:
+        event_keys[user] = {event_key(e) for e in events[user]}
     return events[user]
 
 
@@ -462,7 +467,7 @@ def add_events(user, device, raw_events):
     """Stores the new ones; returns how many were new."""
     with events_lock:
         stored = load_events(user)
-        known = {event_key(e) for e in stored}
+        known = event_keys[user]
         latest = int(time.time() * 1000) + EVENTS_AHEAD_MS
         new = []
         for raw in raw_events:
@@ -477,6 +482,7 @@ def add_events(user, device, raw_events):
                 # The oldest go, as they would with age; a tenth at once, so that a full log isn't
                 # written out again for every batch.
                 del stored[:len(stored) - EVENTS_MAX * 9 // 10]
+                event_keys[user] = {event_key(e) for e in stored}
                 rewrite_events(user)
             else:
                 path = events_path(user)
