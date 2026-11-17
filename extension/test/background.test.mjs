@@ -267,3 +267,45 @@ test("the clock set back while xrnrule is gone is past the minute, not short of 
   await bg.refresh();
   assert.equal(bg.failingClosed(), true);
 });
+
+test("a worker started while xrnrule has been gone a minute never puts the narrower list back (I48)", async () => {
+  // The worker comes and goes. Started again, its first word from xrnrule's silence came before
+  // the stored silence was read: the redirects went back to only what was blocked, and the page
+  // asking was told it wasn't blocked, until the next beat or poll.
+  const now = 1_800_000_000_000;
+  const stored = {
+    rules: { v: "1", blocked: [], watched: [{ domain: "reddit.com", except: [] }] },
+    offlineSince: now - 120_000, offlineMs: 0, offlineFrom: now - 120_000,
+  };
+  const written = [];
+  const messages = [];
+  const sandbox = {
+    URL, console, AbortController, setTimeout, clearTimeout,
+    Date: class extends Date { static now() { return now; } },
+    fetch: async () => { throw new Error("connection refused"); },
+  };
+  sandbox.self = sandbox;
+  sandbox.chrome = fakeChrome({
+    "chrome.runtime.getURL": (p) => `chrome-extension://test/${p}`,
+    "chrome.runtime.getManifest": () => ({ version: "0" }),
+    "chrome.runtime.onMessage.addListener": (fn) => { messages.push(fn); },
+    "chrome.management.getSelf": async () => ({ installType: "normal" }),
+    // Read from disk: a moment later than the rest.
+    "chrome.storage.local.get": async (keys) => { await settle(); return pick(stored, keys); },
+    "chrome.storage.local.set": async (values) => { Object.assign(stored, values); },
+    "chrome.storage.local.remove": async (key) => { delete stored[key]; },
+    "chrome.declarativeNetRequest.getSessionRules": async () => [],
+    "chrome.declarativeNetRequest.updateSessionRules": async ({ addRules }) => { written.push(addRules); },
+  });
+  vm.runInNewContext(read("shared.js"), sandbox);
+  vm.runInNewContext(read("background.js"), sandbox);
+  const [onMessage] = messages;
+  const page = { id: "test", tab: { id: 7 }, frameId: 0, url: "https://reddit.com/" };
+  const verdict = await new Promise((resolve) => onMessage({ type: "beat", host: "reddit.com", focused: true }, page, resolve));
+  for (let i = 0; i < 10; i++) await settle();
+  assert.equal(verdict.blocked, true, "the page asking is blocked");
+  assert.ok(written.length, "the redirects were written");
+  for (const rules of written) {
+    assert.ok(rules.some((r) => r.condition.requestDomains.includes("reddit.com")), "never the narrower list");
+  }
+});

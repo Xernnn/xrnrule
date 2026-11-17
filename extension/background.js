@@ -135,8 +135,16 @@ function badge(ok) {
   if (ok === reachable) return;
   reachable = ok;
   paintBadge();
-  // Which block page the redirects name depends on it.
-  cachedRules().then((rules) => rules && syncRedirects(rules));
+  // Which block page the redirects name depends on it. As the list holds now: a minute into
+  // xrnrule's silence, everything with a rule, and the stored silence read first, or a worker
+  // started again would put back the narrower list.
+  rulesInForce().then((rules) => rules && syncRedirects(rules));
+}
+
+/** The rule list as it holds now (I48), the stored silence read first. */
+async function rulesInForce() {
+  await loadOffline();
+  return inForce(await cachedRules());
 }
 
 /** Whether the badge shows the site access as there. */
@@ -277,13 +285,14 @@ async function beat(host, focused, standIn = false, playing = false) {
     return verdict;
   } catch {
     badge(false);
+    await noteReachable(false).catch(() => {}); // this silence counted before the verdict
     return unanswered(host);
   }
 }
 
 /** Fail closed: without xrnrule's word, what it last said was blocked stays blocked, and a minute in, all of it. */
 async function unanswered(host) {
-  const rules = inForce(await cachedRules());
+  const rules = await rulesInForce();
   const site = host ? locationOf(`https://${host}`) : null;
   return { site, blocked: !!blockedBy(rules, site), page: null, showClock: false, offline: true };
 }
@@ -331,10 +340,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       return true; // the reply comes later
     case "check": // the popup: about a host, without saying it's in front
       showAccess().then(async (access) => {
-        if (!access) return reply({ reachable: false, access: false, blocked: !!blockedBy(inForce(await cachedRules()), msg.host) });
+        if (!access) return reply({ reachable: false, access: false, blocked: !!blockedBy(await rulesInForce(), msg.host) });
         call(`/ext/check?host=${encodeURIComponent(msg.host ?? "")}`)
           .then((v) => reply({ ...v, reachable: true }))
-          .catch(async () => reply({ reachable: false, blocked: !!blockedBy(inForce(await cachedRules()), msg.host) }));
+          .catch(async () => reply({ reachable: false, blocked: !!blockedBy(await rulesInForce(), msg.host) }));
       });
       return true;
     case "engine":
@@ -353,7 +362,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 // ---- staying current -----------------------------------------------------------------------
 
 async function start() {
-  const rules = await cachedRules();
+  const rules = await rulesInForce();
   if (rules) await syncRedirects(rules); // session rules are gone after a browser restart
   refreshRules();
 }
