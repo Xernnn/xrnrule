@@ -30,6 +30,8 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Base64
 
 /** How the last attempt went, for the local page. */
@@ -38,8 +40,11 @@ data class SyncStatus(val atWallMs: Long, val ok: Boolean, val message: String)
 
 class AuthException : IOException("the server refused the user name or password")
 
-/** Basic-auth JSON over HTTPS to the two sync services. Blocking: call on [Dispatchers.IO]. */
-class Http(user: String, password: String) {
+/**
+ * Basic-auth JSON over HTTPS to the two sync services. Blocking: call on [Dispatchers.IO].
+ * [onServerTime] gets each answer's [serverDate] and how long the request took (I54).
+ */
+class Http(user: String, password: String, private val onServerTime: (dateMs: Long, tookMs: Long) -> Unit = { _, _ -> }) {
     // HTTP/1.1, not the client's default HTTP/2, which shares one connection and keeps reusing it
     // after a request times out: a VPN dropping or a new Wi-Fi left sync dead until the daemon
     // restarted. Here a request that times out takes its connection with it.
@@ -57,9 +62,26 @@ class Http(user: String, password: String) {
         headers.forEach { (k, v) -> builder.header(k, v) }
         val publisher = if (body == null) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofString(body)
         if (body != null) builder.header("Content-Type", "application/json; charset=utf-8")
+        val sent = System.nanoTime()
         val response = client.send(builder.method(method, publisher).build(), HttpResponse.BodyHandlers.ofString())
+        val took = (System.nanoTime() - sent) / 1_000_000
+        serverDate(response.uri(), response.headers().firstValue("Date").orElse(null))?.let { onServerTime(it, took) }
         if (response.statusCode() == 401) throw AuthException()
         return response
+    }
+
+    companion object {
+        /**
+         * The time an answer says it was sent, when it came over HTTPS from another machine: a
+         * time setting the laptop's clock doesn't change. Not over plain HTTP, where anything on the
+         * way can write it, nor from this machine, where any program can.
+         */
+        fun serverDate(uri: URI, date: String?): Long? {
+            if (date == null || uri.scheme?.lowercase() != "https") return null
+            val host = uri.host?.lowercase()?.removeSurrounding("[", "]") ?: return null
+            if (host == "localhost" || host.endsWith(".localhost") || host.startsWith("127.") || host == "::1" || host == "0.0.0.0") return null
+            return runCatching { ZonedDateTime.parse(date, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }.getOrNull()
+        }
     }
 }
 
@@ -74,7 +96,7 @@ class SharedSyncClient(
     private val telemetry: FileTelemetry,
     private val scope: CoroutineScope,
 ) {
-    private val http = Http(config.user, config.password)
+    private val http = Http(config.user, config.password, serverTime(store))
     private val baseFile = File(config.dataDir, BASE_FILE)
     private val eventsSentFile = File(config.dataDir, "events-sent")
     private var telemetrySizeSent = -1L
@@ -239,7 +261,7 @@ class HabitClient(
     private val store: Store,
     private val scope: CoroutineScope,
 ) {
-    private val http = Http(config.user, config.password)
+    private val http = Http(config.user, config.password, serverTime(store))
     private val json = HabitRecords.json
     private val requests = Channel<Unit>(Channel.CONFLATED)
     private val _status = MutableStateFlow<SyncStatus?>(null)
@@ -341,6 +363,9 @@ class HabitClient(
         return json.decodeFromString(HabitChanges.serializer(), r.body())
     }
 }
+
+/** The sync server's time, for the clock guard to check the laptop's clock against (I54). */
+private fun serverTime(store: Store): (Long, Long) -> Unit = { date, took -> (store.clock as? ClockGuard)?.serverTime(date, took) }
 
 fun describe(e: Exception): String = when (e) {
     is AuthException -> "Wrong user name or password"

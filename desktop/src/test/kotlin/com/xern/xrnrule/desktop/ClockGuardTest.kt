@@ -18,6 +18,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.net.URI
 import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
@@ -159,6 +160,62 @@ class ClockGuardTest {
         ntp = true
         again.check()
         assertEquals(laptop.wall, again.nowWallMs())
+    }
+
+    @Test
+    fun aClockSetAheadAcrossARebootIsTakenBackByTheSyncServersTime() {
+        guard()
+        // systemctl --user stop xrnrule-desktop; timedatectl set-ntp false; the date and the
+        // hardware clock a day ahead; reboot. The boot clock starts again: nothing to compare
+        // against, and the day ahead was a new day of limits, a week ahead a lock run out.
+        setByHand(day)
+        laptop.mono = 20_000L
+        laptop.pass(60_000)
+        val clock = guard()
+        assertEquals("nothing can tell yet", laptop.wall, clock.nowWallMs())
+
+        // The first answer from the sync server: sent in the second it says, 300 ms before now.
+        val real = laptop.wall - day
+        clock.serverTime((real - 300) / 1000 * 1000, tookMs = 300)
+        assertTrue(clock.nowWallMs() in real..real + 1_300)
+        assertTrue(clock.skewMs in day - 1_300..day)
+        assertNotNull(clock.note())
+
+        // Kept across a restart, and across the next reboot too.
+        assertTrue(guard().nowWallMs() in real..real + 1_300)
+        laptop.mono = 10_000L
+        laptop.pass(30_000)
+        assertTrue(guard().nowWallMs() in real + 30_000..real + 31_300)
+    }
+
+    @Test
+    fun theSyncServersTimeNeverTakesTheClockForward() {
+        val clock = guard()
+        ntp = false
+        val before = clock.nowWallMs()
+        // An answer saying it's a day later: whatever sent it, it ends no lock and starts no day.
+        clock.serverTime(laptop.wall + day, tookMs = 0)
+        assertEquals(before, clock.nowWallMs())
+        // Within its seconds and a slow answer, it's the same time.
+        clock.serverTime(laptop.wall - 90_000, tookMs = 20_000)
+        assertEquals(0L, clock.skewMs)
+        // NTP keeps the clock: that is the time.
+        ntp = true
+        clock.serverTime(laptop.wall - day, tookMs = 0)
+        assertEquals(0L, clock.skewMs)
+    }
+
+    @Test
+    fun theSyncServersTimeCountsOnlyOverHttpsFromAnotherMachine() {
+        val date = "Tue, 17 Nov 2026 10:00:00 GMT"
+        val at = Instant.parse("2026-11-17T10:00:00Z").toEpochMilli()
+        assertEquals(at, Http.serverDate(URI("https://home.example.ts.net/xrnrule/state"), date))
+        assertNull("anything on the way can write it", Http.serverDate(URI("http://home.example.ts.net/xrnrule/state"), date))
+        for (local in listOf("https://localhost:8443/state", "https://127.0.0.1:8443/state", "https://[::1]:8443/state")) {
+            assertNull("any program here can answer", Http.serverDate(URI(local), date))
+        }
+        assertNull(Http.serverDate(URI("https://home.example.ts.net/state"), null))
+        assertNull(Http.serverDate(URI("https://home.example.ts.net/state"), "yesterday"))
     }
 
     @Test
