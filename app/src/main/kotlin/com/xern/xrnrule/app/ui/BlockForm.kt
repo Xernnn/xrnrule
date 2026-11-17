@@ -192,7 +192,6 @@ private fun BlockPage(form: BlockFormState, apps: List<InstalledApp>, websites: 
     DevicesCard(form)
     if (form.existing?.mode == BlockMode.LOCKDOWN) {
         Gap(12)
-        Note("Nothing unlocks a lockdown: it blocks for its length, then stops until you start it again.")
         FormSection(Icons.Outlined.HourglassTop, "How long") { WhenSection(form) }
         return
     }
@@ -205,7 +204,7 @@ private fun BlockPage(form: BlockFormState, apps: List<InstalledApp>, websites: 
         Gap(14)
     }
     LimitCard(form)
-    FormSection(Icons.Outlined.VpnKey, "What opens it", hint = "Add any that fit. A habit opens a block for a while; it never lifts blocked hours.") {
+    FormSection(Icons.Outlined.VpnKey, "What opens it") {
         UnlockSections(form, apps, store)
     }
     RuleOrder(form)
@@ -478,7 +477,6 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
     KindCard(
         icon = Icons.Outlined.Timer,
         title = "Time in another app",
-        about = "Use a better app for a while first",
         kind = kinds.appTime,
         selected = form.appTimeOn,
         summary = if (form.appTimeApps.isEmpty()) "no apps picked yet" else "${form.appTimeMinutes} min in ${summarizeNames(form.appTimeApps.map { labels[it] ?: it }, "")}",
@@ -491,26 +489,22 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
         ) { pickingAppTime = true }
         Gap(10)
         MinuteChips(listOf(5, 10, 15, 30), form.appTimeMinutes, kinds.appTime) { form.appTimeMinutes = it }
-        KindNote("Counts minutes in these apps while the block's timer runs. Start it from the block's card.")
     }
 
     KindCard(
         icon = Icons.Outlined.HourglassTop,
         title = "Wait timer",
-        about = "Sit out a timer on the block screen",
         kind = kinds.appTime,
         selected = form.timerOn,
         summary = "${form.timerMinutes} min",
         onToggle = { form.setKind(FormKind.TIMER, it) },
     ) {
         MinuteChips(listOf(5, 10, 15, 30), form.timerMinutes, kinds.appTime) { form.timerMinutes = it }
-        KindNote("Runs while you wait on the block screen, once you start it.")
     }
 
     KindCard(
         icon = Icons.Outlined.TaskAlt,
         title = "Do a habit",
-        about = "Tick or count something you did",
         kind = kinds.habit,
         selected = form.manualOn,
         summary = andList(form.doHabits.mapNotNull { id -> form.knownHabits.firstOrNull { it.id == id }?.name } + form.tasks.filter { it.text.isNotBlank() }.map { it.text })
@@ -543,12 +537,10 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             Gap(8)
         }
         DashedButton("New habit", kinds.habit) { makingHabit = false }
-        KindNote("Tick it or count it on the block's card or its block screen. Your laptop counts too.")
     }
     KindCard(
         icon = Icons.Outlined.Timer,
         title = "Focus session",
-        about = "Time yourself doing something",
         kind = kinds.timer,
         selected = form.focusOn,
         summary = andList(form.timerHabits.mapNotNull { id -> form.knownHabits.firstOrNull { it.id == id }?.name }).ifEmpty { "no timer picked yet" },
@@ -560,13 +552,11 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             Gap(8)
         }
         DashedButton("New timer", kinds.timer) { makingHabit = true }
-        KindNote("Run it with the focus timer: the ▶ on the block's card opens it.")
     }
 
     KindCard(
         icon = Icons.Outlined.Link,
         title = "Habit from xrnloops",
-        about = "Yesterday's tick, or a goal for the week",
         kind = kinds.loop,
         selected = form.loopOn,
         summary = if (form.links.isEmpty()) "no habit linked yet" else andList(form.links.map { it.name }),
@@ -580,7 +570,6 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             )
         }
         DashedButton("Pick habits", kinds.loop) { pickingLoop = true }
-        KindNote("Yesterday: a habit you tick at night counts the next day. Goal days: a habit that isn't daily counts on every day its goal is met. Each tick opens the block once.")
     }
 
     // A phone without NFC isn't offered tags, but still shows the ones a block has.
@@ -642,7 +631,6 @@ private fun LimitCard(form: BlockFormState) {
     KindCard(
         icon = Icons.Outlined.HourglassBottom,
         title = "Daily limit",
-        about = "So many minutes or opens a day, or minutes in a row",
         kind = kinds.limit,
         selected = form.limitOn,
         summary = listOfNotNull(
@@ -684,11 +672,6 @@ private fun RuleOrder(form: BlockFormState) {
             OptionButton(Icons.Outlined.HourglassBottom, "Limit first", !form.habitFirst, Modifier.weight(1f), centred = true) { form.habitFirst = false }
             OptionButton(Icons.Outlined.TaskAlt, "Habit first", form.habitFirst, Modifier.weight(1f), centred = true) { form.habitFirst = true }
         }
-        Gap(4)
-        Note(
-            if (form.habitFirst) "Blocked until the habit is done. The limit still holds after that."
-            else "Open for the limit's minutes each day. After that, the habit opens it again.",
-        )
     }
 }
 
@@ -710,17 +693,14 @@ private fun LimitEditor(form: BlockFormState, kind: KindColors) {
         Text("Then a break of", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Gap(4)
         MinuteChips(listOf(5, 15, 30, 60), form.rowBreakMinutes, kind, format = ::shortMinutes) { form.rowBreakMinutes = it }
-        KindNote("Resting that long on your own counts as the break.")
     }
     ToggleLine("At most so many opens a day", form.opensOn) { form.opensOn = it }
     if (form.opensOn) {
         NumberChips(listOf(1, 2, 3, 5, 10), form.opensPerDay, kind) { form.opensPerDay = it }
-        KindNote("Coming back within a minute is the same open. The last one lasts until you leave it.")
     }
     ToggleLine("A pause before it opens", form.openWaitS > 0) { form.openWaitS = if (it) OPEN_WAIT_CHOICES[1] else 0 }
     if (form.openWaitS > 0) {
         NumberChips(OPEN_WAIT_CHOICES, form.openWaitS, kind, suffix = " s") { form.openWaitS = it }
-        KindNote("The block screen stays up this long, then it opens by itself. Leaving first costs no open.")
     }
     Gap(10)
     Text("Phone and laptop", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -806,20 +786,10 @@ private fun WhenSection(form: BlockFormState) {
     }
     val kinds = LocalKinds.current
     when (form.whenMode) {
-        WhenMode.ALWAYS -> Note(
-            when (mode) {
-                BlockMode.HABIT -> if (form.draft().toBlock("", "").limitComesFirst) "The limit counts all day, every day." else "Blocks all day, every day, until you unlock it."
-                BlockMode.ALLOWANCE -> "The limit counts all day, every day."
-                else -> "Blocks all the time. Turn it off or delete it to stop."
-            },
-        )
+        WhenMode.ALWAYS -> Unit
         WhenMode.SCHEDULE -> ScheduleEditor(form)
         WhenMode.FOR_A_WHILE -> {
             MinuteChips(listOf(30, 60, 120, 240), form.lockdownMinutes, kinds.strict, format = ::shortMinutes) { form.lockdownMinutes = it }
-            Note(
-                if (form.existing == null) "Starts as soon as you save. Start it again later from its card or the quick-settings tile."
-                else "The new length counts from the next time you start it.",
-            )
         }
     }
 }
@@ -945,7 +915,6 @@ private fun TagCard(form: BlockFormState) {
                 Gap(8)
             }
         }
-        KindNote("Stick a tag somewhere out of reach. Hold your phone to it, on any screen, and the block opens. A blank sticker or key fob works best: a tag with a link on it opens its link unless xrnrule is in front.")
     }
     if (scanning) {
         TagScanDialog(
@@ -1078,10 +1047,6 @@ private fun ScheduleCard(form: BlockFormState) {
         AnimatedVisibility(open) {
             Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 20.dp)) {
                 ScheduleEditor(form, onChange = ::settle)
-                if (form.mode == BlockMode.ALLOWANCE && form.whenMode == WhenMode.ALWAYS) {
-                    Gap(4)
-                    Note("The limit counts all day, every day.")
-                }
             }
         }
     }
@@ -1096,7 +1061,6 @@ private fun HoursCard(form: BlockFormState) {
     KindCard(
         icon = Icons.Outlined.CalendarMonth,
         title = "Blocked hours",
-        about = "Closed at set times, whatever else",
         kind = LocalKinds.current.strict,
         selected = form.hoursOn,
         summary = describeSchedule(Schedule(form.hoursDays, if (form.hoursTimeOn) TimeWindow(form.hoursStart, form.hoursEnd) else null, form.hoursMore)),
@@ -1114,8 +1078,6 @@ private fun HoursCard(form: BlockFormState) {
             more = form.hoursMore,
             onMore = { form.hoursMore = it },
         )
-        Gap(4)
-        Note("Blocked in these hours, whatever minutes are left and even with a habit done.")
     }
 }
 
