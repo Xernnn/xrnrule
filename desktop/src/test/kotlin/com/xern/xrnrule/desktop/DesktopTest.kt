@@ -22,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.ZoneId
 
 class DesktopTest {
@@ -284,6 +285,30 @@ class DesktopTest {
         assertEquals("http://127.0.0.1:40000", config.localUrl)
         assertTrue(config.syncConfigured)
         assertTrue(config.openBlockPage)
+    }
+
+    @Test
+    fun theSyncPasswordGoesOnlyOverHttpsOrToThisMachine() {
+        // Basic auth goes with every request: over plain HTTP anyone on the way reads the password.
+        fun config(server: String) = Config(server = server, user = "you", password = "secret", port = 0, dataDir = File("/nonexistent"))
+        assertFalse(config("http://home.example.org").syncConfigured)
+        assertEquals("http://home.example.org/xrnrule isn't https", config("http://home.example.org").syncRefusal)
+        assertTrue(config("https://home.example.org").syncConfigured)
+        assertTrue(config("http://127.0.0.1:5232").syncConfigured)
+        assertTrue(config("http://localhost:5232").syncConfigured)
+        assertFalse(config("https://home.example.org").copy(loopUrl = "http://home.example.org/xrnloops").syncConfigured)
+    }
+
+    @Test
+    fun filesHoldingThePasswordThatOthersCanReadAreNamed() {
+        val dir = Files.createTempDirectory("xrnrule").toFile()
+        val pw = File(dir, "pw").apply { writeText("secret\n") }
+        val props = File(dir, "desktop.properties").apply { writeText("server=https://example.org/\nuser=you\npasswordFile=${pw.path}\n") }
+        Files.setPosixFilePermissions(props.toPath(), PosixFilePermissions.fromString("rw-------"))
+        Files.setPosixFilePermissions(pw.toPath(), PosixFilePermissions.fromString("rw-r--r--"))
+        assertEquals(listOf(pw), Config.load(props).exposedFiles(props))
+        Files.setPosixFilePermissions(pw.toPath(), PosixFilePermissions.fromString("rw-------"))
+        assertEquals(emptyList<File>(), Config.load(props).exposedFiles(props))
     }
 
     @Test

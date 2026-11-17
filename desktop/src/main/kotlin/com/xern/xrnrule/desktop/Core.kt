@@ -34,9 +34,11 @@ import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import java.io.File
 import java.io.IOException
+import java.net.URI
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.StandardOpenOption
 import java.time.ZoneId
 import java.util.Properties
@@ -62,13 +64,41 @@ data class Config(
     val ruleUrl: String = "$server/xrnrule",
     val loopUrl: String = "$server/xrnloops",
     val openBlockPage: Boolean = true,
+    /** Where the password came from, when `passwordFile` named it. */
+    val passwordFile: File? = null,
 ) {
-    val syncConfigured: Boolean get() = ruleUrl.startsWith("http") && user.isNotEmpty() && password.isNotEmpty()
+    val syncConfigured: Boolean get() = syncRefusal == null && ruleUrl.startsWith("http") && user.isNotEmpty() && password.isNotEmpty()
     val localUrl: String get() = "http://127.0.0.1:$port"
+
+    /**
+     * Why the daemon won't sync with the server it was given, or null. The password goes with every
+     * request (Basic auth), so over plain HTTP anyone on the way reads it; only this machine is
+     * spared that.
+     */
+    val syncRefusal: String?
+        get() = listOf(ruleUrl, loopUrl).firstOrNull { it.startsWith("http") && !private(it) }?.let { "$it isn't https" }
+
+    /** The files holding the sync password that other users can read. */
+    fun exposedFiles(configFile: File): List<File> = listOfNotNull(configFile, passwordFile).filter { f ->
+        runCatching {
+            Files.getPosixFilePermissions(f.toPath()).any { it == PosixFilePermission.GROUP_READ || it == PosixFilePermission.OTHERS_READ }
+        }.getOrDefault(false)
+    }
 
     companion object {
         const val DEFAULT_PORT = 47321
         private val home: String = System.getProperty("user.home")
+
+        /** Whether [url] is HTTPS, or HTTP to this machine. */
+        private fun private(url: String): Boolean {
+            val uri = runCatching { URI(url) }.getOrNull() ?: return false
+            val host = uri.host?.lowercase()?.removeSurrounding("[", "]")
+            return when (uri.scheme?.lowercase()) {
+                "https" -> true
+                "http" -> host == "localhost" || host == "::1" || host?.startsWith("127.") == true
+                else -> false
+            }
+        }
 
         fun file(): File = System.getenv("XRNRULE_CONFIG")?.let(::File)
             ?: File(System.getenv("XDG_CONFIG_HOME") ?: "$home/.config", "xrnrule/desktop.properties")
@@ -77,9 +107,8 @@ data class Config(
             val props = Properties()
             from.takeIf { it.isFile }?.reader()?.use(props::load)
             fun path(p: String) = File(p.replaceFirst(Regex("^~(?=/|$)"), home))
-            val password = props.getProperty("password")
-                ?: props.getProperty("passwordFile")?.let { f -> path(f).takeIf { it.isFile }?.readText()?.trim() }
-                ?: ""
+            val passwordFile = props.getProperty("passwordFile")?.let(::path)?.takeIf { it.isFile }
+            val password = props.getProperty("password") ?: passwordFile?.readText()?.trim() ?: ""
             val dataHome = System.getenv("XDG_DATA_HOME") ?: "$home/.local/share"
             val server = props.getProperty("server", "").trim().trimEnd('/')
             return Config(
@@ -91,6 +120,7 @@ data class Config(
                 ruleUrl = props.getProperty("ruleUrl")?.trim()?.trimEnd('/') ?: "$server/xrnrule",
                 loopUrl = props.getProperty("loopUrl")?.trim()?.trimEnd('/') ?: "$server/xrnloops",
                 openBlockPage = props.getProperty("openBlockPage")?.trim() != "false",
+                passwordFile = passwordFile.takeIf { props.getProperty("password") == null },
             )
         }
     }
