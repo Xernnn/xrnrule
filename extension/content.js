@@ -58,8 +58,11 @@
   function handle(v) {
     if (!v || stopped) return;
     if (v.blocked) {
-      stopped = true;
+      // Not stopped here: a page can refuse to go (beforeunload, "Stay on page"), and then this
+      // copy must beat on and send it off again, or it would never be counted or blocked again.
+      // What it plays stops meanwhile.
       clearTimeout(deadline);
+      for (const m of document.querySelectorAll("video, audio")) m.pause();
       location.replace(X.blockUrl(v.page, OWN_PAGE, v.site || X.locationOf(location.href), location.href));
       return;
     }
