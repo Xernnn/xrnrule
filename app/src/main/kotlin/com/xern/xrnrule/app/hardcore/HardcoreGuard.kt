@@ -24,7 +24,12 @@ interface HardcoreGuard {
 
     /** Sets the first password; [changePassword] replaces it later. */
     fun setPassword(password: String)
+
+    /** Whether [input] is the password; false without checking while a wait is due ([waitMs]). */
     fun verifyPassword(input: String): Boolean
+
+    /** How long until the next password try is taken, after too many wrong ones ([PasswordTries]). */
+    fun waitMs(): Long = 0
 
     /** Replaces the password if [current] is right; there is deliberately no way to remove it. */
     fun changePassword(current: String, new: String): Boolean

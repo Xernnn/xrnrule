@@ -5,6 +5,7 @@ import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.SystemClock
 import androidx.core.content.edit
 import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.EnforcementTier
@@ -25,6 +26,7 @@ class DeviceAdminHardcoreGuard(private val context: Context) : HardcoreGuard {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("hardcore_guard", Context.MODE_PRIVATE)
     private val dpm = context.getSystemService(DevicePolicyManager::class.java)
+    private val tries = PasswordTries(prefs, SystemClock::elapsedRealtime)
 
     override fun isSupported() = true
 
@@ -57,8 +59,10 @@ class DeviceAdminHardcoreGuard(private val context: Context) : HardcoreGuard {
     override fun verifyPassword(input: String): Boolean {
         val saltHex = prefs.getString(KEY_SALT, null) ?: return false
         val expected = prefs.getString(KEY_HASH, null) ?: return false
-        return hash(input, saltHex.hexToBytes()) == expected
+        return tries.attempt { hash(input, saltHex.hexToBytes()) == expected }
     }
+
+    override fun waitMs(): Long = tries.waitMs()
 
     override fun isDeviceAdminActive(): Boolean =
         dpm?.isAdminActive(HabitDeviceAdminReceiver.component(context)) == true

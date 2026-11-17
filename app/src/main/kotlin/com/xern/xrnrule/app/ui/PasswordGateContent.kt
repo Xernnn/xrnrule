@@ -32,7 +32,7 @@ import com.xern.xrnrule.app.ui.theme.XrnruleTheme
  * unavoidable overlay.
  */
 @Composable
-fun PasswordGateContent(showError: Boolean, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
+fun PasswordGateContent(error: String?, onSubmit: (String) -> Unit, onCancel: () -> Unit) {
     XrnruleTheme {
         var input by remember { mutableStateOf("") }
         Column(
@@ -55,13 +55,13 @@ fun PasswordGateContent(showError: Boolean, onSubmit: (String) -> Unit, onCancel
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 singleLine = true,
-                isError = showError,
+                isError = error != null,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (showError) {
+            if (error != null) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Wrong password.",
+                    error,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.labelSmall,
                 )

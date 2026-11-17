@@ -98,6 +98,7 @@ import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.hardcore.PasswordTries
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
 import com.xern.xrnrule.app.ui.theme.Appearance
@@ -874,11 +875,14 @@ private fun SecurityPage(deps: SettingsDeps) {
             var changing by remember { mutableStateOf(false) }
             if (changing) {
                 PasswordForm(askCurrent = true, submitLabel = "Change password") { current, new ->
-                    if (guard.changePassword(current, new)) {
+                    val wait = guard.waitMs()
+                    if (wait > 0) {
+                        PasswordTries.waitText(wait)
+                    } else if (guard.changePassword(current, new)) {
                         changing = false
                         null
                     } else {
-                        "The current password is wrong."
+                        "The current password is wrong." + guard.waitMs().takeIf { it > 0 }?.let { " " + PasswordTries.waitText(it) }.orEmpty()
                     }
                 }
             } else {
