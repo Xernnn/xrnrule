@@ -8,12 +8,14 @@
 //   node scripts/release.mjs             both
 //
 // A browser or phone only takes a version newer than the one it has, so a number the server
-// already has is bumped first: manifest.json's version, app/build.gradle.kts's versionCode.
+// already has is bumped first: manifest.json's version, app/build.gradle.kts's versionCode. Bump
+// it in a commit of its own beforehand: a release is only made from main with nothing left
+// uncommitted (--force makes one anyway).
 //
 // Reads ~/.config/xrnrule/release.json:
 //   { "server": "https://<host>/xrnrule", "ssh": ["<ssh-host>", "<another way in>"] }
 // and uses the first ssh host that answers. The extension is signed with
-// ~/.config/xrnrule/extension.pem, made on the first release. Neither belongs in the repo: the
+// ~/.config/xrnrule/extension.pem, made only on a first release (--new-key). Neither belongs in the repo: the
 // address never enters it, and the key is what makes an update the same extension. Lose it and
 // every browser has to install afresh under a new ID. The APK is signed by Gradle with the key in
 // ../xrn-signing.properties, the one the installed app carries.
@@ -21,8 +23,9 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { execFileSync, spawnSync } from "child_process";
-import { createHash, generateKeyPairSync, createPrivateKey } from "crypto";
+import { createHash } from "crypto";
 import { packageFiles, withUpdateUrl, zip, crx3, extensionId, updateManifest, compareVersions, nextVersion } from "./crx.mjs";
+import { treeRefusals, signingKey } from "./release-guard.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXTENSION = join(ROOT, "extension");
@@ -33,10 +36,17 @@ const DIST = join(ROOT, "dist");
 const CONFIG_DIR = join(homedir(), ".config", "xrnrule");
 const REMOTE_DIR = "xrnrule-sync/data/update"; // the sync server's --data, from the ssh login's home
 
-const what = process.argv[2] || "all";
-if (!["extension", "app", "all"].includes(what)) {
-  console.error("usage: node scripts/release.mjs [extension|app]");
+const args = process.argv.slice(2);
+const flags = new Set(args.filter((a) => a.startsWith("--")));
+const what = args.find((a) => !a.startsWith("--")) || "all";
+if (!["extension", "app", "all"].includes(what) || [...flags].some((f) => f !== "--force" && f !== "--new-key")) {
+  console.error("usage: node scripts/release.mjs [extension|app] [--force] [--new-key]");
   process.exit(2);
+}
+const refusals = treeRefusals(ROOT);
+if (refusals.length && !flags.has("--force")) {
+  console.error(`Not released: ${refusals.join("\n")}\n(--force releases this tree anyway)`);
+  process.exit(1);
 }
 
 const { server, host } = readConfig();
@@ -69,13 +79,7 @@ function readConfig() {
 }
 
 async function releaseExtension() {
-  const keyFile = join(CONFIG_DIR, "extension.pem");
-  if (!existsSync(keyFile)) {
-    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-    writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-    console.log(`made a signing key: ${keyFile}. Back it up: every update needs this exact key`);
-  }
-  const key = createPrivateKey(readFileSync(keyFile));
+  const key = signingKey(join(CONFIG_DIR, "extension.pem"), flags.has("--new-key"));
   const id = extensionId(key);
 
   const manifestVersion = () => JSON.parse(readFileSync(MANIFEST, "utf8")).version;
@@ -131,7 +135,8 @@ async function releaseApp() {
     console.log(`the server already has build ${live.versionCode}: app/build.gradle.kts is now versionCode ${versionCode}`);
   }
 
-  const build = spawnSync("./gradlew", [":app:assembleSideloadRelease"], { cwd: ROOT, stdio: "inherit" });
+  // No daemon left behind: Gradle's and Kotlin's once held 8 GB of this laptop's memory.
+  const build = spawnSync("./gradlew", ["--no-daemon", "-Pkotlin.compiler.execution.strategy=in-process", ":app:assembleSideloadRelease"], { cwd: ROOT, stdio: "inherit" });
   if (build.status !== 0) throw new Error("the build failed");
   const [built] = JSON.parse(readFileSync(join(APK_DIR, "output-metadata.json"), "utf8")).elements;
   if (built.versionCode !== versionCode) throw new Error(`built versionCode ${built.versionCode}, expected ${versionCode}`);

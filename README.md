@@ -133,15 +133,16 @@ inside other apps: a page opened in an app's own in-app browser isn't blocked.
 ## Updates
 
 `node scripts/release.mjs` publishes both halves to your server; `… extension` or `… app` does
-one. It bumps the version past what the server already has, since a browser or phone only takes
-a newer one, and needs `~/.config/xrnrule/release.json`:
+one. It only runs on `main` with everything committed (`--force` overrides that). It bumps the
+version past what the server already has, since a browser or phone only takes a newer one, so
+bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
 
 ```json
 { "server": "https://<your server>/xrnrule", "ssh": ["<ssh host>", "<another way in>"] }
 ```
 
-- **The extension** is signed with `~/.config/xrnrule/extension.pem`, made on the first release.
-  **Back it up.** The key is the extension's identity: an update signed with another one is
+- **The extension** is signed with `~/.config/xrnrule/extension.pem`, made on the first release
+  (`--new-key`; without it a missing key stops the release). **Back it up.** The key is the extension's identity: an update signed with another one is
   refused, and the phone would have to install afresh under a new ID.
 - **The app** is the sideload release build, signed with the key it shares with xrnloops
   (`../xrn-signing.properties`; the release refuses to go without it, since the phone only takes
