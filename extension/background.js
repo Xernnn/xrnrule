@@ -321,6 +321,14 @@ chrome.windows.onFocusChanged.addListener(() => beatActive());
 chrome.tabs.onUpdated.addListener((_id, info, tab) => {
   if (info.url && tab.active) beatActive();
 });
+// I47: the browser hears a tab's sound wherever it comes from, an inner frame's player or WebAudio
+// included, where the page's script hears only its own <video> and <audio>. Told to the tab's
+// page, which reports itself playing while out of sight. A muted tab plays nothing.
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (!("audible" in info) && !("mutedInfo" in info)) return;
+  const audible = !!tab?.audible && !tab?.mutedInfo?.muted;
+  chrome.tabs.sendMessage(tabId, { type: "audible", audible }, { frameId: 0 })?.catch?.(() => {});
+});
 
 // ---- pages ---------------------------------------------------------------------------------
 

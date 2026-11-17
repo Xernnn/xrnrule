@@ -309,3 +309,20 @@ test("a worker started while xrnrule has been gone a minute never puts the narro
     assert.ok(rules.some((r) => r.condition.requestDomains.includes("reddit.com")), "never the narrower list");
   }
 });
+
+test("the browser hearing a tab is told to that tab's page, which can't hear an inner frame itself (I47)", async () => {
+  const updated = [];
+  const told = [];
+  answering({
+    "chrome.tabs.onUpdated.addListener": (fn) => { updated.push(fn); },
+    "chrome.tabs.sendMessage": async (tabId, msg, options) => { told.push([tabId, msg, options]); },
+  });
+  const fire = (id, info, tab) => updated.forEach((fn) => fn(id, info, { id, active: false, ...tab }));
+  fire(7, { audible: true }, { audible: true, mutedInfo: { muted: false } });
+  fire(8, { audible: true }, { audible: true, mutedInfo: { muted: true } }); // muted: nothing heard
+  fire(7, { title: "x" }, { audible: true });
+  fire(7, { audible: false }, { audible: false });
+  await settle();
+  assert.deepEqual(told.map(([id, msg]) => [id, msg.type, msg.audible]), [[7, "audible", true], [8, "audible", false], [7, "audible", false]]);
+  assert.equal(told[0][2]?.frameId, 0);
+});

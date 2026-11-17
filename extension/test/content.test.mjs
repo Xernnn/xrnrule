@@ -24,6 +24,7 @@ function page(url, answer) {
     append() {}, appendChild() {}, replaceChildren() {}, remove() {},
     isConnected: true,
   });
+  const listeners = [];
   const document = {
     visibilityState: "visible",
     hasFocus: () => true,
@@ -46,6 +47,7 @@ function page(url, answer) {
       runtime: {
         getURL: (p) => `chrome-extension://test/${p}`,
         sendMessage: (msg, reply) => { sent.push(msg); reply(answer(msg)); },
+        onMessage: { addListener: (fn) => listeners.push(fn) },
         lastError: undefined,
       },
     },
@@ -54,7 +56,8 @@ function page(url, answer) {
   vm.runInNewContext(read("shared.js"), sandbox);
   vm.runInNewContext(read("content.js"), sandbox);
   const heartbeat = intervals.find((t) => t.ms === sandbox.Xrn.HEARTBEAT_MS);
-  return { sandbox, sent, replaced, media, beatAgain: () => heartbeat.fn() };
+  const fromBackground = (msg) => listeners.forEach((fn) => fn(msg, { id: "test" }, () => {}));
+  return { sandbox, document, sent, replaced, media, fromBackground, beatAgain: () => heartbeat.fn() };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -74,4 +77,26 @@ test("a page that stays after being sent to the block page (beforeunload cancell
   await settle();
   assert.equal(p.sent.length, 2, "still beating");
   assert.equal(p.replaced.length, 2, "and sent off again");
+});
+
+test("a tab out of sight whose sound comes from an inner frame or WebAudio is reported playing (I47)", async () => {
+  // Only the page's own <video> and <audio> were heard: an embedded player in a background tab
+  // played on, and its site's limit counted nothing.
+  const p = page("https://example.com/", () => ({ site: "example.com", blocked: false }));
+  await settle();
+  p.document.visibilityState = "hidden";
+  p.document.hasFocus = () => false;
+  p.sent.length = 0;
+  p.beatAgain();
+  await settle();
+  assert.deepEqual(p.sent, [], "a silent tab out of sight says nothing");
+  p.fromBackground({ type: "audible", audible: true }); // the browser hears this tab
+  await settle();
+  assert.equal(p.sent.at(-1)?.playing, true);
+  assert.equal(p.sent.at(-1)?.focused, false);
+  p.fromBackground({ type: "audible", audible: false });
+  p.sent.length = 0;
+  p.beatAgain();
+  await settle();
+  assert.deepEqual(p.sent, []);
 });

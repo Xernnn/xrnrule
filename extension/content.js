@@ -39,8 +39,21 @@
     });
   }
 
+  /**
+   * Sound from anywhere in this tab as the browser hears it, which the background passes on
+   * (I47): an inner frame's player or WebAudio, which this script can't see.
+   */
+  let tabSounding = false;
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type !== "audible") return;
+      tabSounding = !!msg.audible;
+      beat();
+    });
+  } catch {} // orphaned: send() stops this copy
+
   /** Sound coming out of this page: muted previews and paused players don't count. */
-  const sounding = () => [...document.querySelectorAll("video, audio")]
+  const sounding = () => tabSounding || [...document.querySelectorAll("video, audio")]
     .some((m) => !m.paused && !m.ended && !m.muted && m.volume > 0 && m.readyState > 2);
 
   /**
