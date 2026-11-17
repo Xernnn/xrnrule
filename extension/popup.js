@@ -27,7 +27,7 @@
   const host = X.locationOf(tab?.url || "");
   if (!host) {
     $("site").textContent = "This page";
-    $("state").textContent = "Not a website: nothing to block here.";
+    $("state").textContent = "Not a website";
   } else {
     $("site").textContent = X.hostOf(tab.url);
   }
@@ -37,13 +37,11 @@
     $("state").hidden = true; // the access line above says it
     return;
   }
-  $("engine").textContent = v?.reachable
-    ? `Connected to xrnrule on this ${android ? "phone" : "laptop"}.`
-    : "xrnrule isn't running. Open it to get your blocks back: in a minute, everything with a rule is blocked.";
+  $("engine").textContent = v?.reachable ? "Connected" : "Offline";
   $("engine").classList.toggle("bad", !v?.reachable);
   if (!host) return;
-  if (v?.blocked) $("state").textContent = "Blocked.";
+  if (v?.blocked) $("state").textContent = "Blocked";
   else if (v?.left) $("state").textContent = `${X.mmss(v.left.ms)} ${X.CLOCK_LABEL[v.left.kind] ?? "left"}${v.label ? ` · ${v.label}` : ""}`;
-  else if (v?.reachable) $("state").textContent = "No rule covers this site.";
-  else $("state").textContent = "Not blocked.";
+  else if (v?.reachable) $("state").textContent = "No rule";
+  else $("state").textContent = "Not blocked";
 })();

@@ -35,11 +35,8 @@
   }
 
   const leaveButton = document.getElementById("leave");
-  const quiet = document.getElementById("why").textContent;
   /** Without xrnrule there's no telling when it's back, only that it stays blocked. */
-  const offline = android
-    ? "xrnrule isn't answering, so this stays blocked. Open it and this page comes back by itself."
-    : "The xrnrule service isn't running on this laptop, so this stays blocked until it does.";
+  const offline = "xrnrule offline";
 
   /** What xrnrule says about the site, or that it says nothing. */
   function show(v) {
@@ -47,7 +44,9 @@
     const when = document.getElementById("back");
     when.textContent = off ? "" : v.back ?? "";
     when.hidden = !when.textContent;
-    document.getElementById("why").textContent = off ? offline : v.why ?? quiet;
+    const why = document.getElementById("why");
+    why.textContent = off ? offline : v.why ?? "";
+    why.hidden = !why.textContent;
     // Leaving is the point of this page, unless opening xrnrule is what gets it going again.
     leaveButton.classList.toggle("primary", !(off && android));
     open.classList.toggle("primary", off && android);

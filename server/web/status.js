@@ -49,8 +49,8 @@ function h(tag, attrs = {}, ...children) {
 class AuthError extends Error {}
 
 /** The server's answer to too many wrong passwords from this address. */
-const LOCKED_OUT = "Too many wrong passwords from here. Wait 15 minutes, then try again.";
-const WRONG_LOGIN = "Wrong user name or password.";
+const LOCKED_OUT = "Too many tries · wait 15 min";
+const WRONG_LOGIN = "Wrong password";
 
 function check(res) {
   if (res.status === 401) throw new AuthError();
@@ -96,7 +96,7 @@ async function live(gen) {
       if (await fetchState(25)) render();
       setOnline(true);
     } catch (e) {
-      if (e instanceof AuthError) return signOut("You were signed out. Sign in again.");
+      if (e instanceof AuthError) return signOut("Signed out");
       setOnline(false);
       await new Promise((r) => setTimeout(r, 5000));
     }
@@ -138,13 +138,12 @@ function loginView(message = "") {
         await signIn("Basic " + btoa(unescape(encodeURIComponent(`${user.value.trim()}:${password.value}`))));
         await start();
       } catch (err) {
-        error.textContent = err instanceof AuthError ? WRONG_LOGIN : err.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${err.message}).`;
+        error.textContent = err instanceof AuthError ? WRONG_LOGIN : err.message === LOCKED_OUT ? LOCKED_OUT : `Server unreachable · ${err.message}`;
       }
     },
   }, h("label", {}, "User", user), h("label", {}, "Password", password), error, h("button", { class: "btn", type: "submit" }, "Sign in"));
   document.getElementById("app").replaceChildren(h("div", { class: "wrap login" },
     h("h1", {}, h("img", { src: "icon.svg", alt: "", width: 32, height: 32 }), "xrnrule"),
-    h("p", {}, "What your phone and laptop are blocking. Sign in with the home server's password."),
     form));
   setTimeout(() => password.focus(), 0);
 }
@@ -168,7 +167,7 @@ function devicesCard(now) {
   if (!known.length) return null;
   return h("section", { class: "card devices" }, known.map(([device, at]) => {
     const stale = now.getTime() - at > 60 * 60000;
-    return h("div", { class: "device" + (stale ? " stale" : ""), title: stale ? "Not heard from in over an hour" : "" },
+    return h("div", { class: "device" + (stale ? " stale" : "") },
       h("b", {}, names[device] ?? device), h("span", {}, `synced ${ago(now.getTime() - at)}`));
   }));
 }
@@ -208,7 +207,7 @@ function render() {
           i.habitId && h("span", { class: "link" }, i.linkedDay === "YESTERDAY" ? "habit · yesterday" : "habit")))));
   });
 
-  const updatedText = updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` by the ${updated.by}` : ""}` : "Nothing synced yet";
+  const updatedText = updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` by the ${updated.by}` : ""}` : "Not synced";
   document.getElementById("app").replaceChildren(
     h("header", { class: "bar" }, h("div", { class: "wrap" },
       h("h1", {}, h("img", { src: "icon.svg", alt: "" }), "xrnrule"),
@@ -222,7 +221,7 @@ function render() {
         h("div", {}, h("b", {}, breakText), h("span", {}, "15-minute break")),
         h("div", {}, h("b", {}, blocks.length), h("span", {}, blocks.length === 1 ? "Block" : "Blocks"))),
       devicesCard(now),
-      blocks.length ? cards : h("div", { class: "card empty" }, "No blocks yet. Make them in xrnrule on the phone or on the laptop page; they show up here after the next sync."),
+      blocks.length ? cards : h("div", { class: "card empty" }, "No blocks"),
       h("div", { class: "foot" },
         h("span", {}, updatedText),
         h("a", { href: "#", onclick: (e) => { e.preventDefault(); signOut(""); } }, "Sign out"))));
@@ -246,7 +245,7 @@ async function boot() {
     }
   }
   if (!signedIn) return loginView();
-  start().catch((e) => (e instanceof AuthError ? signOut("You were signed out. Sign in again.") : loginView(e.message === LOCKED_OUT ? LOCKED_OUT : `Can't reach the server (${e.message}).`)));
+  start().catch((e) => (e instanceof AuthError ? signOut("Signed out") : loginView(e.message === LOCKED_OUT ? LOCKED_OUT : `Server unreachable · ${e.message}`)));
 }
 
 boot();

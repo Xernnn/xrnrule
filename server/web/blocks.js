@@ -151,7 +151,7 @@ export function blockStatus(doc, block, now) {
     const l = doc.lockdowns?.[block.id];
     return l && wall < l.startedAtWall + l.durationMs
       ? ["blocked", `Locked down until ${timeFmt.format(l.startedAtWall + l.durationMs)}`]
-      : ["idle", `Not running (${minutes(block.lockdownMs ?? 0)} min when started)`];
+      : ["idle", "Not running"];
   }
 
   const scheduleOn = scheduleActive(block.schedule, clock);
@@ -216,7 +216,7 @@ export function unlockMethod(block, items) {
     const w = windows(block.schedule);
     return w.length ? `Blocked ${w.join(", ")}` : "Blocked all day on its days";
   }
-  if (mode === "LOCKDOWN") return "Blocked for a while once started";
+  if (mode === "LOCKDOWN") return `${minutes(block.lockdownMs ?? 0)} min lockdown`;
   const parts = [];
   if (block.blockedHours) {
     const w = windows(block.blockedHours);

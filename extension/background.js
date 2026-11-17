@@ -164,7 +164,7 @@ function paintBadge() {
   chrome.action.setBadgeText({ text: bad ? "!" : "" });
   if (bad) chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
   chrome.action.setTitle({
-    title: !accessShown ? "xrnrule: no site access" : reachable === false ? "xrnrule isn't answering: only what it last blocked stays blocked" : "xrnrule",
+    title: !accessShown ? "xrnrule: no site access" : reachable === false ? "xrnrule: offline" : "xrnrule",
   });
 }
 

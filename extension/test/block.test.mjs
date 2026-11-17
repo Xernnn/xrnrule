@@ -12,7 +12,7 @@ function blockPage(url, verdict) {
   const u = new URL(url);
   const elements = {};
   const element = (id) => (elements[id] ??= {
-    id, textContent: id === "why" ? "xrnrule is keeping this site closed." : "", hidden: false, href: "",
+    id, textContent: "", hidden: false, href: "",
     classList: { toggle() {}, add() {}, remove() {} },
     addEventListener() {},
   });
