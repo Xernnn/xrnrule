@@ -113,10 +113,8 @@ class ClockGuard(
         val zone = zone()
         val picked = handPickedZone
         return when {
-            skew != 0L -> "This laptop's clock was set ${duration(abs(skew))} ${if (skew > 0) "ahead" else "back"} by hand, " +
-                "so blocks keep the time it had. Turn automatic time back on (timedatectl set-ntp true) and it's trusted again."
-            picked != null -> "This laptop is set to ${picked.id} by hand, so blocks go by ${zone.id}: " +
-                if (sharedZone() != null) "the zone your phone set itself." else "Linux sets no time zone by itself, and once your phone syncs, blocks go by its zone."
+            skew != 0L -> "Set ${duration(abs(skew))} ${if (skew > 0) "ahead" else "back"} by hand. To trust it again: timedatectl set-ntp true"
+            picked != null -> "Set to ${picked.id} by hand: blocks go by ${zone.id}"
             else -> null
         }
     }

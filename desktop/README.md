@@ -97,7 +97,7 @@ Without a server it blocks on the laptop only, and nothing it does reaches the p
 - **Opening a blocked site** turns the tab into the block page, before the site loads. Once
   the site is open again, the tab goes back where it was. On limited sites the extension can
   show a corner clock (Settings on the local page) and warns at 10, 5, 3 and 1 minutes left.
-- **Buying minutes.** On a daily limit's or a schedule's block page, **Need it anyway?** under
+- **Buying minutes.** On a daily limit's or a schedule's block page, **Take N more minutes** under
   **Leave this site** starts a wait; then type the sentence it shows. The sentence, the wait, the minutes and how many a
   day are in **Settings** on the local page (shared with the phone; easing them waits 60 s).
 - **Unlocking** works as on the phone. Tick or log the habit (on the block's card, the phone, in
