@@ -23,6 +23,9 @@ function fakeChrome(overrides) {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+/** chrome.storage.local.get: one key or a list of them. */
+const pick = (stored, keys) => Object.fromEntries([keys].flat().filter((k) => k in stored).map((k) => [k, stored[k]]));
+
 test("an xrnrule that never answers is unreachable, and a minute on everything with a rule is blocked", { timeout: 5000 }, async () => {
   let now = 1_800_000_000_000;
   const timers = [];
@@ -42,7 +45,7 @@ test("an xrnrule that never answers is unreachable, and a minute on everything w
     "chrome.runtime.getURL": (p) => `chrome-extension://test/${p}`,
     "chrome.runtime.getManifest": () => ({ version: "0" }),
     "chrome.management.getSelf": async () => ({ installType: "normal" }),
-    "chrome.storage.local.get": async (key) => (key in stored ? { [key]: stored[key] } : {}),
+    "chrome.storage.local.get": async (keys) => pick(stored, keys),
     "chrome.storage.local.set": async (values) => { Object.assign(stored, values); },
     "chrome.storage.local.remove": async (key) => { delete stored[key]; },
     "chrome.declarativeNetRequest.getSessionRules": async () => [],
@@ -89,7 +92,7 @@ function answering(overrides = {}) {
     "chrome.runtime.getURL": (p) => `chrome-extension://test/${p}`,
     "chrome.runtime.getManifest": () => ({ version: "0" }),
     "chrome.management.getSelf": async () => ({ installType: "normal" }),
-    "chrome.storage.local.get": async (key) => (key in stored ? { [key]: stored[key] } : {}),
+    "chrome.storage.local.get": async (keys) => pick(stored, keys),
     "chrome.storage.local.set": async (values) => { Object.assign(stored, values); },
     "chrome.storage.local.remove": async (key) => { delete stored[key]; },
     ...overrides,
@@ -191,4 +194,76 @@ test("without its site access the extension says nothing to xrnrule, so xrnrule 
   assert.ok(bg.urls.some((u) => u.endsWith("/ext/rules?focused=1")), bg.urls.join(" "));
   await ask({ type: "beat", host: "example.com", focused: true });
   assert.ok(bg.urls.some((u) => u.endsWith("/ext/heartbeat")), bg.urls.join(" "));
+});
+
+/**
+ * background.js with xrnrule refusing the connection while [down] says so, answering at once
+ * otherwise, under a clock the test moves; reddit.com has a limit and nothing is blocked yet.
+ */
+function sometimesDown() {
+  const clock = { now: 1_800_000_000_000, down: false };
+  const stored = {};
+  const written = [];
+  const rules = { v: "1", blocked: [], watched: [{ domain: "reddit.com", except: [] }] };
+  const sandbox = {
+    URL, console, AbortController, setTimeout, clearTimeout,
+    Date: class extends Date { static now() { return clock.now; } },
+    fetch: async () => {
+      if (clock.down) throw new Error("connection refused");
+      return { ok: true, json: async () => structuredClone(rules) };
+    },
+  };
+  sandbox.self = sandbox;
+  sandbox.chrome = fakeChrome({
+    "chrome.runtime.getURL": (p) => `chrome-extension://test/${p}`,
+    "chrome.runtime.getManifest": () => ({ version: "0" }),
+    "chrome.management.getSelf": async () => ({ installType: "normal" }),
+    "chrome.storage.local.get": async (keys) => pick(stored, keys),
+    "chrome.storage.local.set": async (values) => { Object.assign(stored, values); },
+    "chrome.storage.local.remove": async (key) => { delete stored[key]; },
+    "chrome.declarativeNetRequest.getSessionRules": async () => [],
+    "chrome.declarativeNetRequest.updateSessionRules": async ({ addRules }) => { written.push(addRules); },
+  });
+  vm.runInNewContext(read("shared.js"), sandbox);
+  vm.runInNewContext(read("background.js"), sandbox);
+  const refresh = async () => {
+    await sandbox.refreshRules();
+    for (let i = 0; i < 5; i++) await settle();
+  };
+  const failingClosed = () => (written.at(-1) ?? []).some((r) => r.condition.requestDomains.includes("reddit.com"));
+  return { clock, stored, refresh, failingClosed };
+}
+
+test("stops shorter than a minute add up: a minute of them in all blocks everything with a rule (I48)", async () => {
+  // Stopped for 50 s, let answer once, stopped again: each answer started the minute over, so
+  // limited sites stayed open through the stops, and none of that time was counted.
+  const bg = sometimesDown();
+  await bg.refresh();
+  bg.clock.down = true;
+  await bg.refresh();
+  bg.clock.now += 50_000;
+  await bg.refresh();
+  assert.equal(bg.failingClosed(), false, "50 s gone");
+  bg.clock.down = false;
+  await bg.refresh(); // one answer
+  assert.equal(bg.failingClosed(), false, "answering: what's blocked now");
+  bg.clock.now += 1_000;
+  bg.clock.down = true;
+  await bg.refresh();
+  bg.clock.now += 10_000;
+  await bg.refresh();
+  assert.equal(bg.failingClosed(), true, "50 s and 10 s: a minute in all");
+});
+
+test("the clock set back while xrnrule is gone is past the minute, not short of it", async () => {
+  // Date.now() - offlineSince went negative, so it stayed "under a minute" until the clock
+  // caught up, and with the daemon stopped its own clock guard (I54) can't help.
+  const bg = sometimesDown();
+  await bg.refresh();
+  bg.clock.down = true;
+  await bg.refresh();
+  assert.equal(bg.failingClosed(), false);
+  bg.clock.now -= 3_600_000;
+  await bg.refresh();
+  assert.equal(bg.failingClosed(), true);
 });

@@ -74,28 +74,59 @@ async function call(path, body) {
 }
 
 let reachable = null;
-/** When xrnrule stopped answering (kept, since the worker comes and goes), or null. */
+/**
+ * xrnrule's silence, kept in storage since the worker comes and goes: when the current one began
+ * (or null), and how long the earlier ones lasted since [offlineFrom]. They add up: stopped for
+ * 50 s, let answer once and stopped again, xrnrule would otherwise never be gone a minute, and
+ * the stops would be free time. A day after the first, the count starts again.
+ */
 let offlineSince = null;
+let offlineMs = 0;
+let offlineFrom = null;
+const OFFLINE_DAY_MS = 86_400_000;
+
+/** How long xrnrule has been silent, the earlier stops included; a clock set back is past any limit. */
+function silentMs(now) {
+  if (offlineSince == null) return 0;
+  const gone = now - offlineSince;
+  return gone < 0 ? Infinity : offlineMs + gone;
+}
 
 /** I48: what counts as blocked now: after a minute without xrnrule, everything with a rule. */
 function inForce(rules) {
-  if (!rules || offlineSince == null || Date.now() - offlineSince < FAIL_CLOSED_MS) return rules;
+  if (!rules || silentMs(Date.now()) < FAIL_CLOSED_MS) return rules;
   return failClosed(rules);
 }
 
-let offlineRead = false;
+let offlineLoaded = null;
+/** The silence as stored, read once per start of the worker. */
+function loadOffline() {
+  offlineLoaded ??= chrome.storage.local.get(["offlineSince", "offlineMs", "offlineFrom"]).then((saved) => {
+    offlineSince ??= saved?.offlineSince ?? null;
+    offlineMs = Math.max(offlineMs, saved?.offlineMs ?? 0);
+    offlineFrom ??= saved?.offlineFrom ?? null;
+  }, () => {});
+  return offlineLoaded;
+}
+
 async function noteReachable(ok) {
-  if (!offlineRead) {
-    offlineSince ??= (await chrome.storage.local.get("offlineSince")).offlineSince ?? null;
-    offlineRead = true;
-  }
+  await loadOffline();
+  const now = Date.now();
   if (ok && offlineSince != null) {
+    const gone = now - offlineSince;
+    offlineMs += gone >= 0 ? gone : FAIL_CLOSED_MS; // the clock set back meanwhile: the whole minute
     offlineSince = null;
+    await chrome.storage.local.set({ offlineMs });
     await chrome.storage.local.remove("offlineSince");
     refreshRules(); // back to what's blocked now, not everything with a rule
   } else if (!ok && offlineSince == null) {
-    offlineSince = Date.now();
-    await chrome.storage.local.set({ offlineSince });
+    // A clock set back (now before offlineFrom) keeps what's counted.
+    if (offlineFrom == null || now - offlineFrom >= OFFLINE_DAY_MS) {
+      offlineFrom = now;
+      offlineMs = 0;
+    }
+    offlineSince = now;
+    await chrome.storage.local.set({ offlineSince, offlineMs, offlineFrom });
   }
 }
 
