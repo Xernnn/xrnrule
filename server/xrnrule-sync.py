@@ -407,7 +407,8 @@ def event_key(e):
 
 def clean_event(raw, device, latest):
     """A device's event as stored, or None if it isn't one we know or is stamped after [latest]."""
-    if not isinstance(raw, dict) or raw.get("t") not in EVENT_TYPES or not isinstance(raw.get("at"), int):
+    if not isinstance(raw, dict) or not isinstance(raw.get("t"), str) or raw["t"] not in EVENT_TYPES \
+            or not isinstance(raw.get("at"), int):
         return None
     if raw["at"] > latest:  # it would never age out, and would count as today's every day
         return None

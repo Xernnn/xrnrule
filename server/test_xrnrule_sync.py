@@ -504,6 +504,13 @@ class SyncServerTest(unittest.TestCase):
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
 
+    def test_an_event_whose_type_is_no_string_is_dropped_not_a_dropped_connection(self):
+        # A list or an object can't be looked up in the set of types: TypeError, no answer at all.
+        day_ago = int(time.time() * 1000) - 86400 * 1000  # out of the other tests' way
+        batch = {"events": [{"t": [], "at": day_ago}, {"t": {"a": 1}, "at": day_ago}, {"t": "break", "at": day_ago, "ms": 1000}]}
+        status, body, _ = self.call("POST", "/events", batch, {"X-Device": "phone"})
+        self.assertEqual((200, 1), (status, json.loads(body)["added"]))
+
     def test_an_event_stamped_far_ahead_of_the_clock_is_refused(self):
         # One would never age out, and xrnhub would count it among today's every day.
         now = int(time.time() * 1000)
