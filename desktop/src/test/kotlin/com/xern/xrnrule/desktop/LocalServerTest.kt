@@ -281,6 +281,29 @@ class LocalServerTest {
     }
 
     @Test
+    fun aWaitConfirmedGoesByTheBlockAsItIsThen() {
+        val d = Daemon(listOf(habitOn("mine", "youtube.com").copy(targetSites = setOf("youtube.com", "reddit.com"))))
+        fun sites() = d.store.world.value.block("mine")!!.targetSites
+        fun phone(change: (Block) -> Block) = runBlocking {
+            d.store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == "mine") change(it) else it }) }
+        }
+        // reddit.com taken off: a minute's wait. Meanwhile the phone adds x.com to the block.
+        var token = d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["youtube.com"]}""")["token"]!!.jsonPrimitive.content
+        phone { it.copy(targetSites = it.targetSites + "x.com") }
+        d.clock.mono += LocalServer.GUARD_MS
+        assertEquals(JsonObject(emptyMap()), d.postJson("/api/confirm", """{"token":"$token"}"""))
+        assertEquals("the phone's x.com went with no wait of its own", setOf("youtube.com", "x.com"), sites())
+
+        // x.com taken off; meanwhile the phone makes the block hardcore: only the phone loosens it now.
+        token = d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["youtube.com"]}""")["token"]!!.jsonPrimitive.content
+        phone { it.copy(enforcementTier = EnforcementTier.HARDCORE) }
+        d.clock.mono += LocalServer.GUARD_MS
+        val answer = d.postJson("/api/confirm", """{"token":"$token"}""")
+        assertTrue(answer.toString(), answer.error().orEmpty().contains("hardcore"))
+        assertEquals(setOf("youtube.com", "x.com"), sites())
+    }
+
+    @Test
     fun i06_aTaskTakenFromABlockOnALockedOnesSiteIsRefused() {
         val mine = habitOn("mine", "youtube.com").copy(trigger = Trigger(TriggerType.CHECKLIST, Defaults.ALL_ITEMS, TriggerUnit.ITEMS))
         val tasks = listOf(ChecklistItem(id = "t1", blockId = "mine", text = "Stretch", order = 0), ChecklistItem(id = "t2", blockId = "mine", text = "Read", order = 1))

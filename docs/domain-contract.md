@@ -212,7 +212,7 @@ null: hết hạn thì ở lại (đã qua), không chặn gì. Đồng hồ là
 (ClockGuard, ở cả điện thoại lẫn laptop, I54); laptop từ chối sửa nới lỏng block đang khóa theo đồng hồ đó.
 Một lần lưu được xét so với block và checklist **như đang lưu lúc bấm lưu**, không như lúc mở trang
 sửa (`BlockDraft.onto`): máy khác khóa hay sửa chặt hơn trong lúc trang còn mở thì giá trị cũ của
-trang là nới lỏng, và những gì trang không hiện (khóa, app laptop) giữ như đang lưu.
+trang là nới lỏng, và những gì trang không hiện (khóa, app laptop) giữ như đang lưu. Cũng vậy lúc xác nhận sau 60 s chờ ở laptop: khóa (I39) và `HARDCORE` được xét lại theo block lúc đó, và sửa app/site của block chỉ áp phần nó bỏ và thêm lên block lúc đó, nên site máy kia thêm trong lúc chờ ở lại.
 
 ### 2.4 Nhiều thiết bị: trạng thái chung
 
