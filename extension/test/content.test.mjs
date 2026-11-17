@@ -57,7 +57,7 @@ function page(url, answer) {
   vm.runInNewContext(read("content.js"), sandbox);
   const heartbeat = intervals.find((t) => t.ms === sandbox.Xrn.HEARTBEAT_MS);
   const fromBackground = (msg) => listeners.forEach((fn) => fn(msg, { id: "test" }, () => {}));
-  return { sandbox, document, sent, replaced, media, fromBackground, beatAgain: () => heartbeat.fn() };
+  return { sandbox, document, sent, replaced, media, intervals, fromBackground, beatAgain: () => heartbeat.fn() };
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -99,4 +99,20 @@ test("a tab out of sight whose sound comes from an inner frame or WebAudio is re
   p.beatAgain();
   await settle();
   assert.deepEqual(p.sent, []);
+});
+
+test("the once-a-second clock runs only while something is left on the page's site", async () => {
+  // It ran in every tab, with or without a rule for its site.
+  let answer = { site: "example.com", blocked: false };
+  const p = page("https://example.com/", () => answer);
+  await settle();
+  const painters = () => p.intervals.filter((t) => t.ms === 1000).length;
+  assert.equal(painters(), 0, "no rule, no clock");
+  answer = { site: "example.com", blocked: false, showClock: true, left: { kind: "LIMIT", ms: 600_000 } };
+  p.beatAgain();
+  await settle();
+  assert.equal(painters(), 1);
+  p.beatAgain();
+  await settle();
+  assert.equal(painters(), 1, "one, however many answers");
 });
