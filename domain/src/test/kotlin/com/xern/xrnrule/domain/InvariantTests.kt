@@ -1557,7 +1557,7 @@ class InvariantTests {
     private fun log(world: World, clock: Clock, habitId: String, amount: Long): World =
         on(world, clock, BlockEvent.LogHabit(habitId, amount))
 
-    private fun set(world: World, clock: Clock, habitId: String, epochDay: Long, value: Long, notes: String = ""): World =
+    private fun set(world: World, clock: Clock, habitId: String, epochDay: Long, value: Long, notes: String? = null): World =
         on(world, clock, BlockEvent.SetHabitEntry(habitId, epochDay, value, notes))
 
     private fun habitWorld(clock: Clock, habits: List<Habit>, items: Map<String, List<ChecklistItem>>): World =
@@ -1837,6 +1837,21 @@ class InvariantTests {
         world = set(world, clock, "meditate", today - 2, HabitEntry.SKIP)
         world = set(world, clock, "meditate", today - 2, 7)
         assertEquals("a check takes Loop's values only", HabitEntry.SKIP, world.entry("meditate", today - 2)?.value)
+    }
+
+    @Test
+    fun i35_settingAnEntryKeepsItsNote() {
+        // The note was written in xrnloops; the day was then ticked from a block card, set from
+        // the laptop's page or given a "yesterday" amount, none of which carry notes. The entry was
+        // rewritten with none, pushed, and the later mtime won: the note was gone everywhere.
+        val clock = FakeClock()
+        val today = clock.epochDay()
+        val fromServer = HabitEntry(units(5), "felt strong", mtime = 1, seq = 4)
+        var world = habitWorld(clock, listOf(habit("push"))).copy(habitEntries = mapOf(HabitEntry.key("push", today - 1) to fromServer))
+        world = set(world, clock, "push", today - 1, units(8))
+        assertEquals(HabitEntry(units(8), "felt strong", clock.nowWallMs(), seq = 4, dirty = true, baseValue = units(5)), world.entry("push", today - 1))
+        world = set(world, clock, "push", today - 1, units(8), "")
+        assertEquals("a note cleared on purpose", "", world.entry("push", today - 1)!!.notes)
     }
 
     @Test
