@@ -10,7 +10,8 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
 
     GET  /state               200, the document; ETag: "<version>"
                               If-None-Match: "<version>" -> 304 when unchanged (a cheap check)
-                              ?wait=S with If-None-Match long-polls up to S seconds (the laptop)
+                              ?wait=S with If-None-Match long-polls up to S seconds (the laptop);
+                              one whose caller hangs up first ends there, unanswered
     PUT  /state               needs If-Match: "<version>" (or "*"); 200 with the new ETag, or
                               412 if someone wrote first: re-read, merge, try again
                               503 if the stored file can't be read: never an empty document, which
@@ -31,6 +32,7 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               extension's updates.xml and signed .crx with no login (a browser's
                               own updater fetches them), the phone app's app.json and .apk with it
     GET  /, /status.js, ...   a read-only status page (static files; the data needs a login)
+    HEAD                      any GET above, answered without its body
 
 The devices send Basic auth with every request. The web pages (this status page, the xrnloops
 web app on the same host) sign in once and then carry an HttpOnly cookie, `xrn_session`, so the
@@ -57,7 +59,9 @@ import math
 import mimetypes
 import os
 import re
+import select
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -70,6 +74,7 @@ MAX_BODY = 8 * 1024 * 1024
 FAIL_DELAY_S = 2  # after a wrong password, as Radicale does
 AUTH_CACHE_S = 600  # a bcrypt check costs ~0.3s on a phone; don't pay it per request
 MAX_WAIT_S = 55
+GONE_CHECK_S = 1  # how often a long-poll that hears nothing looks whether its caller is still there
 BACKUP_DAYS = 14  # daily copies of each user's state, next to it in backups/
 FAIL_LIMIT = 10  # wrong logins from one address within FAIL_WINDOW_S, then 429 until they age out
 FAIL_WINDOW_S = 15 * 60
@@ -768,6 +773,26 @@ class Handler(BaseHTTPRequestHandler):
         who = headers.get("X-Forwarded-For", self.client_address[0]) if headers else "-"
         sys.stderr.write(f"{who} {fmt % a}".translate(LOG_ESCAPES) + "\n")
 
+    def handle(self):
+        # A caller hanging up, mid-request or before the answer is out, is the network, not a fault
+        # here: the laptop's tailnet path drops, a phone loses its signal, a page is closed. One
+        # line says so. socketserver printed some 30 lines of traceback for each, which xrnhub's
+        # log page shows as an error.
+        try:
+            super().handle()
+        except ConnectionError as e:
+            self.close_connection = True
+            self.log_message("connection dropped: %s", type(e).__name__)
+
+    def caller_gone(self):
+        """Whether the caller has closed its end, as Funnel does once the caller gives up on a
+        long-poll: what it would have been told is then for no one."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
+        except (OSError, ValueError):
+            return True
+
     def parse_request(self):
         if not super().parse_request():
             return False
@@ -813,6 +838,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send(413, "body missing or too large")
             return None
         raw = self.rfile.read(length)
+        if len(raw) < length:
+            # The connection closed part way: what came is no document, so it isn't read as one.
+            self.close_connection = True
+            self.send(400, "the upload stopped short")
+            return None
         if (self.headers.get("Content-Encoding") or "").lower() != "gzip":
             return raw
         # Unpacked only up to MAX_BODY: a few megabytes of gzip can unpack to gigabytes.
@@ -915,8 +945,12 @@ class Handler(BaseHTTPRequestHandler):
                     left = deadline - time.monotonic()
                     if left <= 0:
                         break
-                    changed.wait(left)
-                    doc = read_state(user)
+                    if changed.wait(min(left, GONE_CHECK_S)):
+                        doc = read_state(user)
+                    elif self.caller_gone():
+                        self.close_connection = True
+                        return self.log_message("caller left a long-poll after %.0fs",
+                                                wait - (deadline - time.monotonic()))
         except Unreadable:
             return self.send(503, "the stored state can't be read")
         etag = {"ETag": f'"{doc["version"]}"'}
@@ -925,6 +959,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(doc.get("data") or {}, ensure_ascii=False, separators=(",", ":"))
         self.send(200, body, "application/json; charset=utf-8",
                   {**etag, "X-Updated": doc.get("updated", ""), "X-Updated-By": doc.get("by", "")})
+
+    # A GET's answer without its body, as curl -I and monitors ask: http.server answered 501
+    # "Unsupported method", which xrnhub's log page shows as an error.
+    do_HEAD = do_GET
 
     def do_POST(self):
         path, _ = self.route()
@@ -1025,7 +1063,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", UPDATE_TYPES[ext])
             self.send_header("Content-Length", str(size))
             self.end_headers()
-            shutil.copyfileobj(f, self.wfile)
+            if self.command != "HEAD":
+                shutil.copyfileobj(f, self.wfile)
 
     def static(self, path):
         if path in ("", "/"):

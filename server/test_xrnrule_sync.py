@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,72 @@ class SyncServerTest(unittest.TestCase):
                 self.call("PUT", "/state", {"woken": bad}, {"If-Match": "*"})  # lets the stuck poll go
                 _, _, headers = self.call("GET", "/state")
             self.assertEqual(400, status, bad)
+
+    LOGIN = b"Authorization: Basic " + base64.b64encode(b"sonn:secret") + b"\r\n"
+
+    def logged_after(self, raw, close, done=("Traceback", "dropped", "long-poll", '" 400 ')):
+        """What the server logs, and answers, once [raw] is sent and [close] has ended the connection."""
+        answer = []
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+            with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                s.sendall(raw)
+                time.sleep(0.3)
+                answer.append(close(s))
+            for _ in range(500):  # the handler finishes on its own thread
+                if any(word in log.getvalue() for word in done):
+                    break
+                time.sleep(0.01)
+            time.sleep(0.1)
+        return answer[0], log.getvalue()
+
+    def test_a_long_poll_whose_caller_gave_up_ends_with_no_answer_and_no_traceback(self):
+        # Funnel closes this side once the laptop gives up on a long-poll, which a stalled tailnet
+        # path makes routine; the thread was held the rest of the wait for no one.
+        _, _, headers = self.call("GET", "/state")
+        started = time.monotonic()
+        _, log = self.logged_after(
+            b"GET /state?wait=30 HTTP/1.1\r\nHost: x\r\n" + self.LOGIN +
+            b"If-None-Match: " + headers["ETag"].encode() + b"\r\n\r\n", lambda s: s.close())
+        self.assertIn("caller left a long-poll", log)
+        self.assertNotIn("Traceback", log)
+        self.assertLess(time.monotonic() - started, 10)  # not the 30 s it asked for
+
+    def cut_put(self):
+        body = json.dumps({"blocks": ["cut"] * 500}).encode()
+        return (b'PUT /state HTTP/1.1\r\nHost: x\r\n' + self.LOGIN + b'If-Match: "999999"\r\n'
+                b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body[:len(body) // 2])
+
+    def test_an_upload_cut_short_is_answered_as_such(self):
+        def half_close(s):
+            s.shutdown(socket.SHUT_WR)
+            return b"".join(iter(lambda: s.recv(4096), b""))
+        answer, log = self.logged_after(self.cut_put(), half_close)
+        self.assertRegex(answer, rb"^HTTP/1\.[01] 400 ")
+        self.assertIn(b"the upload stopped short", answer)
+        self.assertNotIn("Traceback", log)
+
+    def test_a_caller_that_hangs_up_mid_upload_is_one_line_in_the_log_not_a_traceback(self):
+        def reset(s):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        _, log = self.logged_after(self.cut_put(), reset)
+        self.assertNotIn("Traceback", log)
+        self.assertIn("connection dropped: ConnectionResetError", log)
+
+    def test_head_is_a_get_without_the_body(self):
+        # curl -I got 501 "Unsupported method", which xrnhub's log page shows as an error.
+        folder = os.path.join(srv.args.data, "update")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "updates.xml"), "wb") as f:
+            f.write(b"<gupdate/>")
+        for path, login, header in ((b"/health", b"", b"Content-Length: 2"),
+                                    (b"/update/updates.xml", b"", b"Content-Length: 10"),
+                                    (b"/state", self.LOGIN, b"ETag: ")):
+            with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                s.sendall(b"HEAD " + path + b" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n" + login + b"\r\n")
+                answer = b"".join(iter(lambda: s.recv(4096), b""))
+            self.assertRegex(answer, rb"^HTTP/1\.[01] 200 ", path)
+            self.assertIn(header, answer, path)
+            self.assertTrue(answer.endswith(b"\r\n\r\n"), (path, answer[-40:]))
 
     def test_login_and_open_paths(self):
         self.assertEqual(401, self.call("GET", "/state", password=WRONG)[0])
