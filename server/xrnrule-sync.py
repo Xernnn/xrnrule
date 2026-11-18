@@ -22,7 +22,7 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               and at most EVENTS_MAX of them
     GET  /events?since=MS     those events, for the weekly review in the habits web app
     POST /session             with Basic auth: sets the web pages' login cookie (below)
-    DELETE /session           signs the browser out
+    DELETE /session           signs the browser out, and ends its cookie on every server (below)
     GET  /health              200 "ok", no login (for monitoring)
     GET  /update/<file>       releases from scripts/release.mjs, in <data>/update: the browser
                               extension's updates.xml and signed .crx with no login (a browser's
@@ -35,13 +35,16 @@ password never sits where a page's script could read it: the host is shared with
 and a script bug in any of them could read the pages' storage. The cookie counts only with an
 `X-Xrn-Client` header, which another site's page can't send. It's signed with `session.key`,
 made next to the users file on first start, which xrnloops-sync shares, so either sign-in works
-for both. A new password ends every session; so does deleting session.key.
+for both. A new password ends every session; so does deleting session.key. Signing out ends that
+one cookie: its SHA-256 goes on `signed-out.json` beside session.key until it would have run out,
+a list that xrnhub, xrnloops-sync and xrninsta (which take the same cookie) also write to and refuse.
 
     python3 xrnrule-sync.py --data ~/xrnrule-sync/data --users ~/.config/radicale/users \
         --web ~/xrnrule-sync/web
 """
 import argparse
 import base64
+import fcntl
 import gzip
 import hashlib
 import hmac
@@ -103,6 +106,9 @@ events_lock = threading.Lock()
 events = {}  # user -> list of event dicts, oldest first, mirrored to events.jsonl
 event_keys = {}  # user -> the event_key of each of events[user], so a batch needn't go over them all
 session_key = b""  # signs the web pages' login cookies; see load_session_key()
+signed_out_lock = threading.Lock()
+signed_out_seen = None  # the signed-out.json (path, inode, mtime, size) signed_out_list was read from
+signed_out_list = {}  # sha256 of a signed-out cookie -> when it would have run out; see signed_out()
 
 
 SECURITY_HEADERS = {  # on every answer; main() adds the status page's Content-Security-Policy
@@ -223,20 +229,108 @@ def session_mac(body, tag):
     return hmac.new(session_key, f"{body}|{tag}".encode(), hashlib.sha256).hexdigest()
 
 
+def signed_out_path():
+    """The cookies signed out on any server that shares the users file and session.key (xrnhub,
+    xrnloops-sync and xrninsta too): {sha256 of the cookie: when it would have run out}, beside them."""
+    return os.path.join(os.path.dirname(args.users), "signed-out.json")
+
+
+def read_signed_out(path):
+    """signed-out.json's list: {} with no file, None (and a line in the log) for one that can't be read."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        if not isinstance(doc, dict):
+            raise ValueError("not a JSON object")
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, RecursionError) as e:  # ValueError: also bad UTF-8
+        sys.stderr.write(f"{path} can't be read, so the sign-outs read before it hold: {e}\n")
+        return None
+    return {k: v for k, v in doc.items() if isinstance(k, str) and isinstance(v, (int, float))}
+
+
+def signed_out():
+    """The list as the file has it now, read again only when it has changed, so a sign-out on
+    another server counts here from the next request. A file that can't be read keeps the last list."""
+    global signed_out_seen, signed_out_list
+    path = signed_out_path()
+    try:
+        st = os.stat(path)
+        now = (path, st.st_ino, st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        now = (path, None)
+    except OSError as e:
+        now = (path, "unreadable", e.errno)
+    with signed_out_lock:
+        if now != signed_out_seen:
+            signed_out_seen = now
+            listed = {} if now[1] is None else read_signed_out(path)
+            if listed is not None:
+                signed_out_list = listed
+        return signed_out_list
+
+
+def sign_out(token):
+    """Puts a cookie on the list, dropping what has run out. Under an flock on signed-out.json.lock,
+    with the file read again inside it, so two servers signing out at once both keep theirs; written
+    whole to a new file that then takes the old one's place."""
+    global signed_out_seen, signed_out_list
+    path = signed_out_path()
+    lock = os.open(f"{path}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        listed = read_signed_out(path)
+        if listed is None:
+            listed = dict(signed_out_list)
+        listed[hashlib.sha256(token.encode()).hexdigest()] = int(token.split(".")[1])
+        now = time.time()
+        kept = {k: v for k, v in listed.items() if v >= now}  # run out: refused anyway
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(kept, f, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        st = os.stat(path)
+        with signed_out_lock:
+            signed_out_seen, signed_out_list = (path, st.st_ino, st.st_mtime_ns, st.st_size), kept
+    finally:
+        os.close(lock)  # and with it the flock
+
+
 def make_session(user):
     """A login cookie's value for [user]: who, until when, and a signature over both."""
     who = base64.urlsafe_b64encode(user.encode()).decode().rstrip("=")
-    body = f"{who}.{int(time.time()) + SESSION_S}"
-    return f"{body}.{session_mac(body, password_tag(user))}"
+    tag = password_tag(user)
+    expires = int(time.time()) + SESSION_S
+    # A cookie is made from the name, the second it runs out and the password alone, so one made in
+    # the second the same one was signed out (here or on another server) would be that cookie. It
+    # runs out a second later instead, which keeps the format every server reads.
+    listed = signed_out()
+    while True:
+        body = f"{who}.{expires}"
+        token = f"{body}.{session_mac(body, tag)}"
+        if hashlib.sha256(token.encode()).hexdigest() not in listed:
+            return token
+        expires += 1
 
 
-def check_session(cookie_header):
-    """The user a request's login cookie names, if it's ours, unexpired and the password unchanged."""
+def session_token(cookie_header):
+    """The login cookie's value in a Cookie header, or ""."""
     token = ""
     for part in (cookie_header or "").split(";"):
         name, _, value = part.strip().partition("=")
         if name == SESSION_COOKIE:
             token = value
+    return token
+
+
+def check_session(cookie_header):
+    """The user a request's login cookie names, if it's ours, unexpired, not signed out and the
+    password unchanged."""
+    token = session_token(cookie_header)
     try:
         who, expires, mac = token.split(".")
         user = base64.urlsafe_b64decode(who + "=" * (-len(who) % 4)).decode("utf-8")
@@ -244,10 +338,25 @@ def check_session(cookie_header):
             return None
     except ValueError:  # also a bad base64 or UTF-8
         return None
+    if hashlib.sha256(token.encode()).hexdigest() in signed_out():
+        return None
     tag = password_tag(user)
     # As bytes: compare_digest raises on a str that isn't ASCII, and a cookie can hold anything.
     if tag is None or not hmac.compare_digest(session_mac(f"{who}.{expires}", tag).encode(), mac.encode()):
         return None
+    return user
+
+
+def end_session(cookie_header):
+    """Signs out the session a request's cookie carries, on every server that takes it, until it
+    would have run out anyway. The user it was, or None when it was no session of ours."""
+    user = check_session(cookie_header)
+    if not user:
+        return None
+    try:
+        sign_out(session_token(cookie_header))
+    except OSError as e:
+        sys.stderr.write(f"sign-out not kept: {e!r}\n")
     return user
 
 
@@ -749,6 +858,8 @@ class Handler(BaseHTTPRequestHandler):
         path, _ = self.route()
         if path != "/session":
             return self.send(404, "not found")
+        # Emptying the browser's cookie alone left any copy of it signing in for its full 30 days.
+        end_session(self.headers.get("Cookie"))
         self.send(200, '{"ok":true}', "application/json", {"Set-Cookie": session_cookie("", 0)})
 
     def do_PUT(self):

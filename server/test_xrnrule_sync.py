@@ -13,6 +13,8 @@ import json
 import os
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -659,6 +661,134 @@ class SyncServerTest(unittest.TestCase):
             with open(srv.args.users, "w") as f:
                 f.write(old)
         self.assertEqual(200, self.web("GET", "/state", cookie)[0])
+
+    def a_cookie(self, expires):
+        """A login cookie as make_session makes it, running out at [expires]: two made in the same
+        second are the same cookie."""
+        who = base64.urlsafe_b64encode(b"sonn").decode().rstrip("=")
+        body = f"{who}.{expires}"
+        return f"{body}.{srv.session_mac(body, srv.password_tag('sonn'))}"
+
+    def shared_list(self):
+        """signed-out.json beside the users file: what every server that takes the cookie reads."""
+        return os.path.join(os.path.dirname(srv.args.users), "signed-out.json")
+
+    def read_list(self):
+        try:
+            with open(self.shared_list(), encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+
+    def write_list(self, doc):
+        """The shared list as another server (the hub) writes it: a new file in the old one's place."""
+        with open(self.shared_list() + ".test", "w", encoding="utf-8") as f:
+            f.write(doc if isinstance(doc, str) else json.dumps(doc))
+        os.replace(self.shared_list() + ".test", self.shared_list())
+
+    @staticmethod
+    def hash_of(cookie):
+        return hashlib.sha256(cookie.encode()).hexdigest()
+
+    def test_a_cookie_signed_out_on_another_server_is_refused_here(self):
+        # Signing out of xrnhub ended the cookie there only: a copy of it went on opening the
+        # blocks for the rest of its 30 days.
+        expires = int(time.time()) + 8000
+        cookie = self.a_cookie(expires)
+        self.assertEqual(200, self.web("GET", "/state", cookie)[0])
+        self.write_list({**self.read_list(), self.hash_of(cookie): expires})
+        self.assertEqual(401, self.web("GET", "/state", cookie)[0])
+        self.assertEqual(401, self.web("GET", "/devices", cookie)[0])
+        self.assertEqual(200, self.call("GET", "/state")[0])  # a password still signs in
+
+    def test_signing_out_ends_the_cookie_here_and_on_every_other_server(self):
+        # DELETE /session only told the browser to drop its cookie: a copy of it (another browser,
+        # a stolen one) went on signing in, here and on the hub, habits and songs pages.
+        expires = int(time.time()) + 8100
+        mine, other = self.a_cookie(expires), self.a_cookie(expires + 1)
+        self.assertEqual(200, self.web("DELETE", "/xrnrule/session", mine)[0])
+        self.assertEqual(401, self.web("GET", "/state", mine)[0])
+        self.assertEqual(200, self.web("GET", "/state", other)[0])
+        self.assertEqual(expires, self.read_list()[self.hash_of(mine)])
+        self.assertEqual(0o600, os.stat(self.shared_list()).st_mode & 0o777)
+        # A sign-out with no session of ours puts nothing on the list.
+        before = self.read_list()
+        for cookie in ("junk", self.a_cookie(int(time.time()) - 5), None):
+            self.assertEqual(200, self.web("DELETE", "/session", cookie)[0])
+        self.assertEqual(before, self.read_list())
+
+    def test_a_missing_or_broken_list_breaks_no_sign_in(self):
+        gone, live = self.a_cookie(int(time.time()) + 8200), self.a_cookie(int(time.time()) + 8300)
+        srv.end_session(f"{srv.SESSION_COOKIE}={gone}")
+        self.write_list("{half a file")
+        with unittest.mock.patch.object(sys, "stderr", io.StringIO()) as said:
+            for _ in range(3):
+                self.assertEqual(200, self.web("GET", "/state", live)[0])
+                # The list read before the file broke still holds.
+                self.assertEqual(401, self.web("GET", "/state", gone)[0])
+            self.assertEqual(200, self.call("GET", "/state")[0])
+            self.assertEqual(200, self.web("POST", "/session", auth="sonn:secret")[0])
+        self.assertEqual(1, said.getvalue().count("signed-out.json"), said.getvalue())  # one line, not one a request
+        os.remove(self.shared_list())
+        self.assertEqual(200, self.web("GET", "/state", live)[0])
+        self.assertEqual(200, self.call("GET", "/state")[0])
+        self.assertEqual(200, self.web("POST", "/session", auth="sonn:secret")[0])
+
+    def test_a_new_session_is_never_one_signed_out(self):
+        # A cookie is made from the name, the second it runs out and the password, so a sign-in in
+        # the second of a sign-out (here or on another server) was handed the cookie just ended.
+        clock = unittest.mock.Mock()
+        clock.time.return_value = 1_900_000_100.5
+        with unittest.mock.patch.object(srv, "time", clock):
+            first = srv.make_session("sonn")
+            self.assertEqual("sonn", srv.end_session(f"{srv.SESSION_COOKIE}={first}"))
+            again = srv.make_session("sonn")
+            self.assertEqual(int(first.split(".")[1]) + 1, int(again.split(".")[1]))
+            self.assertEqual("sonn", srv.check_session(f"{srv.SESSION_COOKIE}={again}"))
+            # Signed out by the hub instead, the next one is new again.
+            self.write_list({**self.read_list(), self.hash_of(again): int(again.split(".")[1])})
+            third = srv.make_session("sonn")
+            self.assertNotIn(third, (first, again))
+            self.assertEqual("sonn", srv.check_session(f"{srv.SESSION_COOKIE}={third}"))
+
+    def test_servers_signing_out_at_once_keep_every_sign_out(self):
+        # The servers share one file: written without a lock, of two signing out together, one
+        # would undo the other.
+        go = os.path.join(self.tmp.name, "go")
+        script = ("import importlib.util, os, sys, time\n"
+                  "spec = importlib.util.spec_from_file_location('other', sys.argv[1])\n"
+                  "m = importlib.util.module_from_spec(spec)\n"
+                  "spec.loader.exec_module(m)\n"
+                  "m.args = type('Args', (), {'users': sys.argv[2]})()\n"
+                  "while not os.path.exists(sys.argv[4]): time.sleep(0.001)\n"
+                  "for i in range(30): m.sign_out(f'{sys.argv[3]}-{i}.4000000000.x')\n")
+        others = [subprocess.Popen([sys.executable, "-c", script, os.path.join(HERE, "xrnrule-sync.py"),
+                                    srv.args.users, f"server{n}", go]) for n in range(3)]
+        time.sleep(0.3)
+        open(go, "w").close()
+
+        def here(n):
+            for i in range(30):
+                srv.sign_out(f"here{n}-{i}.4000000000.x")
+
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            list(pool.map(here, range(2)))
+        for other in others:
+            self.assertEqual(0, other.wait(timeout=60))
+        os.remove(go)
+        listed = self.read_list()
+        for who in ("server0", "server1", "server2", "here0", "here1"):
+            self.assertEqual(30, sum(self.hash_of(f"{who}-{i}.4000000000.x") in listed for i in range(30)), who)
+        self.write_list({k: v for k, v in listed.items() if v != 4_000_000_000})
+
+    def test_a_sign_out_drops_the_ones_that_have_run_out(self):
+        self.write_list({"a" * 64: int(time.time()) - 5, "b" * 64: int(time.time()) + 600})
+        mine = self.a_cookie(int(time.time()) + 8400)
+        srv.end_session(f"{srv.SESSION_COOKIE}={mine}")
+        listed = self.read_list()
+        self.assertNotIn("a" * 64, listed)
+        self.assertIn("b" * 64, listed)
+        self.assertIn(self.hash_of(mine), listed)
 
     def test_a_cookie_that_isnt_ascii_is_refused_not_a_crash(self):
         who, expires, mac = self.sign_in().split(".")
