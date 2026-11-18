@@ -7,10 +7,14 @@
   <link rel="stylesheet" href="page.css">
 </head>
 <body class="popup">
-  <main class="card">
+  <header class="pbar">
+    <img src="icons/icon.svg" alt="xrnrule" width="28" height="28">
+    <span class="spacer"></span>
+    <span id="engine" class="engine"></span>
+  </header>
+  <main class="pcard">
     <h2 id="site">This page</h2>
-    <p id="state">Asking xrnrule…</p>
-    <p id="engine" class="note"></p>
+    <p id="state" class="state">Asking xrnrule…</p>
     <p id="access" class="note bad" hidden>No site access <button id="grant" class="btn primary" type="button">Allow</button></p>
     <div class="actions">
       <a id="open" class="btn primary" target="_blank">Open xrnrule</a>
