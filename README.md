@@ -71,14 +71,18 @@ parts of a site alone (music.youtube.com under youtube.com).
   seconds. Settings → Corner timer moves it, sizes it, sets how faint it is or turns it off.
 - **App lock.** Opening the app, or coming back to it after 30 seconds away, asks for your
   fingerprint (or the phone's screen-lock PIN). The block screen isn't behind it: that's how you
-  get through a block. Settings → App lock turns it off. Android 9 or later.
+  get through a block. Settings → Security & privacy → App lock turns it off. Android 9 or later.
 - **Tells you about updates** (sideload build). New versions come from your server, at the sync
   address and with its login. A new one downloads by itself, then a notification and a banner on
   the Blocks tab say it's ready and take you to Settings → Updates, where it installs when you tap
   Install. See [Updates](#updates).
 - **Backup.** Export your blocks to a file and import them on a new install.
-- **Insights.** Per-app screen time, time per site, habits done, times blocked on apps and sites
-  (the laptop's too, with sync on), minutes bought, breaks, emergency unlocks and your streak.
+- **Insights.** Both devices' history (the laptop's comes through the sync server), for today,
+  7 or 30 days, all devices or one: blocked tries, time unlocked, minutes bought, breaks and
+  habits; tries per day in each block's colour and by hour of the week; a card per block (tries,
+  unlocks, today's limit on each device, clean days in a row); the top apps and sites; and a
+  day-by-day timeline. A block's colour is its place in the block list, the same on the laptop's
+  page. A habit or an unlock both devices logged counts once.
 - Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
   turns its autostart off, which Xiaomi phones do at every install.
 

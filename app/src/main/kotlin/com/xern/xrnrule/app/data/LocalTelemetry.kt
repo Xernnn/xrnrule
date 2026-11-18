@@ -34,9 +34,10 @@ sealed interface TelemetryEvent {
 }
 
 /**
- * What other devices logged, out of a `GET /events` answer. Only what can't also be in this
- * device's own log: a habit or an unlock is shared, so every device logs it already. Anything
- * malformed is left out, since this only adds to a screen.
+ * What other devices logged, out of a `GET /events` answer, this device's own lines left out
+ * (its own log has them, and lines not sent yet). A habit done or an unlock used is shared, so
+ * every device logs it as it hears of it: Insights counts those once ([com.xern.xrnrule.app.ui.InsightsModel.merge]).
+ * Anything malformed is left out, since this only adds to a screen.
  */
 fun eventsFromElsewhere(body: String, thisDevice: String): List<TelemetryEvent> {
     fun JsonObject.text(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
@@ -52,6 +53,8 @@ fun eventsFromElsewhere(body: String, thisDevice: String): List<TelemetryEvent> 
             "blocked" -> e.text("target")?.let { TelemetryEvent.Blocked(it, at, e.text("name") ?: it) }
             "bought" -> ms?.let { TelemetryEvent.MinutesBought(it, at, e.text("block").orEmpty()) }
             "break" -> ms?.let { TelemetryEvent.BreakTaken(it, at) }
+            "habit" -> e.text("block")?.let { TelemetryEvent.HabitDone(it, at) }
+            "unlock" -> e.text("block")?.let { block -> ms?.let { TelemetryEvent.UnlockUsed(block, it, at, e.number("start") ?: 0) } }
             else -> null
         }
     }
