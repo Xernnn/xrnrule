@@ -17,7 +17,7 @@ export const minutes = (ms) => Math.round(ms / 60000);
  * The zone the devices' days and hours go by (I54): the one a phone set itself, the latest; the
  * laptop follows it. Undefined (this browser's own) until a phone has said.
  */
-function sharedZone(doc) {
+export function sharedZone(doc) {
   let best = null;
   for (const z of Object.values(doc?.zones ?? {})) if (z?.zone && (!best || z.atWall > best.atWall)) best = z;
   return best?.zone;
@@ -86,10 +86,10 @@ function hhmm(minuteOfDay) {
 }
 
 /** I39: locked until its lock's time. */
-const isLocked = (block, wall) => !!block.lock && wall < block.lock.untilWall;
+export const isLocked = (block, wall) => !!block.lock && wall < block.lock.untilWall;
 
 /** Model.Block's derived rules (I32, I44). */
-function rulesOf(block) {
+export function rulesOf(block) {
   const mode = block.mode ?? "HABIT";
   const daily = block.dailyAllowanceMs ?? 0;
   const opens = block.opensPerDay ?? 0;
@@ -103,7 +103,7 @@ function rulesOf(block) {
  * Today's use of [block] by the devices (I19, I52): minutes and opens, all of them together, or,
  * each device its own (I33), the one that has used the most.
  */
-function useToday(doc, block, now) {
+export function useToday(doc, block, now) {
   const day = today(doc, now).epochDay;
   const uses = Object.values(doc.allowance?.[block.id] ?? {}).filter((u) => dayOf(doc, u.dayStartWall) === day);
   const add = block.perDevice ? Math.max : (a, b) => a + b;
@@ -207,7 +207,7 @@ export function chips(block, now) {
   return out;
 }
 
-const windows = (s) => [s?.activeWindow, ...(s?.moreWindows ?? []).map((x) => x.window)]
+export const windows = (s) => [s?.activeWindow, ...(s?.moreWindows ?? []).map((x) => x.window)]
   .filter(Boolean).map((w) => `${hhmm(w.startMinuteOfDay)}–${hhmm(w.endMinuteOfDay)}`);
 
 export function unlockMethod(block, items) {

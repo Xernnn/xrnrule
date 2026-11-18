@@ -4,10 +4,14 @@
   <meta charset="utf-8">
   <!-- The proxy strips the mount path; relative URLs need the trailing slash. -->
   <script>if (!/\/$|\.\w+$/.test(location.pathname)) location.replace(location.pathname + "/" + location.search + location.hash)</script>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#1f1f23" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f2f2f4" media="(prefers-color-scheme: light)">
   <title>xrnrule</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="MiSansLatinVF.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="xrn.css">
   <link rel="stylesheet" href="status.css">
   <script type="module" src="status.js"></script>
 </head>
