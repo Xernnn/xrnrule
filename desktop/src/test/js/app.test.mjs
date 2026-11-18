@@ -5,13 +5,23 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
+/**
+ * The page's script with what it imports (server/web/ui.js and insights.js, which the build
+ * copies in beside it) run before it in one context, their imports and exports taken out.
+ */
+function source() {
+  const strip = (text) => text.replace(/^import .*$/gm, "").replace(/^export /gm, "");
+  const read = (path) => strip(readFileSync(new URL(path, import.meta.url), "utf8"));
+  return [read("../../../../server/web/ui.js"), read("../../../../server/web/insights.js"), read("../../main/resources/web/app.js")].join("\n;\n");
+}
+
 function load(href) {
   const url = new URL(href);
   const noop = () => {};
   const page = {
     location: { search: url.search, pathname: url.pathname, hash: url.hash, replace: noop },
     window: { addEventListener: noop, scrollTo: noop },
-    document: { addEventListener: noop, getElementById: () => null, hasFocus: () => false, visibilityState: "hidden" },
+    document: { addEventListener: noop, getElementById: () => null, hasFocus: () => false, visibilityState: "hidden", documentElement: { dataset: {} } },
     fetch: () => new Promise(noop),
     setInterval: noop,
     setTimeout: noop,
@@ -20,8 +30,7 @@ function load(href) {
     URLSearchParams,
     Intl,
   };
-  const source = readFileSync(new URL("../../main/resources/web/app.js", import.meta.url), "utf8");
-  vm.runInNewContext(source + "\n;globalThis.backHere = backHere;", page);
+  vm.runInNewContext(source() + "\n;globalThis.backHere = backHere; globalThis.joinTag = joinTag;", page);
   return page;
 }
 
@@ -37,4 +46,16 @@ test("the block page goes back only to the site it stands in for", () => {
   assert.equal(backHere("javascript:alert(1)", "youtube.com"), false);
   assert.equal(backHere("https://youtube.com/", null), false);
   assert.equal(backHere(null, "youtube.com"), false);
+});
+
+test("a habit block's rows say how they add up, as the phone's card does", () => {
+  const { joinTag } = load("http://127.0.0.1:47321/");
+  const block = (trigger, requiredItems = -1, combineOr = false) => ({ trigger, requiredItems, combineOr });
+  assert.equal(joinTag(block("CHECKLIST"), 1), null);
+  assert.equal(joinTag(block("CHECKLIST"), 2), "Do both");
+  assert.equal(joinTag(block("CHECKLIST"), 3), "Do all");
+  assert.equal(joinTag(block("CHECKLIST", 2), 3), "Do 2 of 3");
+  assert.equal(joinTag(block("COMBINED", -1, true), 2), "Do either");
+  assert.equal(joinTag(block("COMBINED"), 3), "Do all");
+  assert.equal(joinTag(block("TIMER"), 1), null);
 });

@@ -1,6 +1,14 @@
-// xrnrule on the laptop: the local page ("/") and the block page ("/block?app=…" or
-// "/block?site=…&back=…") that blocked apps and sites land on. Everything comes from the
-// daemon's /api/state, polled every second; the engine behind it is the phone's.
+// xrnrule on the laptop: the local page ("/": Blocks, Insights, Settings, as the phone's tabs)
+// and the block page ("/block?app=…" or "/block?site=…&back=…") that blocked apps and sites land
+// on. Everything comes from the daemon's /api/state, polled every second; the engine behind it
+// is the phone's. Insights reads /api/history (both devices' log, History.kt). The look, the
+// icons and Insights are shared with the sync server's status page (server/web, copied in).
+//
+// The page redraws every second, but only what has no text field in it: the block form and the
+// settings you edit are built once and kept, so typing never loses its place.
+
+import { h, s, icon, duration, inkOn, savedTheme, saveTheme, applyTheme } from "./ui.js";
+import { PALETTE, normalizeBlocks, mergeShared, renderInsights } from "./insights.js";
 
 const params = new URLSearchParams(location.search);
 const onBlockPage = location.pathname === "/block";
@@ -9,16 +17,25 @@ const blockedSite = params.get("site");
 // The page a blocked tab left: the extension puts it in the hash (raw), older links in ?back=.
 const backUrl = location.hash.length > 1 ? location.hash.slice(1) : params.get("back");
 
+const THEME_KEY = "xrnrule.theme";
+const INSIGHTS_KEY = "xrnrule.insights";
+applyTheme(savedTheme(THEME_KEY));
+
 let state = null;
 let apps = null; // installed desktop apps, loaded when the form opens
 let habits = null; // [{uuid, name}] to link tasks to, or {error}; loaded when the form opens
 let form = null; // the block form: { blockId (null: a new block), data, apps: Set, sitesText, filter, error }
-let formNode = null; // kept across redraws, so typing survives the once-a-second refresh
-let guard = null; // { token, until, label, close }: a loosening waiting out its 60 s
+let formNode = null; // the form's page, kept while it is open, so typing survives the once-a-second refresh
+let guard = null; // { token, until, waitMs, label, close }: a loosening waiting out its 60 s
 let message = "";
 let failed = false;
 let phrase = ""; // the override sentence as typed so far, kept across redraws
-let settingsForm = null; // the settings card's fields while open
+let clockOffset = 0; // the daemon's wall clock less this browser's
+let tab = onBlockPage ? "blocks" : tabOf(location.hash);
+
+function tabOf(hash) {
+  return hash === "#insights" ? "insights" : hash === "#settings" ? "settings" : "blocks";
+}
 
 // ---- data ----------------------------------------------------------------------------------
 
@@ -47,6 +64,7 @@ async function refresh() {
     const subject = onBlockPage ? `?${new URLSearchParams(blockedApp ? { app: blockedApp } : { site: blockedSite ?? "" })}` : "";
     const res = await fetch(`/api/state${subject}`, { cache: "no-store" });
     state = await res.json();
+    clockOffset = state.nowWall - Date.now();
     failed = false;
   } catch {
     failed = true;
@@ -62,7 +80,7 @@ async function act(body) {
 }
 
 function startGuard(token, waitMs, label, close = true) {
-  guard = { token, until: Date.now() + waitMs, label, close };
+  guard = { token, until: Date.now() + waitMs, waitMs, label, close };
   render();
 }
 
@@ -70,6 +88,7 @@ async function tickGuard() {
   if (!guard || Date.now() < guard.until) return;
   const { token, close } = guard;
   guard = null;
+  showWait();
   const result = await post("/api/confirm", { token });
   message = result.error ?? "";
   if (!result.error && close) closeForm();
@@ -82,6 +101,7 @@ function cancelGuard() {
   post("/api/confirm", { token: guard.token, cancel: true });
   guard = null;
   message = "Wait cancelled";
+  showWait();
 }
 document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && cancelGuard());
 window.addEventListener("pagehide", cancelGuard);
@@ -93,19 +113,6 @@ function heartbeat() {
 }
 
 // ---- helpers -------------------------------------------------------------------------------
-
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else if (k === "class") el.className = v;
-    else if (k in el) el[k] = v;
-    else el.setAttribute(k, v);
-  }
-  for (const c of children.flat(Infinity)) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
-  return el;
-}
 
 // A website's own icon, served by the daemon (which asks the site once and keeps it). The page
 // redraws every second: one that isn't there yet is asked for again after 30 s, not every time.
@@ -121,6 +128,7 @@ function siteIcon(site) {
 }
 
 const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const lockEnd = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
 const min = (ms) => Math.max(0, Math.round(ms / 60000));
 const clock = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -152,40 +160,16 @@ const backHere = (back, site) => {
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
+/** A block's colour: by its place in the list, as Insights colours it. */
+const colourOf = (id) => PALETTE[Math.max(0, state?.blocks.findIndex((b) => b.id === id) ?? 0) % PALETTE.length];
+const tinted = (colour) => ({ "--c": colour, "--ink": inkOn(colour) });
+const initial = (name) => (String(name ?? "").trim()[0] ?? "x").toUpperCase();
+
 /** The engine's words for how a block stands: the same sentence as the phone's card. */
 const TONE = { BLOCKED: "blocked", READY: "earned", OPEN: "open", OFF: "idle" };
 
 /** Loop's entry values (contract §1). */
 const YES_MANUAL = 2, YES_AUTO = 1, NO = 0;
-
-/**
- * A habit a block asks for (contract I23, I36): tick it (on the item's day), add to it, or run its
- * focus timer. Amounts are thousandths of the unit (minutes for a timer).
- */
-function habitItem(x) {
-  const units = (n) => +(n / 1000).toFixed(3);
-  const unit = x.unit && x.kind !== "TIMER" ? ` ${x.unit}` : "";
-  const day = x.yesterday ? " (yesterday)" : "";
-  if (x.kind === "CHECK") {
-    const ticked = x.dayValue === YES_MANUAL;
-    return h("label", {},
-      h("input", { type: "checkbox", checked: ticked || x.dayValue === YES_AUTO, onchange: () => act({ type: "set", habitId: x.id, day: x.day, value: ticked ? NO : YES_MANUAL }) }),
-      x.name + day,
-      x.unlock === null ? h("span", { class: "linked" }, "never opens")
-        : x.spent > 0 && x.amount < 1 && h("span", { class: "linked" }, "used"));
-  }
-  const toward = x.unlock === null ? "never opens"
-    : x.kind === "TIMER" ? `${Math.floor(Math.min(x.amount, x.unlock) / 1000)} / ${units(x.unlock)} min` : `${units(Math.min(x.amount, x.unlock))} / ${units(x.unlock)}${unit}`;
-  return h("div", { class: "habit" },
-    h("div", { class: "actions" },
-      h("span", {}, x.name + day),
-      h("span", { class: "note" }, toward),
-      x.kind === "COUNT" && !x.yesterday && h("button", { class: "btn", onclick: () => act({ type: "log", habitId: x.id, amount: 1000 }) }, "+1"),
-      x.kind === "COUNT" && !x.yesterday && x.dayValue > 0 && h("button", { class: "btn", onclick: () => act({ type: "log", habitId: x.id, amount: -1000 }) }, "−1"),
-      x.kind === "TIMER" && !x.yesterday && h("button", { class: "btn", onclick: () => act({ type: x.focusing ? "focusPause" : "focus", habitId: x.id }) }, x.focusing ? "Pause" : x.onBreak ? "Resume" : "Focus"),
-      x.kind === "TIMER" && (x.focusing || x.onBreak) && h("button", { class: "btn", onclick: () => act({ type: "focusEnd" }) }, "End")),
-    h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (x.amount / Math.max(1, x.unlock ?? 1)) * 100)}%` })));
-}
 
 function limitHow(b) {
   const parts = [];
@@ -217,7 +201,133 @@ function how(b) {
   return rules.length ? rules.join(" ") : null;
 }
 
-// ---- views ---------------------------------------------------------------------------------
+/** "Do both", "Do all", "Do 2 of 3": how a habit block's rows add up, or null for one row. */
+function joinTag(b, parts) {
+  if (parts < 2) return null;
+  if (b.trigger === "COMBINED") {
+    if (b.combineOr) return parts === 2 ? "Do either" : "Timer or all tasks";
+    return parts === 2 ? "Do both" : "Do all";
+  }
+  if (b.trigger === "CHECKLIST") {
+    if (b.requiredItems === -1 || b.requiredItems >= parts) return parts === 2 ? "Do both" : "Do all";
+    return `Do ${b.requiredItems} of ${parts}`;
+  }
+  return null;
+}
+
+// ---- the wait (contract §2.3): a ring counting down over the dimmed page ---------------------
+// Its length and its rules are the daemon's: 60 s, confirmed once over, cancelled by leaving.
+
+const RING_R = 80;
+const RING_C = 2 * Math.PI * RING_R;
+
+/** The ring and the seconds in it. */
+function ring() {
+  const arc = s("circle", { class: "arc", cx: 92, cy: 92, r: RING_R, "stroke-dasharray": RING_C, "stroke-dashoffset": 0 });
+  const num = h("b", {}, "");
+  const node = h("div", { class: "ring" },
+    s("svg", { viewBox: "0 0 184 184", "aria-hidden": "true" }, s("circle", { class: "track", cx: 92, cy: 92, r: RING_R }), arc),
+    h("div", { class: "ring-num" }, num, h("span", {}, "s")));
+  return {
+    node,
+    set(left, total) {
+      const frac = total > 0 ? Math.max(0, Math.min(1, left / total)) : 0;
+      arc.setAttribute("stroke-dashoffset", String(RING_C * (1 - frac)));
+      const text = String(Math.ceil(Math.max(0, left) / 1000));
+      if (num.textContent !== text) num.textContent = text;
+      node.classList.toggle("done", left <= 0);
+    },
+  };
+}
+
+let waitView = null; // { node, update, key }
+let waitFrame = 0;
+
+/** Shows, updates or takes down the wait: a loosening's (guard), or minutes being bought. */
+function showWait() {
+  const sub = state?.subject;
+  const buying = onBlockPage && sub?.overrideReadyAtWall && !sub.overrideRejection;
+  const want = guard ? `guard:${guard.token}` : buying ? `buy:${sub.overrideReadyAtWall}` : null;
+  if (!want) {
+    waitView?.node.remove();
+    waitView = null;
+    cancelAnimationFrame(waitFrame);
+    return;
+  }
+  if (waitView?.key !== want) {
+    waitView?.node.remove();
+    waitView = guard ? guardModal() : buyModal();
+    waitView.key = want;
+    document.body.append(waitView.node);
+    waitView.node.querySelector("input, .btn")?.focus();
+  }
+  cancelAnimationFrame(waitFrame);
+  const step = () => {
+    if (!waitView) return;
+    waitView.update();
+    waitFrame = requestAnimationFrame(step);
+  };
+  step();
+}
+
+function guardModal() {
+  const r = ring();
+  const cancel = () => { cancelGuard(); render(); };
+  const node = h("div", { class: "scrim", role: "dialog", "aria-modal": "true", "aria-label": guard.label, onkeydown: (e) => e.key === "Escape" && cancel() },
+    h("div", { class: "modal" },
+      r.node,
+      h("p", { class: "what" }, guard.label),
+      h("button", { class: "btn outline", type: "button", onclick: cancel }, "Cancel")));
+  return { node, update: () => guard && r.set(guard.until - Date.now(), guard.waitMs) };
+}
+
+// ---- buying minutes (contract I34) ---------------------------------------------------------
+// The daemon owns the wait and checks the sentence; this page only shows them.
+
+function subjectBody() {
+  return blockedApp ? { app: blockedApp } : { site: blockedSite };
+}
+
+async function buy(op, extra = {}) {
+  const result = await post("/api/override", { op, ...subjectBody(), ...extra });
+  message = result.error ?? "";
+  if (op === "claim" && !result.error) phrase = "";
+  refresh();
+}
+
+function buyModal() {
+  const r = ring();
+  const minutes = min(state.settings.grantMs);
+  const claim = () => buy("claim", { phrase });
+  const button = h("button", { class: "btn primary", type: "button", onclick: claim }, `Open for ${minutes} min`);
+  const error = h("p", { class: "phrase-line bad" });
+  const node = h("div", { class: "scrim", role: "dialog", "aria-modal": "true", "aria-label": `${minutes} more minutes`, onkeydown: (e) => e.key === "Escape" && buy("cancel") },
+    h("div", { class: "modal" },
+      r.node,
+      h("p", { class: "what" }, `${blockedApp ? appName(blockedApp) : blockedSite} · ${minutes} min`),
+      h("p", { class: "phrase-line" }, "Type ", h("b", {}, `“${state.settings.phrase}”`)),
+      h("input", {
+        type: "text", class: "phrase", value: phrase, placeholder: state.settings.phrase, autocomplete: "off", spellcheck: false,
+        oninput: (e) => (phrase = e.target.value), onkeydown: (e) => e.key === "Enter" && claim(),
+      }),
+      error,
+      h("div", { class: "actions" },
+        button,
+        h("button", { class: "btn outline", type: "button", onclick: () => buy("cancel") }, "Cancel"))));
+  return {
+    node,
+    update: () => {
+      const sub = state?.subject;
+      if (!sub?.overrideReadyAtWall) return;
+      const left = sub.overrideReadyAtWall - (Date.now() + clockOffset);
+      r.set(left, state.settings.waitMs);
+      button.disabled = left > 0;
+      if (error.textContent !== message) error.textContent = message;
+    },
+  };
+}
+
+// ---- Blocks --------------------------------------------------------------------------------
 
 /** Off the block page: back where you came from; with nowhere to go, the tab closes or, failing that, all blocks. */
 let leaving = null;
@@ -233,63 +343,162 @@ const ruleLine = (b) => h("p", { class: "rule" }, h("b", {}, b.name), `: ${how(b
 
 /**
  * The block's picture, as the phone's card has one: its site's icon, up to four of them, or the
- * first letter of its laptop app (the page has no app icons).
+ * first letter of its name in its colour (the page has no app icons), which also shows when a
+ * site has no icon to give.
  */
 function blockTile(b) {
   const icons = b.shownSites.slice(0, 4).map(siteIcon).filter(Boolean);
-  if (icons.length === 1) return h("div", { class: "tile one" }, icons[0]);
   if (icons.length > 1) return h("div", { class: "tile many" }, icons);
-  const first = (b.desktopApps.length ? appName(b.desktopApps[0]) : b.name).trim();
-  return h("div", { class: "tile" }, h("span", { class: "glyph" }, (first[0] ?? "x").toUpperCase()));
+  return h("div", { class: `tile letter${icons.length ? " one" : ""}`, style: tinted(colourOf(b.id)) }, initial(b.name), icons[0]);
+}
+
+/** One thing a block asks for or holds to (the phone's HabitRow), [kind] its colour. */
+function rrow({ ic, kind, label, value, fraction, note, dim, action, loop }) {
+  return h("div", { class: `rrow k-${kind}${dim ? " dim" : ""}` },
+    loop ? h("img", { class: "loop", src: "/xrnloops.svg", alt: "xrnloops" }) : icon(ic),
+    h("div", { class: "main" },
+      h("div", { class: "top" }, h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
+      fraction != null && h("div", { class: "meter" }, h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } })),
+      note && h("span", { class: "note" }, note)),
+    h("div", { class: "acts" }, action));
+}
+
+/** A round tick, the phone's row action. */
+const tick = (key, checked, disabled, onchange, kind = null) =>
+  h("input", { type: "checkbox", class: "tick", "data-key": key, checked, disabled, onchange, style: kind ? { "--k": `var(--k-${kind})` } : null, "aria-label": "Done" });
+
+/** A round button at the end of a row: an icon, or a short text ("+1"). */
+const ract = (key, content, title, onclick, cls = "") =>
+  h("button", { type: "button", class: `ract ${cls}`.trim(), "data-key": key, title, "aria-label": title, onclick }, cls.includes("text") ? content : icon(content));
+
+/** A block's limit and its blocked hours, on any kind of block that has them (I44). */
+function ruleRows(b) {
+  const rows = [];
+  if (b.hasLimit) {
+    if (b.allowanceMs > 0) {
+      rows.push(rrow({ ic: "hourglass", kind: "limit", label: b.perDevice ? "Daily limit, this laptop" : "Daily limit", value: `${min(b.allowanceUsedMs)} / ${min(b.allowanceMs)} min`, fraction: b.allowanceUsedMs / b.allowanceMs }));
+    }
+    if (b.rowMs > 0) {
+      rows.push(rrow({
+        ic: "timer", kind: "limit", label: "Time in a row", value: `${min(b.rowUsedMs)} / ${min(b.rowMs)} min`, fraction: b.rowUsedMs / b.rowMs,
+        note: b.rowBreakRemainingMs > 0 ? `Break · ${clock(b.rowBreakRemainingMs)}` : null,
+      }));
+    }
+    if (b.opensPerDay > 0) {
+      rows.push(rrow({ ic: "openNew", kind: "limit", label: b.perDevice ? "Opens today, this laptop" : "Opens today", value: `${b.opensUsed} / ${b.opensPerDay}`, fraction: b.opensUsed / b.opensPerDay }));
+    }
+  }
+  if (b.mode !== "SCHEDULE" && b.hoursText) rows.push(rrow({ ic: "calendar", kind: "strict", label: "Blocked hours", note: b.hoursText, dim: b.reason !== "HOURS" }));
+  return rows;
+}
+
+/** A habit (contract I23, I36): tick it (on the item's day), add to it, or run its focus timer. Amounts are thousandths of the unit. */
+function habitRow(x) {
+  const units = (n) => +(n / 1000).toFixed(3);
+  const unit = x.unit && x.kind !== "TIMER" ? ` ${x.unit}` : "";
+  const label = x.name + (x.yesterday ? " (yesterday)" : "");
+  if (x.kind === "CHECK") {
+    const ticked = x.dayValue === YES_MANUAL;
+    return rrow({
+      loop: true, kind: "loop", label,
+      value: x.unlock === null ? "Never opens" : x.spent > 0 && x.amount < 1 ? "Used" : null,
+      action: tick(`habit:${x.id}`, ticked || x.dayValue === YES_AUTO, false, () => act({ type: "set", habitId: x.id, day: x.day, value: ticked ? NO : YES_MANUAL }), "loop"),
+    });
+  }
+  const toward = x.unlock === null ? "Never opens"
+    : x.kind === "TIMER" ? `${Math.floor(Math.min(x.amount, x.unlock) / 1000)} / ${units(x.unlock)} min` : `${units(Math.min(x.amount, x.unlock))} / ${units(x.unlock)}${unit}`;
+  const actions = [];
+  if (x.kind === "COUNT" && !x.yesterday) {
+    if (x.dayValue > 0) actions.push(ract(`minus:${x.id}`, "−1", "Less one", () => act({ type: "log", habitId: x.id, amount: -1000 }), "text"));
+    actions.push(ract(`plus:${x.id}`, "+1", "Add one", () => act({ type: "log", habitId: x.id, amount: 1000 }), "text"));
+  }
+  if (x.kind === "TIMER" && !x.yesterday) {
+    actions.push(ract(`focus:${x.id}`, x.focusing ? "pause" : "play", x.focusing ? "Pause" : x.onBreak ? "Resume" : "Focus", () => act({ type: x.focusing ? "focusPause" : "focus", habitId: x.id })));
+  }
+  if (x.kind === "TIMER" && (x.focusing || x.onBreak)) actions.push(ract(`end:${x.id}`, "check", "End", () => act({ type: "focusEnd" }), "ring"));
+  return rrow({ loop: true, kind: "loop", label, value: toward, fraction: x.unlock ? Math.min(1, x.amount / Math.max(1, x.unlock)) : null, action: actions });
+}
+
+/** A habit block's body, as the phone's: its open pill when earned, then a row per thing it asks for. */
+function habitBody(b) {
+  if (b.state === "UNLOCKED") return []; // the headline says how long
+  const out = [];
+  if (b.state === "EARNED") {
+    const capped = b.redeemRejection === "CAP_REACHED";
+    const held = b.redeemRejection === "HELD"; // I44: opening now would open nothing
+    if (capped) out.push(h("div", { class: "pill" }, `${min(state.dailyCapMs)} min used today`));
+    else if (held) out.push(h("div", { class: "pill" }, "Done · opens once it's no longer blocked"));
+    else out.push(h("button", { class: "pill go", type: "button", "data-key": `redeem:${b.id}`, onclick: () => act({ type: "redeem", blockId: b.id }) }, `Open for ${min(b.unlockMs)} min`));
+  }
+  const armed = b.state === "ARMED";
+  const rows = b.items.map((i) => {
+    if (i.habit) return habitRow(i.habit);
+    // An NFC tag (I43): only the phone ticks it, by reading the tag; unticking is always fine.
+    if (i.tag) {
+      return rrow({
+        ic: "nfc", kind: "blue", label: i.text, dim: i.done, value: i.done ? "Scanned" : "On the phone",
+        action: tick(`item:${i.id}`, i.done, !(armed && i.done), (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }), "blue"),
+      });
+    }
+    return rrow({ ic: "task", kind: "habit", label: i.text, dim: i.done, action: tick(`item:${i.id}`, i.done, !armed, (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })) });
+  });
+  if (b.trigger === "TIMER" || b.trigger === "COMBINED") {
+    rows.push(rrow({
+      ic: "timer", kind: "timer", label: "Timer", value: `${clock(Math.min(b.timerMs, b.requiredMs))} / ${clock(b.requiredMs)}`,
+      fraction: b.timerMs / Math.max(1, b.requiredMs),
+      action: armed && b.timerMs < b.requiredMs && ract(`timer:${b.id}`, b.timerRunning ? "pause" : "play", b.timerRunning ? "Pause" : "Start", () => act({ type: "timer", blockId: b.id, running: !b.timerRunning })),
+    }));
+  }
+  const tag = joinTag(b, rows.length);
+  if (tag) out.push(h("span", { class: "tag jointag" }, tag));
+  if (!rows.length) out.push(h("span", { class: "label" }, "Nothing unlocks it yet"));
+  out.push(...rows);
+  return out;
+}
+
+/** Daily limit, schedule, lockdown: no habit to do, so the card says where the rule stands. */
+function strictBody(b) {
+  if (b.mode === "ALLOWANCE") return ruleRows(b);
+  if (b.mode === "SCHEDULE") return b.scheduleText ? [rrow({ ic: "calendar", kind: "strict", label: "Blocked hours", note: b.scheduleText, dim: !b.blocking })] : [];
+  if (b.mode === "LOCKDOWN") {
+    if (b.lockdownRemainingMs > 0) {
+      return [rrow({ ic: "lock", kind: "strict", label: "Locked down", value: `${clock(b.lockdownRemainingMs)} left`, fraction: 1 - b.lockdownRemainingMs / Math.max(1, b.lockdownMs) })];
+    }
+    return [
+      rrow({ ic: "lock", kind: "strict", label: "Lockdown over", dim: true }),
+      b.enabled && h("button", { class: "pill outline", type: "button", "data-key": `lockdown:${b.id}`, onclick: () => act({ type: "lockdown", blockId: b.id }) }, icon("lock"), `Block again for ${duration(b.lockdownMs)}`),
+    ].filter(Boolean);
+  }
+  return [];
+}
+
+function targets(b) {
+  const chips = [
+    !onBlockPage && b.phoneApps > 0 && h("span", { class: "target", title: "Phone apps" }, icon("phone"), `${b.phoneApps} app${b.phoneApps === 1 ? "" : "s"}`),
+    ...b.shownSites.map((x) => h("span", { class: "target" }, siteIcon(x) ?? icon("globe"), x)),
+    ...b.exceptSites.map((x) => h("span", { class: "target except", title: "Left alone" }, x)),
+    ...b.desktopApps.map((a) => h("span", { class: "target", title: "Laptop app" }, icon("laptop"), appName(a))),
+  ].filter(Boolean);
+  return chips.length ? h("div", { class: "targets" }, chips) : null;
 }
 
 function blockCard(b) {
   const cls = TONE[b.headline.tone] ?? "idle";
-  const hasTimer = b.mode === "HABIT" && (b.trigger === "TIMER" || b.trigger === "COMBINED") && b.state === "ARMED";
-  const manualOpen = b.mode === "HABIT" && b.state === "ARMED";
-  const actions = [];
-  if (b.state === "EARNED" && b.mode === "HABIT") {
-    const capped = b.redeemRejection === "CAP_REACHED";
-    const held = b.redeemRejection === "HELD"; // I44: opening now would open nothing
-    actions.push(h("button", { class: "btn primary", disabled: capped || held, onclick: () => act({ type: "redeem", blockId: b.id }) }, `Open for ${min(b.unlockMs)} min`));
-    if (capped) actions.push(h("span", { class: "note" }, `${min(state.dailyCapMs)} min used today`));
-  }
-  if (b.mode === "LOCKDOWN" && b.lockdownRemainingMs === 0 && b.enabled) {
-    actions.push(h("button", { class: "btn", onclick: () => act({ type: "lockdown", blockId: b.id }) }, `Start lockdown (${min(b.lockdownMs)} min)`));
-  }
-  const edit = !onBlockPage && form?.blockId !== b.id && h("button", { class: "btn edit", onclick: () => openForm(b) }, "Edit");
-  return h("section", { class: "card block" + (form?.blockId === b.id ? " editing" : "") },
+  const editable = !onBlockPage;
+  const sub = [
+    b.devices === "PHONE" && h("span", {}, "Phone only"),
+    b.devices === "LAPTOP" && h("span", {}, "Laptop only"),
+    b.lockedUntilWall && h("span", { class: "locked" }, `Locked until ${lockEnd.format(b.lockedUntilWall)}`),
+    b.hardcore && h("span", { class: "tag strict" }, "Hardcore"),
+  ].filter(Boolean);
+  const body = !b.enabled ? [] : b.mode === "HABIT" ? [...ruleRows(b), ...habitBody(b)] : strictBody(b);
+  const head = [blockTile(b), h("div", { class: "name" }, h("h3", {}, b.name), h("div", { class: `headline ${cls}` }, b.headline.text), sub.length > 0 && h("div", { class: "sub" }, sub))];
+  return h("section", { class: `card bcard${b.enabled ? "" : " off"}`, "data-block": b.id },
     h("div", { class: "head" },
-      blockTile(b),
-      h("div", { class: "name" },
-        h("h3", {}, b.name),
-        h("div", { class: `headline ${cls}` }, b.headline.text),
-        h("div", { class: "chips" },
-          b.devices === "PHONE" && h("span", { class: "chip" }, "phone only"),
-          b.devices === "LAPTOP" && h("span", { class: "chip" }, "laptop only"),
-          b.hardcore && h("span", { class: "chip strict" }, "hardcore"))),
-      edit),
-    hasTimer && h("div", {},
-      h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (b.timerMs / Math.max(1, b.requiredMs)) * 100)}%` })),
-      h("div", { class: "actions", style: "margin-top:8px" },
-        h("span", { class: "note" }, `${clock(b.timerMs)} of ${clock(b.requiredMs)}`),
-        h("button", { class: "btn", onclick: () => act({ type: "timer", blockId: b.id, running: !b.timerRunning }) }, b.timerRunning ? "Pause" : "Start"))),
-    b.items.length > 0 && b.mode === "HABIT" && h("div", { class: "items" }, b.items.map((i) => i.habit ? habitItem(i.habit) :
-      // An NFC tag (I43): only the phone ticks it, by reading the tag.
-      i.tag ? h("label", {},
-        h("input", { type: "checkbox", checked: i.done, disabled: !(manualOpen && i.done), onchange: (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }) }),
-        i.text, h("small", {}, i.done ? " · scanned" : " · hold the phone to it")) :
-      h("label", {},
-        h("input", { type: "checkbox", checked: i.done, disabled: !manualOpen, onchange: (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked }) }),
-        i.text))),
-    how(b) && h("div", { class: "how" }, how(b)),
-    h("div", { class: "targets" },
-      !onBlockPage && b.phoneApps > 0 && h("span", { class: "target" }, `${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
-      b.shownSites.map((s) => h("span", { class: "target" }, siteIcon(s), s)),
-      b.exceptSites.map((s) => h("span", { class: "target except", title: "Left alone" }, `not ${s}`)),
-      b.desktopApps.map((a) => h("span", { class: "target" }, `💻 ${appName(a)}`))),
-    actions.length > 0 && h("div", { class: "actions" }, actions),
-    form?.blockId === b.id && formView(b));
+      editable ? h("button", { class: "open", type: "button", "data-key": `open:${b.id}`, title: "Edit", onclick: () => openForm(b) }, head) : h("div", { class: "open" }, head),
+      editable && h("button", { class: "round", type: "button", "data-key": `edit:${b.id}`, title: "Edit", "aria-label": `Edit ${b.name}`, onclick: () => openForm(b) }, icon("edit"))),
+    body.length > 0 && h("div", { class: "rows" }, body),
+    targets(b));
 }
 
 // ---- the block form ------------------------------------------------------------------------
@@ -353,6 +562,7 @@ async function openForm(b) {
     }
     : { blockId: null, data: { ...base, name: "", kind: "HABIT", setTime: "SCHEDULE", itemsText: "", linked: new Map() }, apps: new Set(), sitesText: "", exceptText: "", filter: "", error: "" };
   formNode = null;
+  window.scrollTo(0, 0);
   render();
   const loads = [];
   if (!apps) loads.push(fetch("/api/apps").then((r) => r.json()).then((list) => (apps = list)));
@@ -374,9 +584,10 @@ function formMode() {
   return d.kind === "TIME" ? d.setTime : d.kind;
 }
 
+/** The form's page: built once, then only what the daemon changes (its tasks, its rules in words) moves. */
 function formView(b) {
   if (!formNode) formNode = buildForm(b);
-  formNode.querySelector(".guard").replaceChildren(guardView());
+  formNode.querySelector(".form-notice").replaceChildren(noticeView() ?? "");
   const howNote = formNode.querySelector(".form-how");
   if (howNote && b && howNote.textContent !== (how(b) ?? "")) howNote.textContent = how(b) ?? "";
   const list = formNode.querySelector(".form-items");
@@ -404,10 +615,12 @@ function buildForm(b) {
   const mode = formMode();
   const errorBox = h("div", { class: "error" }, form.error);
   const number = (key, attrs = {}) => h("input", { type: "number", min: 1, step: 1, value: d[key], oninput: (e) => (d[key] = Number(e.target.value)), ...attrs });
-  const field = (label, input, hint) => h("label", { class: "field" }, h("span", {}, label), input, hint && h("small", {}, hint));
-  const check = (key, label) => h("label", { class: "check" }, h("input", { type: "checkbox", checked: d[key], onchange: (e) => { d[key] = e.target.checked; rebuildForm(); } }), label);
+  const field = (label, input) => h("label", { class: "field" }, h("span", {}, label), input);
+  const check = (key, label) => h("label", { class: "check" }, h("span", {}, label), h("input", { type: "checkbox", class: "switch", checked: d[key], onchange: (e) => { d[key] = e.target.checked; rebuildForm(); } }));
+  const pick = (key, label) => h("label", { class: "check" }, h("input", { type: "checkbox", class: "pick", checked: d[key], onchange: (e) => { d[key] = e.target.checked; rebuildForm(); } }), label);
   const seg = (key, options) => h("div", { class: "seg" }, options.map(([value, label]) =>
     h("button", { type: "button", class: d[key] === value ? "on" : "", onclick: () => { d[key] = value; rebuildForm(); } }, label)));
+  const group = (title, ...children) => [h("h3", { class: "section" }, title), h("div", { class: "group" }, children)];
 
   // What to block
   const list = h("div", { class: "applist" });
@@ -422,15 +635,13 @@ function buildForm(b) {
           a.name, h("small", {}, a.id))));
   };
   drawList();
-  const targets = h("fieldset", {},
-    h("legend", {}, "What to block"),
+  const targetsGroup = group("What to block",
     h("input", { type: "search", placeholder: "Find a laptop app", value: form.filter, oninput: (e) => { form.filter = e.target.value; drawList(); } }),
     list,
-    field("Websites", h("textarea", { value: form.sitesText, placeholder: "youtube.com\nreddit.com", oninput: (e) => (form.sitesText = e.target.value) }),
-      "One per line"),
-    field("Leave these alone", h("textarea", { class: "short", value: form.exceptText, placeholder: "music.youtube.com", oninput: (e) => (form.exceptText = e.target.value) }),
-      "One per line"),
-    b?.phoneApps > 0 && h("div", { class: "note" }, `+ ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`));
+    field("Websites", h("textarea", { value: form.sitesText, placeholder: "youtube.com\nreddit.com", oninput: (e) => (form.sitesText = e.target.value) })),
+    field("Leave these alone", h("textarea", { class: "short", value: form.exceptText, placeholder: "music.youtube.com", oninput: (e) => (form.exceptText = e.target.value) })),
+    b?.phoneApps > 0 && h("div", { class: "note" }, `+ ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`),
+    field("Blocks on", seg("devices", [["BOTH", "Both"], ["PHONE", "Phone"], ["LAPTOP", "Laptop"]])));
 
   // Days and times, for a schedule or a block's blocked hours.
   const dayPick = (days, set) => h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
@@ -443,14 +654,14 @@ function buildForm(b) {
     onblur: (e) => (e.target.value = hhmm(w[key])),
   });
   const times = (w) => h("div", { class: "row" }, field("From", timeInput(w, "startMin")), field("Until", timeInput(w, "endMin")));
-  const timesEditor = (s, allDay = false) => [
-    dayPick(s.days, (days) => (s.days = days)),
-    !allDay && times(s),
-    s.moreWindows.map((w, i) => h("div", { class: "window" },
+  const timesEditor = (sched, allDay = false) => [
+    dayPick(sched.days, (days) => (sched.days = days)),
+    !allDay && times(sched),
+    sched.moreWindows.map((w, i) => h("div", { class: "window" },
       dayPick(w.days, (days) => (w.days = days)),
       times(w),
-      h("button", { class: "btn ghost", type: "button", onclick: () => { s.moreWindows.splice(i, 1); rebuildForm(); } }, "Remove these times"))),
-    h("button", { class: "btn", type: "button", onclick: () => { s.moreWindows.push({ days: [1, 2, 3, 4, 5, 6, 7], startMin: 1080, endMin: 1320 }); rebuildForm(); } }, "More times"),
+      h("button", { class: "btn ghost", type: "button", onclick: () => { sched.moreWindows.splice(i, 1); rebuildForm(); } }, icon("delete"), "Remove"))),
+    h("button", { class: "btn outline", type: "button", onclick: () => { sched.moreWindows.push({ days: [1, 2, 3, 4, 5, 6, 7], startMin: 1080, endMin: 1320 }); rebuildForm(); } }, icon("add"), "More times"),
   ];
 
   // The limit and blocked hours go on a habit block too (I44).
@@ -462,15 +673,15 @@ function buildForm(b) {
     check("opensOn", "At most so many opens a day"),
     d.opensOn && field("Opens a day", number("opensPerDay")),
     check("openWaitOn", "A pause before it opens"),
-    d.openWaitOn && field("Seconds", number("openWaitS"), "Websites only"),
+    d.openWaitOn && field("Seconds (websites)", number("openWaitS")),
     field("Phone and laptop", seg("perDevice", [[false, "Share one limit"], [true, "Each has its own"]])),
   ];
-  const limitSet = mode === "ALLOWANCE" ? h("fieldset", {}, h("legend", {}, "Daily limit"), limitFields())
-    : mode === "HABIT" && h("fieldset", {}, h("legend", {}, "Daily limit"),
+  const limitSet = mode === "ALLOWANCE" ? group("Daily limit", limitFields())
+    : mode === "HABIT" && group("Daily limit",
       check("limitOn", "Limit it too"),
       d.limitOn && limitFields(),
       d.limitOn && (d.dailyOn || d.opensOn) && field("What comes first", seg("habitFirst", [[false, "Limit first"], [true, "Habit first"]])));
-  const hoursSet = (mode === "HABIT" || mode === "ALLOWANCE") && h("fieldset", {}, h("legend", {}, "Blocked hours"),
+  const hoursSet = (mode === "HABIT" || mode === "ALLOWANCE") && group("Blocked hours",
     check("hoursOn", "Block it outright at set times"),
     d.hoursOn && check("hoursAllDay", "All day on these days"),
     d.hoursOn && timesEditor(d.hours, d.hoursAllDay));
@@ -485,66 +696,71 @@ function buildForm(b) {
         const on = d.linked.has(x.uuid);
         return h("label", {},
           h("input", { type: "checkbox", checked: on, onchange: (e) => { e.target.checked ? d.linked.set(x.uuid, { uuid: x.uuid, name: x.name, yesterday: false }) : d.linked.delete(x.uuid); rebuildForm(); } }),
+          h("img", { class: "favicon", src: "/xrnloops.svg", alt: "" }),
           x.name,
-          on && h("small", {}, h("label", { class: "check inline" }, h("input", { type: "checkbox", checked: d.linked.get(x.uuid).yesterday, onchange: (e) => (d.linked.get(x.uuid).yesterday = e.target.checked) }), "counts yesterday's tick")));
-      }) : h("div", { class: "note" }, "No habits yet."))
+          on && h("small", {}, h("label", { class: "check inline" }, h("input", { type: "checkbox", class: "pick", checked: d.linked.get(x.uuid).yesterday, onchange: (e) => (d.linked.get(x.uuid).yesterday = e.target.checked) }), "yesterday's tick")));
+      }) : h("div", { class: "note" }, "No habits yet"))
       : h("div", { class: "note" }, habits?.error ?? (state?.syncConfigured ? "Loading…" : "Needs sync"));
-    rules = h("fieldset", {},
-      h("legend", {}, "How it unlocks"),
+    rules = group("How it unlocks",
       isNew
-        ? h("div", { class: "checks" }, check("checklist", "Do tasks"), check("timer", "Wait on a timer"))
+        ? h("div", { class: "checks" }, pick("checklist", "Do tasks"), pick("timer", "Wait on a timer"))
         : h("div", { class: "note form-how" }, how(b) ?? ""),
       hasTasks && hasTimer && field("Needs", seg("combineOr", [[false, "Both"], [true, "Either one"]])),
-      hasTimer && field("Timer (minutes)", number("timerMin"), "It counts while you wait on the block page."),
+      hasTimer && field("Timer (minutes)", number("timerMin")),
       isNew && hasTasks && field("Tasks", h("textarea", { value: d.itemsText, placeholder: "One per line", oninput: (e) => (d.itemsText = e.target.value) })),
       isNew && hasTasks && h("div", { class: "field" }, h("span", {}, "Habits that unlock it"), linkList),
       !isNew && hasTasks && h("div", { class: "field" }, h("span", {}, "Tasks"), h("div", { class: "form-items" }),
         h("div", { class: "row" },
-          h("input", { type: "text", placeholder: "A new task", value: d.newTask, oninput: (e) => (d.newTask = e.target.value), onkeydown: (e) => e.key === "Enter" && addTask() }),
-          h("button", { class: "btn", type: "button", onclick: addTask }, "Add")),
+          h("input", { type: "text", class: "new-task", placeholder: "A new task", value: d.newTask, oninput: (e) => (d.newTask = e.target.value), onkeydown: (e) => e.key === "Enter" && addTask() }),
+          h("button", { class: "btn", type: "button", onclick: addTask }, icon("add"), "Add")),
         Array.isArray(habits) && habits.length > 0 && h("div", { class: "row" },
           h("select", { id: "link-pick" }, habits.filter((x) => !b.items.some((i) => i.habit?.id === x.uuid)).map((x) => h("option", { value: x.uuid }, x.name))),
           h("button", {
             class: "btn", type: "button",
             onclick: () => {
-              const pick = formNode.querySelector("#link-pick");
-              const x = habits.find((y) => y.uuid === pick?.value);
+              const chosen = formNode.querySelector("#link-pick");
+              const x = habits.find((y) => y.uuid === chosen?.value);
               if (x) itemOp({ op: "link", habit: { uuid: x.uuid, name: x.name } });
             },
-          }, "Link habit"))),
-      field("Block again after (minutes)", number("unlockMin", { max: min(state.dailyCapMs) }), `Up to ${min(state.dailyCapMs)} min a day`),
+          }, h("img", { class: "favicon", src: "/xrnloops.svg", alt: "" }), "Link habit"))),
+      field(`Block again after (minutes, up to ${min(state.dailyCapMs)} a day)`, number("unlockMin", { max: min(state.dailyCapMs) })),
       field("Counted as", seg("selfPaced", [[false, "Timer"], [true, "Self paced"]])));
   } else if (mode === "SCHEDULE") {
-    rules = h("fieldset", {}, h("legend", {}, "When it blocks"), timesEditor(d));
+    rules = group("When it blocks", timesEditor(d));
   } else if (mode === "LOCKDOWN") {
-    rules = h("fieldset", {}, h("legend", {}, "Lockdown"), field("Minutes", number("lockdownMin")));
+    rules = group("Lockdown", field("Minutes", number("lockdownMin")));
   }
 
+  const leave = () => { cancelGuard(); message = ""; closeForm(); };
   // An error is about what was sent: it goes as soon as something changes.
-  return h("div", { class: "editor form", "data-block": form.blockId ?? "", oninput: () => form.error && showFormError(""), onchange: () => form.error && showFormError("") },
-    isNew && h("h3", {}, "New block"),
-    field("Name", h("input", { type: "text", value: d.name, placeholder: "Games, Social, …", oninput: (e) => (d.name = e.target.value) })),
-    isNew && field("Kind", seg("kind", [["HABIT", "Habit"], ["ALLOWANCE", "Daily limit"], ["TIME", "Set time"]])),
-    isNew && d.kind === "TIME" && seg("setTime", [["SCHEDULE", "On a schedule"], ["LOCKDOWN", "For a while, from now"]]),
-    targets,
-    field("Blocks on", seg("devices", [["BOTH", "Both"], ["PHONE", "Phone"], ["LAPTOP", "Laptop"]])),
-    rules,
-    limitSet,
-    hoursSet,
-    errorBox,
-    h("div", { class: "guard" }),
-    h("div", { class: "actions" },
-      h("button", { class: "btn primary", type: "button", onclick: submitForm }, isNew ? "Create block" : "Save"),
-      h("button", { class: "btn ghost", type: "button", onclick: () => { cancelGuard(); message = ""; closeForm(); } }, "Cancel"),
-      !isNew && h("span", { class: "spacer" }),
-      !isNew && h("button", { class: "btn danger", type: "button", onclick: () => deleteBlock(b) }, "Delete block")));
+  return h("div", { class: "subpage", "data-block": form.blockId ?? "" },
+    h("div", { class: "form-notice" }),
+    h("div", { class: "page-title" },
+      h("button", { class: "round", type: "button", title: "Back", "aria-label": "Back", onclick: leave }, icon("back")),
+      h("h2", {}, isNew ? "New block" : "Edit block"),
+      h("button", { class: "btn primary", type: "button", onclick: submitForm }, isNew ? "Create" : "Save")),
+    h("div", { class: "editor form", oninput: () => form.error && showFormError(""), onchange: () => form.error && showFormError("") },
+      h("div", { class: "group" },
+        field("Name", h("input", { type: "text", value: d.name, placeholder: "Games, Social, …", oninput: (e) => (d.name = e.target.value) })),
+        isNew && field("Kind", seg("kind", [["HABIT", "Habit"], ["ALLOWANCE", "Daily limit"], ["TIME", "Set time"]])),
+        isNew && d.kind === "TIME" && seg("setTime", [["SCHEDULE", "On a schedule"], ["LOCKDOWN", "For a while, from now"]])),
+      targetsGroup,
+      rules,
+      limitSet,
+      hoursSet,
+      errorBox,
+      h("div", { class: "form-foot" },
+        h("button", { class: "btn primary big", type: "button", onclick: submitForm }, isNew ? "Create block" : "Save"),
+        h("button", { class: "btn ghost", type: "button", onclick: leave }, "Cancel"),
+        !isNew && h("span", { class: "spacer" }),
+        !isNew && h("button", { class: "btn danger", type: "button", onclick: () => deleteBlock(b) }, icon("delete"), "Delete block"))));
 }
 
 function itemRows(b) {
-  if (!b.items.length) return [h("div", { class: "note" }, "No tasks yet.")];
+  if (!b.items.length) return [h("div", { class: "note" }, "No tasks yet")];
   return b.items.map((i) => h("div", { class: "row item" },
-    h("span", {}, i.text, i.habit && h("small", {}, i.habit.yesterday ? " · habit, yesterday's tick" : " · habit"), i.tag && h("small", {}, " · NFC tag, set up on the phone")),
-    h("button", { class: "btn ghost", type: "button", title: "Removing a task waits 60 s", onclick: () => itemOp({ op: "remove", itemId: i.id }, `Removing "${i.text}"`) }, "Remove")));
+    h("span", {}, i.text, i.habit && h("small", {}, i.habit.yesterday ? " · habit, yesterday's tick" : " · habit"), i.tag && h("small", {}, " · NFC tag")),
+    h("button", { class: "btn ghost", type: "button", onclick: () => itemOp({ op: "remove", itemId: i.id }, `Removing “${i.text}”`) }, "Remove")));
 }
 
 function showFormError(text) {
@@ -592,7 +808,7 @@ async function submitForm() {
     hoursMore: d.hours.moreWindows,
   });
   if (result.error) showFormError(result.error);
-  else if (result.token) startGuard(result.token, result.waitMs, result.label ?? "Saving");
+  else if (result.token) startGuard(result.token, result.waitMs, result.label ?? `Saving ${d.name}`);
   else {
     closeForm();
     refresh();
@@ -603,7 +819,7 @@ async function addTask() {
   const text = form.data.newTask.trim();
   if (!text) return;
   form.data.newTask = "";
-  formNode.querySelector('.row input[type="text"]').value = "";
+  formNode.querySelector("input.new-task").value = "";
   await itemOp({ op: "add", text });
 }
 
@@ -626,102 +842,175 @@ async function deleteBlock(b) {
   }
 }
 
-function guardView() {
-  if (!guard) return "";
-  return h("div", { class: "alert" }, h("b", {}, `${guard.label}…`), `${Math.ceil((guard.until - Date.now()) / 1000)} s · leaving cancels`);
-}
+// ---- Insights ------------------------------------------------------------------------------
 
-// ---- buying minutes (contract I34) ---------------------------------------------------------
-// The daemon owns the wait and checks the sentence; this page only shows them.
+let insights = loadInsightsView();
+let historyData = null; // what /api/history answered, shared events merged
+let historyAt = 0;
+let historyLoading = false;
+let insightsNode = null;
+let insightsDrawn = null; // the data the node was last drawn from
 
-function subjectBody() {
-  return blockedApp ? { app: blockedApp } : { site: blockedSite };
-}
-
-async function buy(op, extra = {}) {
-  const result = await post("/api/override", { op, ...subjectBody(), ...extra });
-  message = result.error ?? "";
-  if (op === "claim" && !result.error) phrase = "";
-  refresh();
-}
-
-let buyNode = null; // kept while a wait runs, so typing survives the once-a-second redraw
-let buyKey = null;
-
-function buyView() {
-  const s = state.subject;
-  if (!s) return null;
-  const minutes = min(state.settings.grantMs);
-  if (s.overrideRejection === "NONE_LEFT") return h("p", { class: "note" }, "None left to buy today");
-  if (s.overrideRejection) return null;
-  if (!s.overrideReadyAtWall) {
-    buyNode = null;
-    return h("div", { class: "buy" }, h("button", { class: "quiet", onclick: () => buy("begin") }, `Take ${minutes} more minutes`));
+function loadInsightsView() {
+  const fallback = { range: "week", device: "all", block: null, historyDays: 7, openDays: {} };
+  try {
+    const kept = JSON.parse(localStorage.getItem(INSIGHTS_KEY) ?? "{}");
+    return { ...fallback, range: kept.range ?? fallback.range, device: kept.device ?? fallback.device };
+  } catch {
+    return fallback;
   }
-  if (!buyNode || buyKey !== s.overrideReadyAtWall) {
-    buyKey = s.overrideReadyAtWall;
-    const claim = () => buy("claim", { phrase });
-    buyNode = h("div", { class: "buy" },
-      h("p", {}, "Type: ", h("b", {}, `“${state.settings.phrase}”`)),
-      h("input", { type: "text", class: "phrase", value: phrase, placeholder: state.settings.phrase, autocomplete: "off", spellcheck: false,
-        oninput: (e) => (phrase = e.target.value), onkeydown: (e) => e.key === "Enter" && claim() }),
-      h("div", { class: "actions" },
-        h("button", { class: "btn primary claim", onclick: claim }),
-        h("button", { class: "btn ghost", onclick: () => buy("cancel") }, "Never mind")));
-  }
-  const waitLeft = s.overrideReadyAtWall - state.nowWall;
-  const button = buyNode.querySelector(".claim");
-  button.disabled = waitLeft > 0;
-  button.textContent = waitLeft > 0 ? `Wait ${Math.ceil(waitLeft / 1000)} s` : `Open for ${minutes} min`;
-  return buyNode;
 }
 
-// ---- settings ------------------------------------------------------------------------------
+function setInsights(change) {
+  insights = { ...insights, ...change };
+  try {
+    localStorage.setItem(INSIGHTS_KEY, JSON.stringify({ range: insights.range, device: insights.device }));
+  } catch {
+    /* a private window: this visit only */
+  }
+  drawInsights(true);
+}
+
+async function loadHistory() {
+  if (historyLoading) return;
+  historyLoading = true;
+  try {
+    const res = await fetch("/api/history", { cache: "no-store" });
+    const raw = await res.json();
+    historyData = {
+      events: mergeShared(raw.events, raw.emergencies),
+      blocks: normalizeBlocks(raw.blocks),
+      limits: raw.limits ?? {},
+      now: raw.now,
+      zone: raw.zone,
+      reached: raw.synced ? raw.reached : null,
+    };
+  } catch {
+    /* the next minute tries again */
+  } finally {
+    historyAt = Date.now();
+    historyLoading = false;
+  }
+  drawInsights(false);
+}
+
+function drawInsights(force) {
+  if (!insightsNode) insightsNode = h("div", { class: "insights" });
+  if (!historyData) {
+    if (!insightsNode.firstChild) insightsNode.replaceChildren(h("p", { class: "boot" }, "Loading…"));
+    return insightsNode;
+  }
+  if (!force && insightsDrawn === historyData) return insightsNode;
+  insightsDrawn = historyData;
+  renderInsights(insightsNode, historyData, insights, {
+    setRange: (range) => setInsights({ range, historyDays: 7 }),
+    setDevice: (device) => setInsights({ device }),
+    pickBlock: (block) => { setInsights({ block, historyDays: 7 }); window.scrollTo({ top: 0, behavior: "smooth" }); },
+    more: () => setInsights({ historyDays: insights.historyDays + 7 }),
+    toggleDay: (day, open) => setInsights({ openDays: { ...insights.openDays, [day]: open } }),
+  }, (host) => siteIcon(host));
+  if (historyData.reached === false) {
+    insightsNode.querySelector(".ins-controls")?.append(h("span", { class: "offline", title: "This laptop's history only" }, icon("cloudOff"), "Phone not reached"));
+  }
+  return insightsNode;
+}
+
+function insightsView() {
+  if (!historyLoading && Date.now() - historyAt > 60_000) loadHistory();
+  return drawInsights(false);
+}
+
+// ---- Settings ------------------------------------------------------------------------------
+
+let settingsPage = null; // { node, sync, prefs, status, bar }: kept, so a field being typed in stays
+let settingsForm = null; // the buying-minutes fields as edited, until saved
+let settingsDirty = false;
+let prefsKey = "";
+let settingsError = "";
 
 function settingsView() {
-  const s = state.settings;
-  if (!settingsForm) {
-    return h("section", { class: "card settings" },
-      h("div", { class: "top" }, h("h3", {}, "Settings"), h("span", { class: "spacer" }),
-        h("button", { class: "btn ghost", onclick: () => { settingsForm = { phrase: s.phrase, waitSec: Math.round(s.waitMs / 1000), grantMin: min(s.grantMs), perDay: s.perDay, showClock: s.showClock, blockOtherBrowsers: s.blockOtherBrowsers }; render(); } }, "Edit")),
-      h("div", { class: "note" },
-        s.perDay > 0 ? `Buying minutes: ${Math.round(s.waitMs / 1000)} s, ${min(s.grantMs)} min, ${s.perDay} a day` : "Buying minutes: off",
-        ` · Corner clock: ${s.showClock ? "on" : "off"}`,
-        ` · Other browsers: ${s.blockOtherBrowsers ? "closed" : "allowed"}`));
+  if (!settingsPage) {
+    settingsPage = { sync: h("div"), prefs: h("div"), status: h("div"), bar: h("div") };
+    settingsPage.node = h("div", { class: "settings" },
+      settingsPage.sync,
+      h("h3", { class: "section" }, "Buying minutes"),
+      settingsPage.prefs,
+      h("h3", { class: "section" }, "This laptop"),
+      settingsPage.status,
+      settingsPage.bar,
+      h("div", { class: "foot-mark" }, h("img", { src: "/icon.svg", alt: "xrnrule" })));
   }
-  if (!settingsNode) settingsNode = buildSettings();
-  return settingsNode;
+  const st = state.settings;
+  const key = JSON.stringify(st);
+  if (!settingsDirty && prefsKey !== key) {
+    settingsForm = { phrase: st.phrase, waitSec: Math.round(st.waitMs / 1000), grantMin: min(st.grantMs), perDay: st.perDay, showClock: st.showClock, blockOtherBrowsers: st.blockOtherBrowsers };
+    settingsPage.prefs.replaceChildren(buildPrefs());
+    prefsKey = key;
+  }
+  const sync = !state.syncConfigured ? ["idle", "cloudOff", "Not set up"]
+    : state.sync?.ok === false ? ["off", "cloudOff", state.sync.message]
+      : ["", "cloud", state.lastContactWall ? `Synced · ${time.format(state.lastContactWall)}` : "Synced"];
+  settingsPage.sync.replaceChildren(h("section", { class: `card sync-card ${sync[0]}` }, icon(sync[1]),
+    h("div", { class: "stitle" }, h("b", {}, "Home server"), h("small", {}, sync[2]))));
+  const theme = savedTheme(THEME_KEY);
+  const ext = state.extensionMissing ? ["bad", "Off in this browser"]
+    : state.extensionLatest ? ["bad", `${state.extensionVersion} · ${state.extensionLatest} is out`]
+      : state.extensionNoIncognito ? ["bad", "Not in private windows"]
+        : ["", state.extensionVersion ?? "–"];
+  const windows = state.kwinSeenAgoMs == null ? ["bad", "Not watched"] : ["", state.windowSystem === "hyprland" ? "Hyprland" : "KWin"];
+  const row = (lead, title, small, trailing = null, cls = "") => h("div", { class: "srow" }, lead,
+    h("div", { class: "stitle" }, h("span", {}, title), small != null && h("small", { class: cls }, small)), trailing);
+  settingsPage.status.replaceChildren(h("div", { class: "group-card" },
+    row(icon("sun"), "Appearance", null, h("div", { class: "seg" }, [["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]].map(([v, label]) =>
+      h("button", { type: "button", class: theme === v ? "on" : "", "data-key": `theme:${v}`, onclick: () => { saveTheme(THEME_KEY, v); render(); } }, label)))),
+    row(icon("desktop"), "Windows", windows[1], null, windows[0]),
+    row(icon("extension"), "Browser extension", ext[1], null, ext[0]),
+    state.habitsUrl && h("a", { class: "srow", href: state.habitsUrl, target: "_blank" }, h("span", { class: "lead" }, h("img", { src: "/xrnloops.svg", alt: "" })),
+      h("div", { class: "stitle" }, h("span", {}, "xrnloops"), h("small", { class: state.loop?.ok === false ? "bad" : "" }, state.loop?.ok === false ? state.loop.message : "Synced")), icon("openNew")),
+    row(icon("lockOpen"), "Unlock time a day", null, h("span", { class: "val num" }, `${min(state.dailyCapMs)} min`))));
+  settingsPage.bar.replaceChildren(settingsDirty ? h("div", { class: "savebar" },
+    h("span", { class: "error" }, settingsError),
+    h("button", { class: "btn ghost", type: "button", onclick: () => { settingsDirty = false; settingsError = ""; prefsKey = ""; render(); } }, "Cancel"),
+    h("button", { class: "btn primary", type: "button", onclick: saveSettings }, "Save")) : "");
+  return settingsPage.node;
 }
 
-let settingsNode = null; // kept while open, so typing survives the once-a-second redraw
-
-function buildSettings() {
+/** The settings you edit, built once; a change shows the Save bar. */
+function buildPrefs() {
   const f = settingsForm;
-  const field = (label, input, hint) => h("label", { class: "field" }, h("span", {}, label), input, hint && h("small", {}, hint));
-  const num = (key, attrs = {}) => h("input", { type: "number", min: 0, step: 1, value: f[key], oninput: (e) => (f[key] = Number(e.target.value)), ...attrs });
-  return h("section", { class: "card settings" },
-    h("h3", {}, "Settings"),
-    h("div", { class: "editor form" },
-      field("Sentence for extra minutes", h("input", { type: "text", value: f.phrase, oninput: (e) => (f.phrase = e.target.value) })),
-      h("div", { class: "row" },
-        field("Wait (seconds)", num("waitSec")),
-        field("Minutes bought", num("grantMin", { min: 1 })),
-        field("Times a day per block", num("perDay"), "0 turns it off.")),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.showClock, onchange: (e) => (f.showClock = e.target.checked) }), "Show the corner clock on limited sites"),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.blockOtherBrowsers, onchange: (e) => (f.blockOtherBrowsers = e.target.checked) }), "Close other browsers"),
-      h("div", { class: "actions" },
-        h("button", { class: "btn primary", onclick: saveSettings }, "Save"),
-        h("button", { class: "btn ghost", onclick: () => { settingsForm = null; settingsNode = null; render(); } }, "Cancel"))));
+  const dirty = () => {
+    if (!settingsDirty) {
+      settingsDirty = true;
+      render();
+    }
+  };
+  const num = (key, attrs = {}) => h("input", { type: "number", min: 0, step: 1, value: f[key], oninput: (e) => { f[key] = Number(e.target.value); dirty(); }, ...attrs });
+  const sw = (key) => h("input", { type: "checkbox", class: "switch", checked: f[key], onchange: (e) => { f[key] = e.target.checked; dirty(); } });
+  const row = (ic, title, ...trailing) => h("label", { class: "srow" }, icon(ic), h("div", { class: "stitle" }, h("span", {}, title)), trailing);
+  return h("div", { class: "group-card" },
+    row("edit", "Sentence", h("input", { type: "text", value: f.phrase, oninput: (e) => { f.phrase = e.target.value; dirty(); } })),
+    row("timer", "Wait", num("waitSec"), h("span", { class: "unit" }, "s")),
+    row("moreTime", "Minutes", num("grantMin", { min: 1 }), h("span", { class: "unit" }, "min")),
+    row("calendar", "Times a day per block", num("perDay"), h("span", { class: "unit" })),
+    row("timer", "Corner clock on limited sites", sw("showClock")),
+    row("globe", "Close other browsers", sw("blockOtherBrowsers")));
 }
 
 async function saveSettings() {
   const result = await post("/api/settings", settingsForm);
-  if (result.error) message = result.error;
-  else if (result.token) startGuard(result.token, result.waitMs, "Saving the settings");
-  settingsForm = null;
-  settingsNode = null;
+  if (result.error) {
+    settingsError = result.error;
+    render();
+    return;
+  }
+  settingsDirty = false;
+  settingsError = "";
+  prefsKey = "";
+  if (result.token) startGuard(result.token, result.waitMs, "Saving the settings");
   refresh();
 }
+
+// ---- the page ------------------------------------------------------------------------------
 
 function alerts() {
   const out = [];
@@ -737,79 +1026,139 @@ function alerts() {
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
   if (state.phoneQuiet) out.push(["The phone has gone quiet", state.phoneQuiet]);
   if (state.clockNote) out.push(["Blocks keep their own clock", state.clockNote]);
-  if (!state.syncConfigured) out.push(["Not syncing", "Fill in ~/.config/xrnrule/desktop.properties"]);
+  // A setup step, not a fault: said calmly.
+  if (!state.syncConfigured) out.push(["Not syncing", "Fill in ~/.config/xrnrule/desktop.properties", true]);
   return out;
 }
+
+function alertsView() {
+  // The block page is about the blocked thing: a setup step can wait for the main page.
+  const list = alerts().filter(([, , calm]) => !(calm && onBlockPage));
+  return list.length ? h("div", { class: "alerts" }, list.map(([t, d, calm]) =>
+    h("div", { class: `alert${calm ? " calm" : ""}` }, icon(calm ? "cloudOff" : "warning"), h("div", {}, h("b", {}, t), h("span", {}, d))))) : null;
+}
+
+function noticeView() {
+  return message ? h("div", { class: "notice" }, h("span", {}, message), h("button", { class: "round small", type: "button", title: "Close", onclick: () => { message = ""; render(); } }, icon("close"))) : null;
+}
+
+function blocksView() {
+  const breakButton = !state.pauseRemainingMs && state.breakLifts && h("button", {
+    class: "round", type: "button", "data-key": "break", disabled: !state.canPause || !!guard,
+    title: state.canPause ? "Take a 15-min break" : "Break used today", "aria-label": "Take a 15-min break", onclick: () => act({ type: "pause" }),
+  }, icon("coffee"));
+  return h("div", { class: "blocks-page" },
+    alertsView(),
+    noticeView(),
+    h("div", { class: "page-title" },
+      h("h2", {}, "Blocks"),
+      state.summary && h("span", { class: "summary" }, state.summary),
+      h("span", { class: "spacer" }),
+      h("div", { class: "today" },
+        h("div", { class: "figure" }, h("b", {}, `${min(state.unlockUsedMs)} / ${min(state.dailyCapMs)} min`), h("span", {}, "Unlocked today")),
+        breakButton,
+        h("button", { class: "btn primary", type: "button", "data-key": "new", onclick: () => openForm(null) }, icon("add"), "New block"))),
+    state.pauseRemainingMs > 0 && h("div", { class: "banner" }, icon("coffee"),
+      h("div", {}, h("b", {}, "On a break"), h("span", { class: "left" }, `${clock(state.pauseRemainingMs)} left`)),
+      h("button", { class: "btn ghost", type: "button", "data-key": "endPause", onclick: () => act({ type: "endPause" }) }, "End now")),
+    state.blocks.length
+      ? h("div", { class: "blocks" }, state.blocks.map(blockCard))
+      : h("section", { class: "card first-run" }, h("p", { class: "label" }, "No blocks yet"), h("button", { class: "btn primary", type: "button", onclick: () => openForm(null) }, icon("add"), "New block")));
+}
+
+function blockPageView() {
+  const sub = state.subject;
+  const still = sub ? sub.blocked : blockedApp ? state.blockedApps.includes(blockedApp) : siteBlocked(blockedSite ?? "");
+  // Only what's holding this: a block over the same site that's open has nothing to say here.
+  let blocks = state.blocks.filter((b) => sub?.blockers.includes(b.id));
+  const what = blockedApp ? appName(blockedApp) : blockedSite;
+  if (!still && backHere(backUrl, blockedSite)) {
+    location.replace(backUrl);
+    return null;
+  }
+  const lead = blocks[0];
+  const hero = h("section", { class: "hero" + (still ? "" : " open") },
+    h("div", { class: "pic letter", style: tinted(lead ? colourOf(lead.id) : PALETTE[0]) }, initial(what), blockedSite && !blockedApp && siteIcon(blockedSite)),
+    h("h2", {}, sub?.opening ? `${what} is opening` : still ? `${what} is blocked` : `${what} is open`),
+    still && sub?.back && h("div", { class: "back" }, sub.back),
+    still && sub?.why && h("p", {}, sub.why));
+  const buyable = still && sub && !sub.overrideRejection && !sub.overrideReadyAtWall;
+  const way = still && h("section", { class: "way" },
+    h("button", { class: "btn big leave", type: "button", "data-key": "leave", onclick: leaveBlockPage }, blockedApp ? "Close this page" : "Leave this site"),
+    buyable && h("button", { class: "quiet", type: "button", "data-key": "buy", onclick: () => buy("begin") }, `Take ${min(state.settings.grantMs)} more minutes`),
+    sub?.overrideRejection === "NONE_LEFT" && h("p", { class: "rule" }, "None left to buy today"));
+  // Time holds these, so they have nothing to do here: only a habit gets its card.
+  const rules = blocks.filter((b) => b.reason !== "HABIT").map(ruleLine);
+  blocks = blocks.filter((b) => b.reason === "HABIT");
+  document.title = sub?.opening ? `${what} is opening · xrnrule` : still ? `${what} is blocked · xrnrule` : "xrnrule";
+  return h("div", { class: "focus" },
+    alertsView(),
+    hero,
+    !waitView && noticeView(),
+    way,
+    blocks.length > 0 && h("div", { class: "blocks" }, blocks.map(blockCard)),
+    rules);
+}
+
+const TABS = [["blocks", "Blocks", "shield"], ["insights", "Insights", "chart"], ["settings", "Settings", "settings"]];
+
+function header() {
+  const sync = !state ? null : !state.syncConfigured ? ["idle", "cloudOff", "Local only"] : state.sync?.ok === false ? ["off", "cloudOff", "Offline"] : ["", "cloud", "Synced"];
+  return h("header", { class: "bar" }, h("div", { class: "wrap" },
+    h("a", { class: "mark", href: "/", title: "xrnrule" }, h("img", { src: "/icon.svg", alt: "xrnrule" })),
+    !onBlockPage && h("nav", { class: "tabs" }, TABS.map(([id, label, ic]) => h("button", {
+      type: "button", class: tab === id ? "on" : "", "data-key": `tab:${id}`, "aria-current": tab === id ? "page" : null,
+      onclick: () => goTo(id),
+    }, icon(ic), h("span", {}, label)))),
+    h("span", { class: "spacer" }),
+    onBlockPage ? h("a", { class: "btn outline", href: "/" }, "All blocks") : [
+      sync && h("span", { class: `sync ${sync[0]}`, title: state.sync?.message ?? sync[2] }, icon(sync[1]), h("span", {}, sync[2])),
+      state?.habitsUrl && h("a", { class: "app-link", href: state.habitsUrl, target: "_blank", title: "xrnloops" }, h("img", { src: "/xrnloops.svg", alt: "xrnloops" })),
+    ]));
+}
+
+function goTo(id) {
+  if (form) {
+    cancelGuard();
+    form = null;
+    formNode = null;
+  }
+  tab = id;
+  const hash = id === "blocks" ? "" : `#${id}`;
+  if (location.hash !== hash) history.replaceState(null, "", location.pathname + location.search + hash);
+  window.scrollTo(0, 0);
+  render();
+}
+window.addEventListener("hashchange", () => !onBlockPage && goTo(tabOf(location.hash)));
+
+let shell = null; // { bar, main }
 
 function render() {
   if (pressing) return;
   const app = document.getElementById("app");
-  const scrollY = window.scrollY;
-  const header = h("header", { class: "bar" }, h("div", { class: "wrap" },
-    h("h1", {}, h("a", { href: "/", style: "display:contents;color:inherit" }, h("img", { src: "/icon.svg", alt: "" }), h("span", { class: "wordmark" }, "xrnrule"), !onBlockPage && h("small", {}, "laptop"))),
-    h("span", { class: "spacer" }),
-    onBlockPage ? h("a", { class: "link", href: "/" }, "All blocks") : [
-      state && h("span", { class: "dot" + (!state.syncConfigured ? " idle" : state.sync?.ok === false ? " off" : "") },
-        !state.syncConfigured ? "Local only" : state.sync?.ok === false ? "Offline" : "Synced"),
-      state?.habitsUrl && h("a", { class: "link", href: state.habitsUrl, target: "_blank" }, "Habits"),
-    ]));
-
-  if (!state) {
-    app.replaceChildren(header, h("main", { class: "wrap" }, alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d))));
-    return;
+  if (!app) return;
+  if (!shell) {
+    shell = { bar: h("div"), main: h("main", { class: "wrap" }) };
+    app.replaceChildren(shell.bar, shell.main);
   }
-
-  let blocks = state.blocks;
-  let hero = null;
-  let way = null;
-  let rules = null;
-  if (onBlockPage) {
-    const s = state.subject;
-    const still = s ? s.blocked : blockedApp ? state.blockedApps.includes(blockedApp) : siteBlocked(blockedSite ?? "");
-    // Only what's holding this: a block over the same site that's open has nothing to say here.
-    blocks = blocks.filter((b) => s?.blockers.includes(b.id));
-    const what = blockedApp ? appName(blockedApp) : blockedSite;
-    if (!still && backHere(backUrl, blockedSite)) {
-      location.replace(backUrl);
-      return;
-    }
-    hero = h("section", { class: "hero" + (still ? "" : " open") },
-      blockedSite && !blockedApp && siteIcon(blockedSite),
-      h("h2", {}, s?.opening ? `${what} is opening` : still ? `${what} is blocked` : `${what} is open`),
-      still && s?.back && h("div", { class: "back" }, s.back),
-      still && s?.why && h("p", {}, s.why));
-    way = still && h("section", { class: "way" },
-      h("div", { class: "actions" }, h("button", { class: "btn primary", onclick: leaveBlockPage }, blockedApp ? "Close this page" : "Leave this site")),
-      buyView());
-    // Time holds these, so they have nothing to do here: only a habit gets its card.
-    rules = blocks.filter((b) => b.reason !== "HABIT").map(ruleLine);
-    blocks = blocks.filter((b) => b.reason === "HABIT");
-    document.title = s?.opening ? `${what} is opening · xrnrule` : still ? `${what} is blocked · xrnrule` : "xrnrule";
+  // A redrawn button takes the focus back by its key; fields live in parts that aren't redrawn.
+  const focused = document.activeElement?.dataset?.key;
+  shell.bar.replaceChildren(header());
+  let view;
+  if (!state) view = h("div", {}, alertsView() ?? h("p", { class: "boot" }, "Loading…"));
+  else if (onBlockPage) view = blockPageView();
+  else if (form) view = formView(state.blocks.find((x) => x.id === form.blockId));
+  else if (tab === "insights") view = insightsView();
+  else if (tab === "settings") view = settingsView();
+  else view = blocksView();
+  if (!view) return;
+  if (shell.main.firstChild !== view || shell.main.childNodes.length !== 1) {
+    const scrollY = window.scrollY;
+    shell.main.replaceChildren(view);
+    window.scrollTo(0, scrollY);
   }
-
-  const pause = !state.pauseRemainingMs && !state.breakLifts ? null : state.pauseRemainingMs > 0
-    ? h("div", { class: "actions" }, h("span", { class: "note" }, `On a break: ${clock(state.pauseRemainingMs)} left`), h("button", { class: "btn", onclick: () => act({ type: "endPause" }) }, "End it now"))
-    : h("button", { class: "btn", disabled: !state.canPause || !!guard, onclick: () => act({ type: "pause" }) }, state.canPause ? "Take a 15-min break" : "Break used today");
-
-  app.replaceChildren(header, h("main", { class: "wrap" + (onBlockPage ? " focus" : "") },
-    alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d)),
-    hero,
-    message && h("div", { class: "alert" }, message),
-    guard && !form && guardView(),
-    !onBlockPage && h("section", { class: "card summary" },
-      h("div", { class: "stat" }, h("b", {}, `${min(state.unlockUsedMs)} / ${min(state.dailyCapMs)} min`), h("span", {}, "Unlocked today")),
-      h("span", { class: "spacer" }),
-      pause,
-      !form && h("button", { class: "btn primary", onclick: () => openForm(null) }, "+ New block")),
-    form && !form.blockId && !onBlockPage && h("section", { class: "card" }, formView(null)),
-    blocks.length ? h("div", { class: "blocks" }, blocks.map(blockCard)) : !form && !onBlockPage && h("section", { class: "card note" }, "No blocks"),
-    !onBlockPage && settingsView(),
-    way,
-    rules,
-    !onBlockPage && h("div", { class: "foot" },
-      h("span", {}, state.loop?.ok === false ? `Habits: ${state.loop.message}` : ""),
-      h("span", {}, state.lastContactWall ? `Home server last seen ${time.format(state.lastContactWall)}` : state.sync ? `Last try ${time.format(state.sync.atWallMs)}` : ""))));
-  window.scrollTo(0, scrollY);
+  if (focused) document.querySelector(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  showWait();
 }
 
 refresh();

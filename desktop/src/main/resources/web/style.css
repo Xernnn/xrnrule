@@ -1,265 +1,124 @@
-/* xrnrule on the laptop: the local page and the block page, dressed like the phone app (its
-   palette, cards and pills: app/.../ui/theme/Theme.kt, which copies Habits First's look). */
+/* xrnrule on the laptop: the local page and the block page. The shared look (colours, the top
+   bar, block cards, the wait, Insights) is xrn.css, copied in from server/web at build; this is
+   what only the laptop has: notices, the block form, Settings, the block page. */
 
-/* MiSans Latin and Geist Mono, served by the daemon (the page may load nothing from elsewhere).
-   Each MiSans weight takes the file that looks like that weight of Nunito, as on the phone. */
-@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
-@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
-@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Demibold.woff2") format("woff2"); font-weight: 600; font-display: swap; }
-@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Semibold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
-@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Bold.woff2") format("woff2"); font-weight: 800; font-display: swap; }
-@font-face { font-family: "MiSans"; src: url("/MiSansLatin-Heavy.woff2") format("woff2"); font-weight: 900; font-display: swap; }
-@font-face { font-family: "Geist Mono"; src: url("/GeistMono-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+/* ---- notices ------------------------------------------------------------------------------ */
+.alerts { display: grid; gap: 10px; margin-bottom: 14px; }
+.alert { display: flex; gap: 14px; align-items: flex-start; background: var(--blocked); color: #fff; border-radius: 22px; padding: 14px 18px; font-size: 14px; }
+.alert .icon { width: 22px; height: 22px; margin-top: 1px; }
+.alert b { display: block; font-size: 15px; font-weight: 650; }
+.alert div > span { opacity: 0.88; overflow-wrap: anywhere; }
+.alert.calm { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
+.alert.calm .icon { color: var(--muted); }
+.alert.calm div > span { color: var(--muted); opacity: 1; }
+.notice { display: flex; align-items: center; gap: 10px; background: var(--surface-2); border-radius: 16px; padding: 10px 12px 10px 16px; font-size: 14px; margin-bottom: 14px; }
+.notice span { flex: 1; }
+.banner { display: flex; align-items: center; gap: 14px; border-radius: 22px; padding: 12px 10px 12px 18px; margin-bottom: 14px; background: color-mix(in srgb, var(--k-habit) var(--tint), var(--surface)); border: 1px solid color-mix(in srgb, var(--k-habit) 40%, var(--surface)); }
+.banner > .icon { color: var(--k-habit); width: 24px; height: 24px; }
+.banner > div { flex: 1; }
+.banner b { display: block; font-weight: 650; }
+.banner .left { color: var(--muted); font-size: 13.5px; font-variant-numeric: tabular-nums; }
 
-/* Light, as the phone's light scheme. */
-:root {
-  --bg: #f2f2f4;
-  --surface: #ffffff;
-  --surface-2: #ebebef;
-  --line: #e3e3e8;
-  --outline: #c9c9cf;
-  --text: #1b1b1e;
-  --muted: #6b6b73;
-  --accent: #16a34a;
-  --on-accent: #ffffff;
-  --brand: #e8590c;
-  --blocked: #dc2626;
-  --open: #16a34a;
-  --open-bg: #dcfce7;
-  --earned: #a16207;
-  --earned-bg: #fef3c7;
-  --alert-bg: #fde3e3;
-  --alert-ink: #7f1d1d;
-  --day: #3b82f6;
-  color-scheme: light;
+/* ---- a sub-page: the block form ------------------------------------------------------------ */
+.subpage { max-width: 760px; margin: 0 auto; }
+.subpage .page-title h2 { flex: 1; }
+.form { display: grid; gap: 4px; }
+.form .group { background: var(--surface); border: 1px solid var(--line); border-radius: 24px; padding: 18px; display: grid; gap: 14px; margin-bottom: 14px; min-width: 0; }
+.form .section { margin: 6px 4px 8px; }
+.field { display: grid; gap: 6px; font-size: 14px; min-width: 0; }
+.field > span { font-size: 13px; color: var(--muted); }
+.form input[type="text"], .form input[type="number"], .form input[type="search"], .form select, .form textarea {
+  border: 1px solid transparent; background: var(--surface-2); border-radius: 12px; padding: 10px 14px; width: 100%;
 }
-
-/* Dark, as the phone's dark scheme: Habits First's greys. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #1f1f23;
-    --surface: #2b2b30;
-    --surface-2: #3a3a40;
-    --line: #37373c;
-    --outline: #4a4a50;
-    --text: #f4f4f5;
-    --muted: #aaaaac;
-    --accent: #22c55e;
-    --on-accent: #ffffff;
-    --blocked: #f04242;
-    --open: #22c55e;
-    --open-bg: #1f3a2a;
-    --earned: #ffd60a;
-    --earned-bg: #423814;
-    --alert-bg: #5c1f1f;
-    --alert-ink: #ffd9d9;
-    color-scheme: dark;
-  }
-}
-
-:root[data-theme="dark"] {
-  --bg: #1f1f23;
-  --surface: #2b2b30;
-  --surface-2: #3a3a40;
-  --line: #37373c;
-  --outline: #4a4a50;
-  --text: #f4f4f5;
-  --muted: #aaaaac;
-  --accent: #22c55e;
-  --on-accent: #ffffff;
-  --blocked: #f04242;
-  --open: #22c55e;
-  --open-bg: #1f3a2a;
-  --earned: #ffd60a;
-  --earned-bg: #423814;
-  --alert-bg: #5c1f1f;
-  --alert-ink: #ffd9d9;
-  color-scheme: dark;
-}
-
-* { box-sizing: border-box; }
-html, body { margin: 0; }
-body { background: var(--bg); color: var(--text); font: 15px/1.45 "MiSans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-button, input, textarea, select { font: inherit; color: inherit; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-.boot { text-align: center; color: var(--muted); margin-top: 30vh; }
-.wrap { max-width: 640px; margin: 0 auto; padding: 0 16px 48px; }
-
-/* The header: the mark and the wordmark, as the phone's Blocks page. */
-.bar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); }
-.bar .wrap { display: flex; align-items: center; gap: 14px; min-height: 68px; padding-bottom: 0; }
-.bar h1 { margin: 0; display: flex; align-items: center; gap: 10px; }
-.bar h1 img { width: 28px; height: 28px; border-radius: 8px; }
-.wordmark { font: 700 22px/1 "Geist Mono", ui-monospace, monospace; letter-spacing: -0.01em; }
-.bar h1 small { font-weight: 400; color: var(--muted); font-size: 14px; }
-.bar a.link { color: var(--text); font-weight: 600; font-size: 14px; padding: 7px 14px; border: 1px solid var(--outline); border-radius: 999px; }
-.bar a.link:hover { text-decoration: none; background: var(--surface); }
-.spacer { flex: 1; }
-.dot { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
-.dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--open); }
-.dot.off::before { background: var(--blocked); }
-.dot.idle::before { background: var(--muted); }
-
-.card { background: var(--surface); border-radius: 24px; padding: 20px; margin-top: 14px; }
-.alert { background: var(--alert-bg); color: var(--alert-ink); border-radius: 24px; padding: 16px 20px; margin-top: 14px; font-size: 14px; }
-.alert b { display: block; margin-bottom: 2px; font-size: 16px; font-weight: 700; }
-
-.summary { display: flex; gap: 12px 20px; flex-wrap: wrap; align-items: center; }
-.summary .stat b { display: block; font-size: 22px; font-weight: 800; }
-.summary .stat span { font-size: 12.5px; color: var(--muted); }
-.summary .spacer { min-width: 1px; }
-
-/* The block page: one column, in the phone's order: what's blocked, when it's back, leave, the rest. */
-.wrap.focus { max-width: 520px; padding-top: 7vh; }
-.focus .blocks { display: block; margin-top: 18px; }
-.hero { text-align: center; }
-.hero h2 { font-size: 26px; font-weight: 800; margin: 0 0 6px; overflow-wrap: anywhere; }
-.hero p { margin: 0; color: var(--muted); }
-.hero .favicon { display: block; width: 72px; height: 72px; margin: 0 auto 20px; border-radius: 18px; }
-.hero .back { font: 700 34px/1.2 "Geist Mono", ui-monospace, monospace; letter-spacing: -0.02em; margin: 18px 0 6px; }
-.hero .note { margin-top: 6px; }
-.way { margin-top: 26px; text-align: center; }
-.way p { margin: 0; color: var(--muted); }
-.way > .actions { display: flex; justify-content: center; }
-.way > .actions .btn.primary { background: var(--text); color: var(--bg); padding: 12px 30px; font-size: 15px; }
-.quiet { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; padding: 2px 4px; }
-.quiet:hover { color: var(--text); }
-.rule { font-size: 13px; color: var(--muted); text-align: center; margin: 14px 0 0; }
-.rule b { color: var(--text); font-weight: 600; }
-.hero.open h2 { color: var(--open); }
-
-/* A block's card: its icons, its name, then what it is doing as a pill (BlocksScreen's card). */
-.block { display: grid; gap: 12px; }
-.headline { font-weight: 600; font-size: 14px; }
-.headline.blocked { color: var(--blocked); }
-.headline.open { color: var(--open); }
-.headline.earned { color: var(--earned); }
-.headline.idle { color: var(--muted); }
-.chips:empty { display: none; }
-.blocks .card { margin-top: 14px; }
-.block .head { display: flex; gap: 14px; align-items: center; }
-.block .head .name { flex: 1; min-width: 0; }
-.block h3 { font-size: 17px; font-weight: 400; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.block .head .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-.tile { width: 52px; height: 52px; flex: none; border-radius: 14px; background: var(--surface-2); display: grid; place-items: center; overflow: hidden; }
-.tile.one { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
-.tile.one .favicon { width: 40px; height: 40px; margin: 0; padding: 0; border-radius: 6px; }
-.tile.many { grid-template-columns: 1fr 1fr; gap: 4px; padding: 6px; place-items: center; align-content: center; }
-.tile.many .favicon { width: 100%; height: auto; aspect-ratio: 1; margin: 0; padding: 1px; border-radius: 5px; }
-.tile .glyph { font-size: 22px; font-weight: 800; color: var(--muted); }
-.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
-.chip.strict { background: color-mix(in srgb, var(--brand) 22%, transparent); color: var(--brand); }
-.status { min-height: 44px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px 14px; border-radius: 16px; font-size: 14px; font-weight: 600; background: var(--surface-2); color: var(--muted); }
-.status.open { background: var(--open-bg); color: var(--open); }
-.status.earned { background: var(--earned-bg); color: var(--earned); }
-.status.blocked { color: var(--text); }
-.status.idle { min-height: 0; padding: 0; background: none; justify-content: flex-start; text-align: left; font-weight: 400; }
-.targets { display: flex; flex-wrap: wrap; gap: 6px; }
-.target { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); display: inline-flex; align-items: center; }
-/* A site's own icon, on white so a dark one still shows on the dark theme. */
-.favicon { width: 16px; height: 16px; padding: 1px; border-radius: 4px; background: #fff; margin-right: 6px; object-fit: contain; }
-.how { font-size: 13px; color: var(--muted); }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-
-/* Habit rows (Components.kt's HabitRow): a round tick or the amount, and a thin bar. */
-.items { display: grid; gap: 10px; }
-.items label { display: flex; gap: 12px; align-items: center; font-size: 14px; cursor: pointer; }
-.items input[type="checkbox"], .check input[type="checkbox"] {
-  appearance: none; flex: none; width: 22px; height: 22px; margin: 0; border-radius: 50%;
-  border: 2px solid var(--muted); display: grid; place-items: center; cursor: pointer;
-}
-.items input[type="checkbox"]:checked, .check input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
-.items input[type="checkbox"]:checked::after, .check input[type="checkbox"]:checked::after {
-  content: ""; width: 6px; height: 11px; border: solid var(--on-accent); border-width: 0 2.5px 2.5px 0; transform: translateY(-1px) rotate(45deg);
-}
-.items input[type="checkbox"]:disabled { opacity: 0.5; cursor: default; }
-.items .linked { font-size: 12px; color: var(--muted); }
-.habit { display: grid; gap: 6px; font-size: 14px; }
-.habit .actions .note { margin-left: auto; }
-
-.progress { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
-.progress i { display: block; height: 100%; min-width: 6px; border-radius: 3px; background: var(--accent); transition: width 0.5s; }
-
-/* Buttons: grey pills; the main one green, as the phone's Continue and Done. */
-.btn { border: 0; background: var(--surface-2); border-radius: 999px; padding: 8px 16px; cursor: pointer; white-space: nowrap; font-weight: 600; font-size: 14px; }
-.btn:hover { filter: brightness(1.08); }
-.btn.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; }
-.btn.ghost { background: none; color: var(--muted); }
-.btn.ghost:hover { color: var(--text); filter: none; }
-.btn.edit { align-self: flex-start; padding: 6px 14px; font-size: 13px; color: var(--muted); }
-.btn:disabled { opacity: 0.5; cursor: default; filter: none; }
-.note { font-size: 13px; color: var(--muted); }
-.error { color: var(--blocked); font-size: 13.5px; }
-
-.editor { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
-.editor input[type="search"], .editor textarea { width: 100%; border: 0; background: var(--surface-2); border-radius: 12px; padding: 10px 14px; }
-.editor textarea { min-height: 70px; resize: vertical; }
-.applist { max-height: 260px; overflow-y: auto; background: var(--bg); border-radius: 14px; padding: 6px; }
+.form input:focus, .form textarea:focus, .form select:focus { outline: none; border-color: var(--accent); }
+.form input[type="number"] { max-width: 130px; font-variant-numeric: tabular-nums; }
+.form input.clock { max-width: 110px; font-variant-numeric: tabular-nums; }
+.form textarea { min-height: 76px; resize: vertical; }
+.form textarea.short { min-height: 46px; }
+.check { display: flex; gap: 12px; align-items: center; font-size: 14px; cursor: pointer; justify-content: space-between; min-height: 32px; }
+.check.inline { font-size: 11.5px; gap: 6px; justify-content: flex-start; min-height: 0; }
+.checks { display: flex; gap: 10px; flex-wrap: wrap; }
+.checks .check { gap: 10px; justify-content: flex-start; background: var(--surface-2); border-radius: 999px; padding: 4px 14px 4px 6px; }
+.row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.row .field { flex: 1; min-width: 120px; }
+.applist { max-height: 270px; overflow-y: auto; background: var(--bg); border-radius: 16px; padding: 6px; }
 .applist label { display: flex; gap: 12px; align-items: center; padding: 7px 10px; border-radius: 10px; cursor: pointer; font-size: 14px; }
 .applist label:hover { background: var(--surface-2); }
 .applist small { color: var(--muted); margin-left: auto; font-size: 11.5px; }
-.applist input[type="checkbox"] {
-  appearance: none; flex: none; width: 22px; height: 22px; margin: 0; border-radius: 50%;
-  border: 1.6px solid var(--muted); display: grid; place-items: center; cursor: pointer;
-}
-.applist input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
-.applist input[type="checkbox"]:checked::after { content: ""; width: 5px; height: 10px; border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
-
-.foot { color: var(--muted); font-size: 13px; margin-top: 18px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
-
-/* The block form: each part a grey section with Habits First's bold grey heading. */
-.form { gap: 14px; }
-.form h3 { margin: 0; font-size: 17px; }
-.form fieldset { border: 0; background: var(--bg); border-radius: 18px; padding: 16px; margin: 0; display: grid; gap: 12px; min-width: 0; }
-.form legend { float: left; width: 100%; font-size: 14px; font-weight: 700; color: var(--muted); padding: 0; margin-bottom: 2px; }
-.field { display: grid; gap: 6px; font-size: 14px; }
-.field > span { font-size: 13px; color: var(--muted); }
-.field > small { font-size: 12px; color: var(--muted); }
-.form input[type="text"], .form input[type="number"], .form select { border: 0; background: var(--surface-2); border-radius: 12px; padding: 9px 12px; }
-.form input[type="number"] { max-width: 120px; }
-.form input[type="text"] { width: 100%; }
-.form input.clock { max-width: 120px; font-variant-numeric: tabular-nums; }
-.check { display: inline-flex; gap: 10px; align-items: center; font-size: 14px; cursor: pointer; }
-.check.inline { font-size: 11.5px; gap: 6px; }
-.check.inline input[type="checkbox"] { width: 16px; height: 16px; border-width: 1.6px; }
-.check.inline input[type="checkbox"]:checked::after { width: 4px; height: 8px; border-width: 0 2px 2px 0; }
-.checks { display: flex; gap: 18px; flex-wrap: wrap; }
-/* Two or three options on a raised track, the chosen one a white pill (SegmentSwitch). */
-.seg { display: inline-flex; background: var(--surface-2); border-radius: 14px; padding: 4px; width: fit-content; gap: 2px; }
-.seg button { border: 0; background: none; padding: 6px 16px; cursor: pointer; font-size: 14px; border-radius: 11px; }
-.seg button.on { background: var(--text); color: var(--surface); font-weight: 600; }
-/* Days as circles, blue when the schedule blocks on them (Habits First's). */
+.applist.short { max-height: 190px; }
 .daypick { display: flex; gap: 8px; flex-wrap: wrap; }
-.daypick label { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 700; cursor: pointer; }
-.daypick label:has(input:checked) { background: var(--day); color: #fff; }
+.daypick label { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 650; cursor: pointer; }
+.daypick label:has(input:checked) { background: var(--k-blue); color: #fff; }
 .daypick input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
-.daypick label:has(input:focus-visible) { outline: 2px solid var(--day); outline-offset: 2px; }
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.row .field { flex: 1; min-width: 120px; }
-.form-items { display: grid; gap: 2px; }
-.row.item { justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.daypick label:has(input:focus-visible) { outline: 2px solid var(--k-blue); outline-offset: 2px; }
+.window { border-top: 1px dashed var(--outline); padding-top: 12px; display: grid; gap: 12px; }
+.form-items { display: grid; }
+.row.item { justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .row.item small { color: var(--muted); }
-.applist.short { max-height: 180px; }
-.btn.danger { background: none; color: var(--blocked); }
-.card > .form:first-child { border-top: 0; padding-top: 0; }
+.form .error { color: var(--blocked); font-size: 13.5px; }
+.form .error:empty { display: none; }
+.form .note { color: var(--muted); font-size: 13px; }
+.form-foot { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 
-/* Buying minutes on the block page, the settings card, more schedule windows, exceptions. */
-.buy { margin-top: 16px; display: grid; gap: 10px; justify-items: center; }
-.buy input.phrase { width: 100%; border: 0; background: var(--surface-2); border-radius: 12px; padding: 11px 14px; }
-.editor textarea.short { min-height: 44px; }
-.window { border-top: 1px dashed var(--outline); margin-top: 10px; padding-top: 10px; }
-.target.except { opacity: .7; text-decoration: line-through; }
-.settings .top { display: flex; align-items: center; gap: 10px; }
-.settings h3 { margin: 0; font-size: 17px; font-weight: 700; }
-.settings .note { margin-top: 6px; }
-
-/* A laptop screen has room: two columns of cards, the rest across them. A card being edited takes
-   the full width, since the form is wide. */
-@media (min-width: 1040px) {
-  .wrap { max-width: 1140px; }
-  .blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; margin-top: 14px; }
-  .blocks .card { margin-top: 0; }
-  .blocks .card.editing { grid-column: 1 / -1; }
+/* The phone's switch: green when on, a grey ring when off. */
+.switch { appearance: none; position: relative; width: 50px; height: 30px; margin: 0; flex: none; border-radius: 999px; border: 2px solid var(--muted); background: none; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform 0.15s, background 0.15s; }
+.switch:checked { background: var(--accent); border-color: var(--accent); }
+.switch:checked::after { background: #fff; transform: translateX(20px); }
+/* A round tick in the app lists. */
+.applist input[type="checkbox"], .form .pick {
+  appearance: none; flex: none; width: 22px; height: 22px; margin: 0; border-radius: 50%; border: 1.6px solid var(--muted); display: grid; place-items: center; cursor: pointer;
 }
+.applist input[type="checkbox"]:checked, .form .pick:checked { background: var(--accent); border-color: var(--accent); }
+.applist input[type="checkbox"]:checked::after, .form .pick:checked::after { content: ""; width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
+
+/* ---- Settings: grouped rows, as the phone's -------------------------------------------------- */
+.settings { max-width: 760px; margin: 0 auto; display: grid; gap: 4px; }
+.settings .section { margin: 18px 6px 8px; }
+.group-card { background: var(--surface); border: 1px solid var(--line); border-radius: 24px; overflow: hidden; }
+.srow { display: flex; align-items: center; gap: 14px; padding: 12px 16px; min-height: 56px; }
+.srow + .srow { border-top: 1px solid var(--line); }
+.srow > .icon { color: var(--muted); width: 22px; height: 22px; }
+.srow > .lead { width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+.srow > .lead img { width: 22px; height: 22px; border-radius: 6px; }
+.srow .stitle { flex: 1; min-width: 0; display: grid; }
+.srow .stitle span { font-size: 15px; }
+.srow .stitle small { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.srow .stitle small.bad { color: var(--blocked); }
+.srow input[type="text"], .srow input[type="number"] { border: 1px solid transparent; background: var(--surface-2); border-radius: 10px; padding: 8px 12px; }
+.srow input[type="text"] { width: min(320px, 46vw); }
+.srow input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+.srow input:focus { outline: none; border-color: var(--accent); }
+.srow .unit { color: var(--muted); font-size: 13px; min-width: 26px; }
+.srow .ok { color: var(--accent); }
+.srow .bad { color: var(--blocked); }
+.sync-card { display: flex; align-items: center; gap: 16px; padding: 18px 20px; }
+.sync-card > .icon { width: 28px; height: 28px; color: var(--accent); }
+.sync-card.off > .icon { color: var(--blocked); }
+.sync-card.idle > .icon { color: var(--muted); }
+.sync-card .stitle { flex: 1; display: grid; }
+.sync-card .stitle b { font-weight: 600; }
+.sync-card .stitle small { color: var(--muted); }
+.savebar { position: sticky; bottom: 16px; margin-top: 16px; display: flex; gap: 10px; justify-content: flex-end; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 8px; box-shadow: var(--shadow); }
+.savebar .error { flex: 1; color: var(--blocked); font-size: 13.5px; padding-left: 12px; }
+.foot-mark { display: grid; justify-items: center; gap: 6px; margin: 30px 0 10px; color: var(--muted); font-size: 12.5px; }
+.foot-mark img { width: 28px; height: 28px; }
+@media (max-width: 720px) { .savebar { bottom: 84px; } .srow input[type="text"] { width: 42vw; } }
+
+/* ---- the block page: one column, in the phone's order -------------------------------------- */
+.focus { max-width: 540px; margin: 0 auto; padding-top: 6vh; display: grid; gap: 18px; }
+.hero { text-align: center; display: grid; justify-items: center; gap: 4px; }
+.hero .pic { position: relative; width: 76px; height: 76px; border-radius: 20px; margin-bottom: 14px; display: grid; place-items: center; overflow: hidden; }
+.hero .pic .favicon { position: absolute; inset: 0; width: 100%; height: 100%; padding: 8px; margin: 0; border-radius: 0; background: #fff; }
+.hero .pic.letter { background: var(--c); color: var(--ink); font-size: 34px; font-weight: 650; }
+.hero h2 { font-size: 26px; font-weight: 650; margin: 0; overflow-wrap: anywhere; letter-spacing: -0.01em; }
+.hero .back { font-size: 52px; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; margin: 14px 0 2px; font-variant-numeric: tabular-nums; }
+.hero p { margin: 0; color: var(--muted); }
+.hero.open h2 { color: var(--k-habit); }
+.way { display: grid; justify-items: center; gap: 8px; }
+.way .btn.leave { background: var(--text); color: var(--bg); min-width: 240px; }
+.quiet { border: 0; background: none; color: var(--muted); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; padding: 6px; }
+.quiet:hover { color: var(--text); }
+.rule { font-size: 13px; color: var(--muted); text-align: center; margin: 0; }
+.rule b { color: var(--text); font-weight: 600; }
+.focus .blocks { grid-template-columns: 1fr; }
