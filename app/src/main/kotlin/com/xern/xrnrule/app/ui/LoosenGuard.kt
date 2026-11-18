@@ -1,11 +1,26 @@
 package com.xern.xrnrule.app.ui
 
 import android.os.SystemClock
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Password
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -16,7 +31,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.Lifecycle
@@ -26,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.hardcore.PasswordTries
+import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.EnforcementTier
@@ -94,54 +118,113 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: World
         return
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(request.title) },
-        text = {
-            Column {
-                Text(request.detail)
-                Gap(12)
-                if (usePassword) {
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it; wrong = null },
-                        label = { Text("Hardcore password") },
-                        singleLine = true,
-                        isError = wrong != null,
-                        supportingText = wrong?.let { ({ Text(it) }) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+    val blocks = request.blockIds.mapNotNull { id -> world.block(id) }
+    val chips = blocks.map { it.name to blockColor(world.blocks, it.id) }
+    Dialog(onDismissRequest = onDismiss) {
+        LoosenWait(
+            title = request.title,
+            detail = request.detail,
+            chips = chips,
+            color = chips.firstOrNull()?.second ?: LocalKinds.current.strict.color,
+            leftMs = leftMs,
+            usePassword = usePassword,
+            password = password,
+            onPassword = { password = it; wrong = null },
+            wrong = wrong,
+            onGoAhead = {
+                val wait = if (usePassword) guard.waitMs() else 0
+                if (wait > 0) {
+                    wrong = PasswordTries.waitText(wait)
+                } else if (usePassword && !guard.verifyPassword(password)) {
+                    wrong = "Wrong password." + guard.waitMs().takeIf { it > 0 }?.let { " " + PasswordTries.waitText(it) }.orEmpty()
                 } else {
-                    Text(
-                        if (leftMs > 0) {
-                            "Wait ${(leftMs + 999) / 1000} s. Leaving this screen starts the wait over."
-                        } else {
-                            "You can go ahead now."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    request.apply()
+                    onDismiss()
                 }
+            },
+            onCancel = onDismiss,
+        )
+    }
+}
+
+/**
+ * What the guard shows: the wait as a big ring counting down [LOOSEN_WAIT_MS] (in [color], the
+ * block's), the change in one line ([title]; [detail] is for screen readers), the blocks it
+ * touches as their chips, and one Cancel. Go ahead comes up only once the wait is over. A
+ * HARDCORE change asks for the password instead of the wait.
+ */
+@Composable
+internal fun LoosenWait(
+    title: String,
+    detail: String,
+    chips: List<Pair<String, Color>>,
+    color: Color,
+    leftMs: Long,
+    usePassword: Boolean,
+    password: String = "",
+    onPassword: (String) -> Unit = {},
+    wrong: String? = null,
+    onGoAhead: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(28.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 22.dp, vertical = 26.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (usePassword) {
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)).background(color.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Password, contentDescription = null, tint = color, modifier = Modifier.size(30.dp))
             }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = if (usePassword) password.isNotEmpty() else leftMs == 0L,
-                onClick = {
-                    val wait = if (usePassword) guard.waitMs() else 0
-                    if (wait > 0) {
-                        wrong = PasswordTries.waitText(wait)
-                    } else if (usePassword && !guard.verifyPassword(password)) {
-                        wrong = "Wrong password." + guard.waitMs().takeIf { it > 0 }?.let { " " + PasswordTries.waitText(it) }.orEmpty()
-                    } else {
-                        request.apply()
-                        onDismiss()
-                    }
-                },
-            ) { Text("Go ahead") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep it") } },
-    )
+        } else {
+            CountdownRing(leftMs, LOOSEN_WAIT_MS, color, size = 176.dp)
+        }
+        Gap(20)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { contentDescription = "$title $detail" },
+        )
+        if (chips.isNotEmpty()) {
+            Gap(10)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth()) {
+                chips.take(3).forEach { (name, c) -> BlockChip(name, c, onClick = null, small = true, modifier = Modifier.widthIn(max = 140.dp)) }
+                if (chips.size > 3) Text("+${chips.size - 3}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (usePassword) {
+            Gap(16)
+            OutlinedTextField(
+                value = password,
+                onValueChange = onPassword,
+                label = { Text("Hardcore password") },
+                singleLine = true,
+                isError = wrong != null,
+                supportingText = wrong?.let { ({ Text(it) }) },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Gap(22)
+        val ready = if (usePassword) password.isNotEmpty() else leftMs == 0L
+        if (usePassword || ready) {
+            PillButton("Go ahead", onClick = onGoAhead, enabled = ready)
+            Gap(4)
+            TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        } else {
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+            ) { Text("Cancel", style = MaterialTheme.typography.labelLarge) }
+        }
+    }
 }

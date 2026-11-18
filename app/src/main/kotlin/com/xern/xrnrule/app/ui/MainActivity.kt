@@ -337,7 +337,7 @@ private fun XrnruleScreens(container: AppContainer) {
                 if (page == null) {
                     LaunchedEffect(Unit) { nav.leave(entry) }
                 } else {
-                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.leave(entry) }, onOpen = { nav.navigate("settings/${it.name}") })
+                    SettingsPageScreen(page, world, settingsDeps, onBack = { nav.leave(entry) })
                 }
             }
             composable("createBlock") { entry ->

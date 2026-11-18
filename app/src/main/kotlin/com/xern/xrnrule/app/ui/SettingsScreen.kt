@@ -58,6 +58,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.outlined.HourglassBottom
+import androidx.compose.material.icons.outlined.MoreTime
+import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.InstallMobile
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -102,8 +108,7 @@ import com.xern.xrnrule.app.hardcore.PasswordTries
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
 import com.xern.xrnrule.app.ui.theme.Appearance
-import com.xern.xrnrule.app.ui.theme.Brand
-import com.xern.xrnrule.app.ui.theme.GeistMono
+import com.xern.xrnrule.app.ui.theme.TABULAR
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.ThemeMode
 import com.xern.xrnrule.app.update.AppUpdates
@@ -139,7 +144,6 @@ enum class SettingsPage(val title: String) {
     WEBSITES("Browser extension"),
     UPDATES("Updates"),
     BACKUP("Backup"),
-    ADVANCED("Advanced"),
 }
 
 /** Everything Settings reads, so the list and its pages take one argument. */
@@ -159,8 +163,111 @@ class SettingsDeps(
 //  The list
 // =====================================================================================
 
+/** A row's figure or state, and whether it's something to act on. */
+data class RowValue(val text: String, val warn: Boolean = false)
+
+/** A permission and whether it's granted (null: can't tell, as with a phone maker's Autostart). */
+data class PermissionState(val label: String, val icon: ImageVector, val granted: Boolean?)
+
+/** What the Settings list shows, read by [SettingsList] (or made up, in previews). */
+data class SettingsSummary(
+    val sync: RowValue,
+    val syncOn: Boolean,
+    val permissions: List<PermissionState>,
+    /** The clock or the time zone set by hand: blocks don't go by them (I54). */
+    val clockWarnings: List<String>,
+    val unlocks: RowValue,
+    val habits: RowValue,
+    val loop: RowValue,
+    /** Null where the phone has no browser extension to talk to. */
+    val extension: RowValue?,
+    val security: RowValue,
+    val appearance: RowValue,
+    val cornerTimer: RowValue,
+    /** Null in a build that doesn't update itself. */
+    val updates: RowValue?,
+    val version: String,
+)
+
 @Composable
 fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
+    val context = LocalContext.current
+    val resume = rememberResumeSignal()
+    val permissions = remember(resume) {
+        AppPermission.entries.map { PermissionState(it.label, permissionIcon(it), it.isGranted(context)) } +
+            listOfNotNull(
+                if (OemAutostart.isKnownOem()) PermissionState("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, OemAutostart.enabled(context)) else null,
+                PermissionState("Automatic date & time", Icons.Outlined.AccessTime, deps.clockGuard.automaticTime()),
+            )
+    }
+    val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
+    val handPickedZone = remember(resume) { deps.clockGuard.handPickedZone }
+    val websiteTracking = remember(resume) { deps.websites.tracking(context) }
+    val loopStatus = remember(resume) { deps.loop.status() }
+    val loopUnreachable by deps.loop.unreachable.collectAsState()
+    val appearance by Appearance.themeMode.collectAsState()
+    val clock by CornerClockLook.look.collectAsState()
+    val status by deps.shared.status.collectAsStateWithLifecycle()
+    val updateReady by deps.updates.ready.collectAsStateWithLifecycle()
+    val lockOn by deps.appLock.enabled.collectAsStateWithLifecycle()
+    rememberTicker(30_000)
+    val configured = deps.shared.settings.isConfigured
+    val summary = SettingsSummary(
+        sync = when {
+            !configured -> RowValue("Off")
+            status == null -> RowValue("")
+            status!!.ok -> RowValue(formatAgo(status!!.atWallMs))
+            else -> RowValue("Not syncing", warn = true)
+        },
+        syncOn = configured,
+        permissions = permissions,
+        clockWarnings = listOfNotNull(
+            if (clockSkew != 0L) "Clock set ${formatDuration(kotlin.math.abs(clockSkew))} ${if (clockSkew > 0) "ahead" else "back"} by hand" else null,
+            handPickedZone?.let { "Time zone ${it.id} picked by hand: blocks use ${deps.clockGuard.zone().id}" },
+        ),
+        unlocks = RowValue(formatDuration(world.settings.dailyCapMs)),
+        habits = RowValue(world.habits.count { !it.archived }.toString()),
+        loop = when {
+            loopStatus == LoopStatus.NOT_INSTALLED -> RowValue("Not installed", warn = true)
+            loopStatus == LoopStatus.NO_ACCESS -> RowValue("Other signing key", warn = true)
+            loopUnreachable -> RowValue("Not answering", warn = true)
+            else -> RowValue("Connected")
+        },
+        extension = if (!deps.websites.isSupported()) null else when {
+            websiteTracking == WebsiteTracking.OFF -> RowValue("Not set up", warn = true)
+            websiteTracking == WebsiteTracking.NOT_RUNNING -> RowValue("Not answering", warn = true)
+            deps.websites.outOfDate -> RowValue("Out of date", warn = true)
+            else -> RowValue("On")
+        },
+        security = RowValue(if (lockOn) "Lock on" else "Lock off"),
+        appearance = RowValue(appearance.label),
+        cornerTimer = RowValue(if (clock.on) clock.corner.label else "Off"),
+        updates = if (!deps.updates.isSupported) null else updateReady?.let { RowValue("$it ready", warn = false) } ?: RowValue(deps.updates.installedVersion),
+        version = appVersion(context),
+    )
+    SettingsContent(
+        summary,
+        onOpen = onOpen,
+        onPermission = { i ->
+            val perm = AppPermission.entries.getOrNull(i)
+            when {
+                perm != null -> runCatching { context.startActivity(perm.settingsIntent(context)) }
+                OemAutostart.isKnownOem() && i == AppPermission.entries.size -> OemAutostart.open(context)
+                else -> runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
+            }
+        },
+        onLoop = { deps.loop.launchIntent()?.let { runCatching { context.startActivity(it) } } },
+    )
+}
+
+/**
+ * The list: the home server, permissions, what blocks go by, security, and the app itself. One
+ * kind of row throughout: a coloured icon, a name, its figure or state (red when it needs
+ * doing), and an arrow where it opens a page.
+ */
+@Composable
+internal fun SettingsContent(summary: SettingsSummary, onOpen: (SettingsPage) -> Unit, onPermission: (Int) -> Unit, onLoop: () -> Unit) {
+    val kinds = LocalKinds.current
     Column(
         Modifier
             .fillMaxSize()
@@ -168,133 +275,103 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
             .verticalScroll(rememberScrollState()),
     ) {
         PageTitle("Settings")
-        Column(Modifier.padding(ScreenPadding)) { SettingsList(world, deps, onOpen) }
+        Column(Modifier.padding(ScreenPadding)) {
+            GroupCard {
+                SettingRow(
+                    "Home server",
+                    if (summary.syncOn) Icons.Outlined.CloudSync else Icons.Outlined.CloudOff,
+                    if (summary.syncOn) kinds.habit.color else MaterialTheme.colorScheme.onSurfaceVariant,
+                    value = summary.sync,
+                    first = true,
+                    onClick = { onOpen(SettingsPage.SYNC) },
+                )
+            }
+
+            SectionLabel("Permissions")
+            GroupCard {
+                summary.permissions.forEachIndexed { i, perm ->
+                    PermissionRow(perm.label, perm.icon, perm.granted, first = i == 0) { onPermission(i) }
+                }
+            }
+            summary.clockWarnings.forEach { Warning(it) }
+
+            SectionLabel("Blocking")
+            GroupCard {
+                SettingRow("Unlocks", Icons.Outlined.LockOpen, kinds.appTime.color, value = summary.unlocks, first = true, onClick = { onOpen(SettingsPage.UNLOCKS) })
+                SettingRow("Habits", Icons.Outlined.TaskAlt, kinds.habit.color, value = summary.habits, onClick = { onOpen(SettingsPage.HABITS) })
+                // xrnloops' tile stands for its name.
+                SettingRow("", null, kinds.loop.color, value = summary.loop, onClick = onLoop, leading = { LoopsTile(size = 28.dp) }, valueFirst = true)
+                summary.extension?.let {
+                    SettingRow("Browser extension", Icons.Outlined.Extension, kinds.blue.color, value = it, onClick = { onOpen(SettingsPage.WEBSITES) })
+                }
+            }
+
+            SectionLabel("Security")
+            GroupCard {
+                SettingRow("Security & privacy", Icons.Outlined.Security, kinds.pink.color, value = summary.security, first = true, onClick = { onOpen(SettingsPage.SECURITY) })
+            }
+
+            SectionLabel("App")
+            GroupCard {
+                SettingRow("Appearance", Icons.Outlined.DarkMode, kinds.loop.color, value = summary.appearance, first = true, onClick = { onOpen(SettingsPage.APPEARANCE) })
+                SettingRow("Corner timer", Icons.Outlined.AccessTime, kinds.limit.color, value = summary.cornerTimer, onClick = { onOpen(SettingsPage.CORNER_CLOCK) })
+                summary.updates?.let {
+                    SettingRow("Updates", Icons.Outlined.SystemUpdate, kinds.blue.color, value = it, onClick = { onOpen(SettingsPage.UPDATES) })
+                }
+                SettingRow("Backup", Icons.Outlined.SaveAlt, kinds.strict.color, onClick = { onOpen(SettingsPage.BACKUP) })
+            }
+            Gap(36)
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                BrandTile(size = 36.dp)
+                Gap(8)
+                Text(summary.version, style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = TABULAR), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Gap(24)
+        }
     }
 }
 
+/** An icon on its colour, the same square on every row. */
 @Composable
-private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
-    val context = LocalContext.current
-    val appearance by Appearance.themeMode.collectAsState()
-    val resume = rememberResumeSignal()
-    val granted = remember(resume) { AppPermission.entries.associateWith { it.isGranted(context) } }
-    val autostart = remember(resume) { OemAutostart.enabled(context) }
-    val automaticTime = remember(resume) { deps.clockGuard.automaticTime() }
-    val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
-    val handPickedZone = remember(resume) { deps.clockGuard.handPickedZone }
-    val websiteTracking = remember(resume) { deps.websites.tracking(context) }
-    val loopStatus = remember(resume) { deps.loop.status() }
-    val loopUnreachable by deps.loop.unreachable.collectAsState()
-    run {
-        SyncSummary(deps.shared) { onOpen(SettingsPage.SYNC) }
-
-        SectionLabel("Permissions")
-        GroupCard {
-            AppPermission.entries.forEachIndexed { i, perm ->
-                PermissionRow(perm.label, permissionIcon(perm), granted[perm] == true, first = i == 0) {
-                    runCatching { context.startActivity(perm.settingsIntent(context)) }
-                }
-            }
-            if (OemAutostart.isKnownOem()) {
-                PermissionRow("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, granted = autostart) { OemAutostart.open(context) }
-            }
-            PermissionRow("Automatic date & time", Icons.Outlined.AccessTime, granted = automaticTime) {
-                runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
-            }
-        }
-        if (clockSkew != 0L) {
-            FootNote("Clock set ${formatDuration(kotlin.math.abs(clockSkew))} ${if (clockSkew > 0) "ahead" else "back"} by hand")
-        }
-        if (handPickedZone != null) {
-            FootNote("Time zone ${handPickedZone.id} picked by hand: blocks use ${deps.clockGuard.zone().id}")
-        }
-
-        SectionLabel("Integrations")
-        GroupCard {
-            val kinds = LocalKinds.current
-            rememberTicker(30_000)
-            GroupRow(
-                title = "xrnloops",
-                icon = Icons.Outlined.TaskAlt,
-                iconTint = kinds.loop.color,
-                subtitle = when {
-                    loopStatus == LoopStatus.NOT_INSTALLED -> "Not installed: it's where habits are kept and ticked"
-                    loopStatus == LoopStatus.NO_ACCESS -> "Signed with another key: it can't tell xrnrule about ticks"
-                    loopUnreachable -> "Not answering: turn on its Autostart in the phone's settings"
-                    else -> "Same habits, through your home server"
-                },
-                subtitleColor = if (loopStatus != LoopStatus.NO_ACCESS && !loopUnreachable) MaterialTheme.colorScheme.onSurfaceVariant
-                else MaterialTheme.colorScheme.error,
-                first = true,
-                onClick = { deps.loop.launchIntent()?.let { runCatching { context.startActivity(it) } } },
-            )
-            if (deps.websites.isSupported()) {
-                GroupRow(
-                    title = "Browser extension",
-                    icon = Icons.Outlined.Extension,
-                    iconTint = kinds.appTime.color,
-                    subtitle = when {
-                        websiteTracking == WebsiteTracking.OFF -> "Not set up: sites aren't blocked"
-                        websiteTracking == WebsiteTracking.NOT_RUNNING -> "Not answering"
-                        deps.websites.outOfDate -> "Out of date: ${deps.websites.version}, ${deps.websites.latestVersion} is out"
-                        else -> "Blocking sites in your browser"
-                    },
-                    subtitleColor = if (websiteTracking == WebsiteTracking.ON && !deps.websites.outOfDate) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.error,
-                    onClick = { onOpen(SettingsPage.WEBSITES) },
-                )
-            }
-        }
-
-        Gap(20)
-        GroupCard {
-            GroupRow(
-                title = "Appearance",
-                icon = Icons.Outlined.DarkMode,
-                subtitle = appearance.label,
-                first = true,
-                onClick = { onOpen(SettingsPage.APPEARANCE) },
-            )
-            val clock by CornerClockLook.look.collectAsState()
-            GroupRow(
-                title = "Corner timer",
-                icon = Icons.Outlined.AccessTime,
-                subtitle = if (clock.on) clock.corner.label else "Off",
-                onClick = { onOpen(SettingsPage.CORNER_CLOCK) },
-            )
-            if (deps.updates.isSupported) {
-                val updateReady by deps.updates.ready.collectAsStateWithLifecycle()
-                GroupRow(
-                    title = "Updates",
-                    icon = Icons.Outlined.SystemUpdate,
-                    subtitle = updateReady?.let { "Update ready: $it" } ?: "Version ${deps.updates.installedVersion}",
-                    onClick = { onOpen(SettingsPage.UPDATES) },
-                )
-            }
-            GroupRow(
-                title = "Backup",
-                icon = Icons.Outlined.SaveAlt,
-                subtitle = "Export or import your blocks",
-                onClick = { onOpen(SettingsPage.BACKUP) },
-            )
-            GroupRow(title = "Advanced", icon = Icons.Outlined.Tune, onClick = { onOpen(SettingsPage.ADVANCED) })
-        }
-        Gap(36)
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.material3.Icon(painterResource(R.drawable.ic_stat_xrnrule), contentDescription = null, tint = Brand, modifier = Modifier.size(18.dp))
-                WGap(8)
-                Wordmark(size = 20)
-            }
-            Gap(8)
-            Text(
-                appVersion(context),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Gap(24)
+private fun IconChip(icon: ImageVector, tint: Color) {
+    Box(Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(17.dp))
     }
+}
+
+/** The one kind of Settings row: [IconChip], name, figure or state, arrow where it opens something. */
+@Composable
+private fun SettingRow(
+    title: String,
+    icon: ImageVector?,
+    tint: Color,
+    value: RowValue? = null,
+    first: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,
+    /** The value where the name would be, as next to an app's tile. */
+    valueFirst: Boolean = false,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
+) {
+    val valueColor = if (value?.warn == true) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+    GroupRow(
+        title = if (valueFirst) value?.text.orEmpty() else title,
+        leading = leading ?: icon?.let { { IconChip(it, tint) } },
+        first = first,
+        onClick = onClick,
+        titleColor = if (valueFirst && value?.warn == true) valueColor else null,
+        trailing = {
+            if (!valueFirst && !value?.text.isNullOrEmpty()) {
+                Text(value.text, style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = TABULAR), color = valueColor, maxLines = 1)
+            }
+            trailing?.invoke(this)
+        },
+    )
+}
+
+@Composable
+private fun Warning(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 6.dp, top = 8.dp))
 }
 
 private fun permissionIcon(perm: AppPermission): ImageVector = when (perm) {
@@ -308,58 +385,12 @@ private fun appVersion(context: android.content.Context): String = runCatching {
     "Version " + context.packageManager.getPackageInfo(context.packageName, 0).versionName
 }.getOrDefault("")
 
-/** The home-server card at the top, where Habits First keeps its account. */
-@Composable
-private fun SyncSummary(shared: SharedSync, onClick: () -> Unit) {
-    val status by shared.status.collectAsStateWithLifecycle()
-    val configured = shared.settings.isConfigured
-    val green = LocalKinds.current.habit
-    rememberTicker(30_000)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CardShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        androidx.compose.material3.Icon(
-            if (configured) Icons.Outlined.CloudSync else Icons.Outlined.CloudOff,
-            contentDescription = null,
-            tint = if (configured) green.color else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(28.dp),
-        )
-        WGap(18)
-        Column(Modifier.weight(1f)) {
-            Text(if (configured) "Home server" else "Sync is off", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp))
-            Text(
-                when {
-                    !configured -> "Share blocks and unlocks with your laptop"
-                    status == null -> shared.settings.url.removePrefix("https://")
-                    status!!.ok -> "Synced ${formatAgo(status!!.atWallMs)}"
-                    else -> status!!.message
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (status?.ok == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
-        androidx.compose.material3.Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
 /** A permission: a green tick once granted, else an "Allow" pill that opens the system screen. */
 @Composable
 private fun PermissionRow(title: String, icon: ImageVector, granted: Boolean?, first: Boolean = false, onClick: () -> Unit) {
     GroupRow(
         title = title,
-        icon = icon,
+        leading = { IconChip(icon, if (granted == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) },
         first = first,
         chevron = false,
         onClick = onClick,
@@ -382,42 +413,6 @@ private fun PermissionRow(title: String, icon: ImageVector, granted: Boolean?, f
     )
 }
 
-/** What Habits First keeps under Advanced: habits, unlocks, security, look, updates, backup. */
-@Composable
-private fun AdvancedPage(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
-    val lockOn by deps.appLock.enabled.collectAsStateWithLifecycle()
-    Gap(8)
-    GroupCard {
-        GroupRow(
-            title = "Habits",
-            icon = Icons.Outlined.TaskAlt,
-            subtitle = when (world.habits.size) {
-                0 -> "None yet: make one when a block asks for it"
-                1 -> "1 habit, shared with your laptop"
-                else -> "${world.habits.size} habits, shared with your laptop"
-            },
-            first = true,
-            onClick = { onOpen(SettingsPage.HABITS) },
-        )
-        GroupRow(
-            title = "Unlocks",
-            icon = Icons.Outlined.LockOpen,
-            subtitle = "Up to ${formatDuration(world.settings.dailyCapMs)} a day" +
-                if (world.settings.overridesPerDay > 0) " · buying minutes on" else "",
-            onClick = { onOpen(SettingsPage.UNLOCKS) },
-        )
-        GroupRow(
-            title = "Security & privacy",
-            icon = Icons.Outlined.Security,
-            subtitle = listOfNotNull(
-                if (lockOn) "App lock on" else "App lock off",
-                if (deps.guard.isSupported() && deps.guard.hasPassword()) "hardcore password set" else null,
-            ).joinToString(" · "),
-            onClick = { onOpen(SettingsPage.SECURITY) },
-        )
-    }
-}
-
 /** "just now", "5 min ago", "2 h ago". */
 fun formatAgo(wallMs: Long): String {
     val ago = System.currentTimeMillis() - wallMs
@@ -429,7 +424,7 @@ fun formatAgo(wallMs: Long): String {
 // =====================================================================================
 
 @Composable
-fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onBack: () -> Unit, onOpen: (SettingsPage) -> Unit) {
+fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
         // Habits First's sub-page bar: a bare back arrow and the title beside it.
         Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -459,7 +454,6 @@ fun SettingsPageScreen(page: SettingsPage, world: World, deps: SettingsDeps, onB
                 SettingsPage.WEBSITES -> WebsitesPage(world, deps)
                 SettingsPage.UPDATES -> UpdatesPage(deps.updates)
                 SettingsPage.BACKUP -> BackupPage(world, deps.store, deps.guard)
-                SettingsPage.ADVANCED -> AdvancedPage(world, deps, onOpen)
             }
             Gap(32)
         }
@@ -671,8 +665,6 @@ private fun UnlocksPage(world: World, deps: SettingsDeps) {
     val cap = world.settings.dailyCapMs
 
     SectionLabel("Daily unlock limit")
-    PageIntro("The most time all unlocks together can give you in a day.")
-    Gap(10)
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         DAILY_CAP_CHOICES_MIN.forEach { minutes ->
             val ms = minutes * 60_000
@@ -693,7 +685,7 @@ private fun UnlocksPage(world: World, deps: SettingsDeps) {
     }
     val tooLong = world.blocks.filter { it.mode == BlockMode.HABIT && it.reward.unlockDurationMs > cap }
     if (tooLong.isNotEmpty()) {
-        StatusLine("Can't open at this limit (their unlock is longer): ${tooLong.joinToString { it.name }}", ok = false)
+        StatusLine("Unlock longer than the limit: ${tooLong.joinToString { it.name }}", ok = false)
     }
 
     SectionLabel("Buying minutes")
@@ -727,24 +719,25 @@ private fun BuyingMinutes(world: World, onSave: (com.xern.xrnrule.domain.Setting
     val settings = world.settings
     var editing by remember { mutableStateOf(false) }
     if (!editing) {
+        val kinds = LocalKinds.current
         GroupCard {
-            GroupRow(
-                title = if (settings.overridesPerDay > 0) "${settings.overridesPerDay} a day per block" else "Off",
-                icon = Icons.Outlined.Timer,
-                subtitle = if (settings.overridesPerDay > 0) {
-                    "Wait ${settings.overrideWaitMs / 1000} s, type “${settings.overridePhrase}”, get ${formatDuration(settings.overrideGrantMs)}"
-                } else {
-                    null
-                },
+            SettingRow(
+                "A day, per block",
+                Icons.Outlined.Timer,
+                kinds.limit.color,
+                value = RowValue(if (settings.overridesPerDay > 0) settings.overridesPerDay.toString() else "Off"),
                 first = true,
-                chevron = false,
             )
-            GroupRow(
-                title = "Corner clock on limited sites",
-                icon = Icons.Outlined.AccessTime,
-                subtitle = if (settings.showClock) "On" else "Off",
-                chevron = false,
-            )
+            if (settings.overridesPerDay > 0) {
+                SettingRow("Wait", Icons.Outlined.HourglassBottom, kinds.limit.color, value = RowValue("${settings.overrideWaitMs / 1000} s"))
+                SettingRow("Extra time", Icons.Outlined.MoreTime, kinds.limit.color, value = RowValue(formatDuration(settings.overrideGrantMs)))
+                GroupRow(
+                    title = "“${settings.overridePhrase}”",
+                    leading = { IconChip(Icons.Outlined.Keyboard, kinds.limit.color) },
+                    chevron = false,
+                )
+            }
+            SettingRow("Corner clock on limited sites", Icons.Outlined.AccessTime, kinds.limit.color, value = RowValue(if (settings.showClock) "On" else "Off"))
         }
         Gap(12)
         OutlinePill("Change", onClick = { editing = true })
@@ -756,7 +749,7 @@ private fun BuyingMinutes(world: World, onSave: (com.xern.xrnrule.domain.Setting
     var perDay by remember { mutableStateOf(settings.overridesPerDay.toString()) }
     var showClock by remember { mutableStateOf(settings.showClock) }
     val number = KeyboardOptions(keyboardType = KeyboardType.Number)
-    FieldLabel("Sentence to type (accents, case and punctuation don't matter)")
+    FieldLabel("Sentence")
     FieldBox(phrase, { phrase = it }, "Sentence")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Column(Modifier.weight(1f)) {
@@ -807,19 +800,19 @@ private fun SecurityPage(deps: SettingsDeps) {
 
     SectionLabel("App lock")
     GroupCard {
-        SwitchRow(
-            "Ask for my fingerprint to open xrnrule",
-            lockOn,
-            { lock.setEnabled(it) },
-            icon = Icons.Outlined.Fingerprint,
+        SettingRow(
+            "App lock",
+            Icons.Outlined.Fingerprint,
+            LocalKinds.current.pink.color,
+            value = RowValue(if (method == AppLock.Method.PIN && lockOn) "PIN" else ""),
             first = true,
-        )
+            onClick = { lock.setEnabled(!lockOn) },
+        ) { XSwitch(checked = lockOn, onCheckedChange = { lock.setEnabled(it) }) }
     }
     when (method) {
-        AppLock.Method.FINGERPRINT -> null
-        AppLock.Method.PIN -> "No fingerprint: the screen-lock PIN is asked"
+        AppLock.Method.FINGERPRINT, AppLock.Method.PIN -> null
         AppLock.Method.NONE -> if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) "Needs Android 9 or later" else "No screen lock: set one in Android's settings"
-    }?.let { FootNote(it) }
+    }?.let { Warning(it) }
 
     LockedBlocks(deps.store)
 
@@ -833,12 +826,12 @@ private fun SecurityPage(deps: SettingsDeps) {
         }
         else -> {
             GroupCard {
-                GroupRow(
-                    title = "Anti-uninstall",
-                    icon = Icons.Outlined.Security,
-                    subtitle = if (deviceAdminActive) "On" else "Off: tap to turn it on",
+                SettingRow(
+                    "Anti-uninstall",
+                    Icons.Outlined.Security,
+                    LocalKinds.current.pink.color,
+                    value = RowValue(if (deviceAdminActive) "On" else "Off", warn = !deviceAdminActive),
                     first = true,
-                    chevron = !deviceAdminActive,
                     onClick = if (deviceAdminActive) null else ({ (context as? Activity)?.let(guard::requestDeviceAdmin) }),
                 )
             }
@@ -869,15 +862,19 @@ private fun LockedBlocks(store: WorldStore) {
     val world by store.world.collectAsStateWithLifecycle()
     val now = store.clock.nowWallMs()
     val locked = world.blocks.filter { BlockEdits.locked(it, now) }.sortedBy { it.lock!!.untilWall }
+    val kinds = LocalKinds.current
     SectionLabel("Locked blocks")
     GroupCard {
-        GroupRow(
-            title = "Emergency unlocks",
-            icon = Icons.Outlined.LockClock,
-            subtitle = "${BlockEdits.emergencyLeft(world)} of ${Defaults.EMERGENCY_UNLOCKS} left",
+        SettingRow(
+            "Emergency unlocks left",
+            Icons.Outlined.LockClock,
+            kinds.strict.color,
+            value = RowValue("${BlockEdits.emergencyLeft(world)} / ${Defaults.EMERGENCY_UNLOCKS}"),
             first = true,
         )
-        locked.forEach { b -> GroupRow(title = b.name, subtitle = "Locked until ${formatLockEnd(b.lock!!.untilWall, now)}", icon = Icons.Outlined.Lock) }
+        locked.forEach { b ->
+            SettingRow(b.name, Icons.Outlined.Lock, kinds.strict.color, value = RowValue("until ${formatLockEnd(b.lock!!.untilWall, now)}"))
+        }
     }
 }
 
@@ -916,7 +913,9 @@ private fun PasswordForm(askCurrent: Boolean, submitLabel: String, onSubmit: (cu
 private fun CornerClockPage() {
     val look by CornerClockLook.look.collectAsState()
     GroupCard {
-        SwitchRow("Show it in apps", look.on, { CornerClockLook.set(look.copy(on = it)) }, icon = Icons.Outlined.AccessTime, first = true)
+        SettingRow("Show it in apps", Icons.Outlined.AccessTime, LocalKinds.current.limit.color, first = true, onClick = { CornerClockLook.set(look.copy(on = !look.on)) }) {
+            XSwitch(checked = look.on, onCheckedChange = { CornerClockLook.set(look.copy(on = it)) })
+        }
     }
     if (!look.on) return
     SectionLabel("Where")
@@ -960,7 +959,7 @@ private fun CornerClockPreview(look: ClockLook, onCorner: (ClockCorner) -> Unit)
                 .background(Color(0x99000000))
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             color = Color.White,
-            fontFamily = GeistMono,
+            style = LocalTextStyle.current.copy(fontFeatureSettings = TABULAR),
             fontWeight = if (strong) FontWeight.Bold else FontWeight.Medium,
             fontSize = look.size.sp.sp,
         )
@@ -1006,21 +1005,15 @@ private fun OtherBrowsersSwitch(world: World, deps: SettingsDeps) {
     val on = world.settings.blockOtherBrowsers
     fun set(value: Boolean) = deps.store.edit { it.copy(settings = it.settings.copy(blockOtherBrowsers = value)) }
     GroupCard {
-        GroupRow(
-            title = "Block other browsers",
-            icon = Icons.Outlined.Language,
-            first = true,
-            chevron = false,
-            trailing = {
-                XSwitch(checked = on, onCheckedChange = { want ->
-                    if (want) {
-                        set(true)
-                    } else {
-                        loosen = LoosenRequest("Allow other browsers?", "Sites won't be blocked in them.", hardcore = false) { set(false) }
-                    }
-                })
-            },
-        )
+        SettingRow("Block other browsers", Icons.Outlined.Language, LocalKinds.current.blue.color, first = true) {
+            XSwitch(checked = on, onCheckedChange = { want ->
+                if (want) {
+                    set(true)
+                } else {
+                    loosen = LoosenRequest("Allow other browsers?", "Sites won't be blocked in them.", hardcore = false) { set(false) }
+                }
+            })
+        }
     }
     loosen?.let { request -> LoosenGuardDialog(request, deps.guard, deps.store, onDismiss = { loosen = null }) }
 }
@@ -1036,10 +1029,9 @@ private fun UpdatesPage(updates: AppUpdates) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    PageIntro("Version ${updates.installedVersion}")
-    Gap(16)
     GroupCard {
-        PermissionRow("Allow installing updates", Icons.Outlined.SystemUpdate, canInstall, first = true) {
+        SettingRow("Version", Icons.Outlined.SystemUpdate, LocalKinds.current.blue.color, value = RowValue(updates.installedVersion), first = true)
+        PermissionRow("Installing updates", Icons.Outlined.InstallMobile, canInstall) {
             runCatching { context.startActivity(updates.installPermissionIntent()) }
         }
     }

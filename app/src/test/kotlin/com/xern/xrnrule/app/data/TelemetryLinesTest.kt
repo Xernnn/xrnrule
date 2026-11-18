@@ -48,13 +48,31 @@ class TelemetryLinesTest {
     }
 
     @Test
-    fun whatThisDeviceAlreadyHasStaysOut() {
+    fun thisDevicesOwnLinesStayOut() {
         val body = """{"events": [
             {"d": "phone", "t": "blocked", "at": 1, "target": "com.app"},
-            {"d": "laptop", "t": "habit", "at": 2, "block": "b1"},
-            {"d": "laptop", "t": "unlock", "at": 3, "block": "b1", "ms": 60000, "start": 2}
+            {"d": "phone", "t": "habit", "at": 2, "block": "b1"}
         ]}"""
         assertTrue(eventsFromElsewhere(body, "phone").isEmpty())
+    }
+
+    /** Insights shows where a habit was done and an unlock used; it counts a shared one once (InsightsModel.merge). */
+    @Test
+    fun theLaptopsHabitsAndUnlocksComeInWithTheirSession() {
+        val body = """{"events": [
+            {"d": "laptop", "t": "habit", "at": 2, "block": "b1"},
+            {"d": "laptop", "t": "unlock", "at": 3, "block": "b1", "ms": 60000, "start": 2},
+            {"d": "laptop", "t": "unlock", "at": 4, "block": "b1", "ms": 60000},
+            {"d": "laptop", "t": "habit", "at": 5}
+        ]}"""
+        assertEquals(
+            listOf(
+                TelemetryEvent.HabitDone("b1", 2),
+                TelemetryEvent.UnlockUsed("b1", 60_000, 3, 2),
+                TelemetryEvent.UnlockUsed("b1", 60_000, 4, 0),
+            ),
+            eventsFromElsewhere(body, "phone"),
+        )
     }
 
     /** It runs on the app's process, where an uncaught exception would take every block down. */

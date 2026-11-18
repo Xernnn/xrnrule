@@ -84,7 +84,7 @@ class SiteUsageLog(private val file: File, private val clock: Clock) {
     }
 
     private companion object {
-        const val KEEP_DAYS = 14
+        const val KEEP_DAYS = 31 // Insights goes back 30 days
 
         /** "www.youtube.com" and "m.youtube.com" are the same site to a person reading Insights. */
         fun displayHost(host: String): String {

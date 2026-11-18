@@ -277,12 +277,15 @@ class SharedSync(
         telemetrySizeSent = size
     }
 
-    /** What other devices logged since [sinceMs], for Insights; nothing with sync off or out of reach. Blocking. */
-    fun eventsElsewhere(sinceMs: Long): List<TelemetryEvent> {
+    /**
+     * What other devices logged since [sinceMs], for Insights: nothing with sync off, null when
+     * the server couldn't be asked. Blocking.
+     */
+    fun eventsElsewhere(sinceMs: Long): List<TelemetryEvent>? {
         if (!settings.isConfigured) return emptyList()
         return runCatching {
             eventsFromElsewhere(Api(settings.url, settings.user, settings.password).events(sinceMs), DEVICE)
-        }.getOrDefault(emptyList())
+        }.getOrNull()
     }
 
     private fun loadBase(): Base? = try {

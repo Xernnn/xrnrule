@@ -63,22 +63,19 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.InstalledApps
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
-import com.xern.xrnrule.app.ui.theme.Brand
-import com.xern.xrnrule.app.ui.theme.GeistMono
+import com.xern.xrnrule.app.ui.theme.TABULAR
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
@@ -160,12 +157,8 @@ fun BlocksScreen(
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         PageTitle(
             title = "",
-            leading = {
-                // Habits First's header: a small mark in colour before the name.
-                Icon(painterResource(R.drawable.ic_stat_xrnrule), contentDescription = null, tint = Brand, modifier = Modifier.size(20.dp))
-                WGap(8)
-                Wordmark()
-            },
+            // The family's tile stands for the name (no wordmark beside it).
+            leading = { BrandTile() },
             actions = {
                 // A break only lifts soft blocks that aren't locked (I25, I50); with none, there's nothing to offer.
                 if (pauseLeft == 0L && world.blocks.any { store.engine.pausable(it, store.clock) }) {
@@ -667,7 +660,7 @@ private fun StatusPill(
             textAlign = TextAlign.Center,
             modifier = if (trailing != null) Modifier.weight(1f) else Modifier,
         )
-        if (trailing != null) Text(trailing, style = MaterialTheme.typography.titleMedium, color = content, fontFamily = GeistMono)
+        if (trailing != null) Text(trailing, style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = TABULAR), color = content)
     }
 }
 
