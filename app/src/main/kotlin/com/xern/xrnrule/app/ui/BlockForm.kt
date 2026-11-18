@@ -556,7 +556,9 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
 
     KindCard(
         icon = Icons.Outlined.Link,
-        title = "Habit from xrnloops",
+        // xrnloops' tile names the app.
+        title = "Linked habit",
+        tile = { LoopsTile(size = it) },
         kind = kinds.loop,
         selected = form.loopOn,
         summary = if (form.links.isEmpty()) "no habit linked yet" else andList(form.links.map { it.name }),

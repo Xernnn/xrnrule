@@ -102,8 +102,7 @@ import com.xern.xrnrule.app.hardcore.PasswordTries
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
 import com.xern.xrnrule.app.ui.theme.Appearance
-import com.xern.xrnrule.app.ui.theme.Brand
-import com.xern.xrnrule.app.ui.theme.GeistMono
+import com.xern.xrnrule.app.ui.theme.TABULAR
 import com.xern.xrnrule.app.ui.theme.LocalKinds
 import com.xern.xrnrule.app.ui.theme.ThemeMode
 import com.xern.xrnrule.app.update.AppUpdates
@@ -215,8 +214,7 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
             rememberTicker(30_000)
             GroupRow(
                 title = "xrnloops",
-                icon = Icons.Outlined.TaskAlt,
-                iconTint = kinds.loop.color,
+                leading = { LoopsTile(size = 28.dp) },
                 subtitle = when {
                     loopStatus == LoopStatus.NOT_INSTALLED -> "Not installed: it's where habits are kept and ticked"
                     loopStatus == LoopStatus.NO_ACCESS -> "Signed with another key: it can't tell xrnrule about ticks"
@@ -281,11 +279,7 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
         }
         Gap(36)
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.material3.Icon(painterResource(R.drawable.ic_stat_xrnrule), contentDescription = null, tint = Brand, modifier = Modifier.size(18.dp))
-                WGap(8)
-                Wordmark(size = 20)
-            }
+            BrandTile(size = 36.dp)
             Gap(8)
             Text(
                 appVersion(context),
@@ -960,7 +954,7 @@ private fun CornerClockPreview(look: ClockLook, onCorner: (ClockCorner) -> Unit)
                 .background(Color(0x99000000))
                 .padding(horizontal = 10.dp, vertical = 4.dp),
             color = Color.White,
-            fontFamily = GeistMono,
+            style = androidx.compose.material3.LocalTextStyle.current.copy(fontFeatureSettings = TABULAR),
             fontWeight = if (strong) FontWeight.Bold else FontWeight.Medium,
             fontSize = look.size.sp.sp,
         )

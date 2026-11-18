@@ -17,7 +17,9 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -27,12 +29,9 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Dark graphite cards on a near-black ground, one green for "go", and a colour per kind of
- * habit (timer red, app time cyan, ...) so a block's rows read at a glance. Type is MiSans, with
- * Geist Mono (OFL, licence in assets/licenses) for the wordmark.
+ * habit (timer red, app time cyan, ...) so a block's rows read at a glance. Type is MiSans, the
+ * xrn family's one font, numbers and countdowns included.
  */
-
-/** The launcher icon's orange, for the mark before the wordmark. */
-val Brand = Color(0xFFE8590C)
 
 private val Green = Color(0xFF22C55E)
 private val GreenLight = Color(0xFF16A34A)
@@ -102,25 +101,26 @@ private val LightScheme = lightColorScheme(
 )
 
 /**
- * MiSans Latin (Xiaomi's MiSans, the system font on the phone), one static file per weight.
- * MiSans runs heavier than its names at the size the type scale below uses, so each Compose
- * weight takes the file that looks like Habits First's (Nunito's) weight of that name: Bold
- * draws MiSans Semibold, ExtraBold MiSans Bold. It covers Vietnamese.
+ * MiSans Latin (Xiaomi's MiSans, the system font on the phone). MiSans runs heavier than its
+ * names at the size the type scale below uses, so each Compose weight takes the cut that looks
+ * like Habits First's (Nunito's) weight of that name: Bold draws MiSans Semibold, ExtraBold
+ * MiSans Bold. It covers Vietnamese.
+ *
+ * Bold and Heavy come from the variable font at those cuts' weights (630, 700): the static
+ * Bold and Heavy files of MiSans Latin 4.007 draw "@" as "&".
  */
+@OptIn(ExperimentalTextApi::class)
 val MiSans = FontFamily(
     Font(R.font.misans_regular, FontWeight.Normal),
     Font(R.font.misans_medium, FontWeight.Medium),
     Font(R.font.misans_demibold, FontWeight.SemiBold),
     Font(R.font.misans_semibold, FontWeight.Bold),
-    Font(R.font.misans_bold, FontWeight.ExtraBold),
-    Font(R.font.misans_heavy, FontWeight.Black),
+    Font(R.font.misans_vf, FontWeight.ExtraBold, variationSettings = FontVariation.Settings(FontVariation.weight(630))),
+    Font(R.font.misans_vf, FontWeight.Black, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
 )
 
-/** For the wordmark and big countdowns; static weights cut the same way. */
-val GeistMono = FontFamily(
-    Font(R.font.geist_mono_medium, FontWeight.Medium),
-    Font(R.font.geist_mono_bold, FontWeight.Bold),
-)
+/** MiSans's tabular figures: every digit one width, so a countdown or a column of numbers doesn't jitter. */
+const val TABULAR = "tnum"
 
 private fun style(size: Double, weight: FontWeight, spacing: Double = 0.0) = TextStyle(
     fontFamily = MiSans,

@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.xern.xrnrule.app.block.OverlayShieldPort
 import com.xern.xrnrule.app.ui.theme.KindColors
 import com.xern.xrnrule.app.ui.theme.LocalKinds
-import com.xern.xrnrule.app.ui.theme.GeistMono
+import com.xern.xrnrule.app.ui.theme.TABULAR
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockMode
@@ -150,8 +150,7 @@ fun BlockOverlayContent(
                             Gap(14)
                             Text(
                                 back.at,
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontFamily = GeistMono,
+                                style = MaterialTheme.typography.headlineMedium.copy(fontFeatureSettings = TABULAR),
                                 textAlign = TextAlign.Center,
                             )
                         }

@@ -55,6 +55,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xern.xrnrule.app.ui.theme.KindColors
@@ -100,6 +101,8 @@ internal fun KindCard(
     selected: Boolean,
     summary: String,
     onToggle: ((Boolean) -> Unit)?,
+    /** In place of [icon]: another xrn app's tile, when the card is about that app. */
+    tile: (@Composable (Dp) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
@@ -116,7 +119,10 @@ internal fun KindCard(
                 .padding(start = if (selected) 14.dp else 17.dp, end = 12.dp, top = if (selected) 12.dp else 13.dp, bottom = if (selected) 12.dp else 13.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (selected) {
+            if (tile != null) {
+                Box(Modifier.size(if (selected) 32.dp else 20.dp), contentAlignment = Alignment.Center) { tile(if (selected) 30.dp else 20.dp) }
+                WGap(if (selected) 14 else 13)
+            } else if (selected) {
                 Box(
                     Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.18f)),
                     contentAlignment = Alignment.Center,
