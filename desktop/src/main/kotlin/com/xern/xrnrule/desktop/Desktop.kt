@@ -107,9 +107,11 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
 
     /**
      * The browser in front as I49 watches it: none while the screen is locked, nor while one of a
-     * browser's own windows the extension can't see is in front ([isOwnWindow]).
+     * browser's own windows the extension can't see is in front ([isOwnWindow]), in a browser the
+     * extension has spoken from. A browser without it is watched whichever of its windows is in front.
      */
-    private fun browserInFront(): String? = active?.takeUnless { locked || isOwnWindow(it.title) }?.appId?.takeIf(::isBrowser)
+    private fun browserInFront(): String? =
+        active?.takeUnless { locked || (isOwnWindow(it.title) && it.appId in browsers.known) }?.appId?.takeIf(::isBrowser)
 
     private fun watchFront() {
         val browser = browserInFront()
@@ -231,7 +233,17 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
          */
         fun isOwnWindow(title: String): Boolean =
             title == "Picture-in-Picture" || title == "Picture in picture" ||
-                title == "Developer Tools" || title.startsWith("Developer Tools — ") || title.startsWith("DevTools - ")
+                title == "Developer Tools" || FIREFOX_DEVTOOLS.matches(title) || CHROMIUM_DEVTOOLS.matches(title)
+
+        /**
+         * The whole title of Firefox's and Zen's DevTools: "Developer Tools — [page title — ]address".
+         * A page's window has the browser's name last ("… — Zen Browser"), which is no address, so a
+         * page titled "Developer Tools — …" is no such window.
+         */
+        private val FIREFOX_DEVTOOLS = Regex("Developer Tools — (.+ — )?[a-z][a-z0-9+.-]*:\\S*")
+
+        /** Chromium's: "DevTools - address", nothing after it; a page's window has " - Chromium" (its name) after the title. */
+        private val CHROMIUM_DEVTOOLS = Regex("DevTools - \\S+")
 
         private val NOT_A_WORD = Regex("[^a-z0-9]+")
     }

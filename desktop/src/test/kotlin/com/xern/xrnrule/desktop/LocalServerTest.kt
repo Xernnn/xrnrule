@@ -4,6 +4,7 @@ import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockLock
+import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.ChecklistItem
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Defaults
@@ -205,6 +206,20 @@ class LocalServerTest {
     }
 
     @Test
+    fun i46_minutesCanBeBoughtForABlockOnAPath() {
+        val shorts = Block(
+            "shorts", "Shorts", targetSites = setOf("youtube.com/shorts"),
+            trigger = Trigger(TriggerType.TIMER, 0, TriggerUnit.MS), mode = BlockMode.SCHEDULE,
+        )
+        val d = Daemon(listOf(shorts))
+        // The block page for youtube.com/shorts/… offers to buy minutes; asking was cut to the bare
+        // host, which no block covers, and the answer was that this can't be bought off.
+        val begun = d.postJson("/api/override", """{"op":"begin","site":"https://www.youtube.com/shorts/abc"}""")
+        assertEquals(JsonObject(emptyMap()), begun)
+        assertEquals(setOf("shorts"), d.store.world.value.pendingOverride?.blockIds)
+    }
+
+    @Test
     fun aWaitNobodyConfirmsIsDroppedOnceItCantBeConfirmed() {
         val d = Daemon()
         // A break waits 60 s (§2.3, I25); the page that asked went before it could confirm or cancel.
@@ -263,6 +278,29 @@ class LocalServerTest {
         // A site no other habit block holds: at once.
         assertEquals(JsonObject(emptyMap()), d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["example.com","example.org"]}"""))
         assertEquals(setOf("example.com", "example.org"), sites())
+    }
+
+    @Test
+    fun aWaitConfirmedGoesByTheBlockAsItIsThen() {
+        val d = Daemon(listOf(habitOn("mine", "youtube.com").copy(targetSites = setOf("youtube.com", "reddit.com"))))
+        fun sites() = d.store.world.value.block("mine")!!.targetSites
+        fun phone(change: (Block) -> Block) = runBlocking {
+            d.store.edit { w -> w.copy(blocks = w.blocks.map { if (it.id == "mine") change(it) else it }) }
+        }
+        // reddit.com taken off: a minute's wait. Meanwhile the phone adds x.com to the block.
+        var token = d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["youtube.com"]}""")["token"]!!.jsonPrimitive.content
+        phone { it.copy(targetSites = it.targetSites + "x.com") }
+        d.clock.mono += LocalServer.GUARD_MS
+        assertEquals(JsonObject(emptyMap()), d.postJson("/api/confirm", """{"token":"$token"}"""))
+        assertEquals("the phone's x.com went with no wait of its own", setOf("youtube.com", "x.com"), sites())
+
+        // x.com taken off; meanwhile the phone makes the block hardcore: only the phone loosens it now.
+        token = d.postJson("/api/laptop", """{"blockId":"mine","desktopApps":[],"sites":["youtube.com"]}""")["token"]!!.jsonPrimitive.content
+        phone { it.copy(enforcementTier = EnforcementTier.HARDCORE) }
+        d.clock.mono += LocalServer.GUARD_MS
+        val answer = d.postJson("/api/confirm", """{"token":"$token"}""")
+        assertTrue(answer.toString(), answer.error().orEmpty().contains("hardcore"))
+        assertEquals(setOf("youtube.com", "x.com"), sites())
     }
 
     @Test

@@ -69,8 +69,11 @@ class LocalServer(
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
 
-    /** A loosening change waiting out its 60 s (contract §2.3); applied only if confirmed in time. */
-    private class Guard(val startedAtMono: Long, val apply: suspend () -> Unit)
+    /**
+     * A loosening change waiting out its 60 s (contract §2.3); applied only if confirmed in time,
+     * and only if [refusal], asked then, finds nothing in the way.
+     */
+    private class Guard(val startedAtMono: Long, val refusal: () -> String?, val apply: suspend () -> Unit)
 
     fun start() {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", config.port), 32)
@@ -151,7 +154,7 @@ class LocalServer(
         val world = store.world.value
         return when (body["op"]?.jsonPrimitive?.contentOrNull) {
             "begin" -> {
-                val blockers = store.engine.blockersOf(world, body["app"]?.jsonPrimitive?.contentOrNull, body["site"]?.jsonPrimitive?.contentOrNull?.let(Sites::normalize), store.clock)
+                val blockers = store.engine.blockersOf(world, body["app"]?.jsonPrimitive?.contentOrNull, body["site"]?.jsonPrimitive?.contentOrNull?.let(Sites::normalizeTarget), store.clock)
                 store.engine.overrideRejection(world, blockers, store.clock)?.let { return error(overrideText(it.name)) }
                 runBlocking { store.dispatchAndGet(BlockEvent.BeginOverride(blockers.map { it.id }.toSet())) }
                 "{}"
@@ -248,7 +251,17 @@ class LocalServer(
         val sites = body["sites"]!!.jsonArray.mapNotNull { Sites.normalizeTarget(it.jsonPrimitive.content) }.toSet()
         val old = store.world.value.block(id) ?: return error("That block is gone.")
         val new = old.copy(targetDesktopApps = apps, targetSites = sites)
-        return loosening(old, new) { store.edit { w -> w.copy(blocks = w.blocks.map { b -> if (b.id == id) b.copy(targetDesktopApps = apps, targetSites = sites) else b }) } }
+        // What this change takes away and adds, applied to the block as it is by then: an app or
+        // site the phone added during the wait stays, rather than going without a wait of its own.
+        val (appsGone, appsAdded) = (old.targetDesktopApps - apps) to (apps - old.targetDesktopApps)
+        val (sitesGone, sitesAdded) = (old.targetSites - sites) to (sites - old.targetSites)
+        return loosening(old, new) {
+            store.edit { w ->
+                w.copy(blocks = w.blocks.map { b ->
+                    if (b.id != id) b else b.copy(targetDesktopApps = b.targetDesktopApps - appsGone + appsAdded, targetSites = b.targetSites - sitesGone + sitesAdded)
+                })
+            }
+        }
     }
 
     /**
@@ -278,13 +291,26 @@ class LocalServer(
         }
         own.firstNotNullOfOrNull { lockedError(it) }?.let { return it }
         others.firstNotNullOfOrNull { lockedError(it, opened = true) }?.let { return it }
-        if (own.any { it.enforcementTier == EnforcementTier.HARDCORE }) return error("This is a hardcore block: loosen it on the phone, with its password.")
-        others.firstOrNull { it.enforcementTier == EnforcementTier.HARDCORE }?.let {
-            return error("Its unlock would open what ${it.name} blocks, a hardcore block: do this on the phone, with its password.")
-        }
+        own.firstNotNullOfOrNull { hardcoreError(it) }?.let { return it }
+        others.firstNotNullOfOrNull { hardcoreError(it, opened = true) }?.let { return it }
         val label = others.takeIf { it.isNotEmpty() }?.let { o -> "Saving (its unlock would open what ${o.joinToString(" and ") { it.name }} blocks too)" }
-        // A lock set on the phone during the wait still holds (I39).
-        return guarded(label) { if ((own + others).all { lockedError(it) == null }) apply() }
+        // As the blocks are at confirming: a lock set on the phone during the wait still holds
+        // (I39), and a block made hardcore there only loosens on the phone, with its password.
+        val refusal = {
+            own.firstNotNullOfOrNull { lockedError(it) ?: hardcoreError(it) }
+                ?: others.firstNotNullOfOrNull { lockedError(it, opened = true) ?: hardcoreError(it, opened = true) }
+        }
+        return guarded(label, refusal, apply)
+    }
+
+    /** A hardcore block, as it is now, loosens only on the phone, which has the password. */
+    private fun hardcoreError(old: Block, opened: Boolean = false): String? {
+        val current = store.world.value.block(old.id) ?: old
+        if (current.enforcementTier != EnforcementTier.HARDCORE) return null
+        return error(
+            if (opened) "Its unlock would open what ${current.name} blocks, a hardcore block: do this on the phone, with its password."
+            else "This is a hardcore block: loosen it on the phone, with its password.",
+        )
     }
 
     /**
@@ -372,13 +398,13 @@ class LocalServer(
     }
 
     /** Starts a 60 s wait for [apply]; [label] says what it is for, if the page's own words don't. */
-    private fun guarded(label: String? = null, apply: suspend () -> Unit): String {
+    private fun guarded(label: String? = null, refusal: () -> String? = { null }, apply: suspend () -> Unit): String {
         val now = store.clock.nowMonotonicMs()
         // A wait nobody confirmed or cancelled (the page went before it could say) goes once it
         // can't be confirmed any more, rather than staying for as long as the daemon runs.
         guards.values.removeIf { now - it.startedAtMono > GUARD_MS + CONFIRM_MS }
         val token = UUID.randomUUID().toString()
-        guards[token] = Guard(now, apply)
+        guards[token] = Guard(now, refusal, apply)
         val said = label?.let { ""","label":${json.encodeToString(String.serializer(), it)}""" }.orEmpty()
         return """{"token":"$token","waitMs":$GUARD_MS$said}"""
     }
@@ -394,6 +420,7 @@ class LocalServer(
         if (waited < GUARD_MS) return """{"error":"Not yet: ${(GUARD_MS - waited) / 1000} s to go."}"""
         guards.remove(token)
         if (waited > GUARD_MS + CONFIRM_MS) return """{"error":"That wait ran out. Start again."}"""
+        guard.refusal()?.let { return it }
         runBlocking { guard.apply() }
         return "{}"
     }

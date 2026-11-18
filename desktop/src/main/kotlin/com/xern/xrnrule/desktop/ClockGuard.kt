@@ -23,7 +23,9 @@ import kotlin.math.abs
  * rebooted in between: the boot clock restarts then, so there is nothing to compare against. A boot
  * keeps the skew (the hardware clock may hold the change), but the time never goes back past the
  * last it saw: `date -s` leaves the hardware clock right, and the skew kept would put the laptop a
- * day behind, back in yesterday, until NTP answered.
+ * day behind, back in yesterday, until NTP answered. A clock set ahead across a reboot (NTP off,
+ * the hardware clock set too) is caught by the sync server's time instead ([serverTime]), at the
+ * first answer from it; until then, offline, nothing can tell.
  *
  * **Zone** (I54). Linux sets no time zone by itself: `timedatectl set-timezone` (Omarchy's menu
  * too) is a zone picked by hand, and one where it's already tomorrow would start a new day of
@@ -87,16 +89,32 @@ class ClockGuard(
         if (s != saved) save(s)
     }
 
+    /**
+     * An answer from the sync server, sent at [dateMs] by its clock (whole seconds) and [tookMs]
+     * after it was asked: the time now is at most [dateMs] + 1 s + [tookMs]. Ahead of that by more
+     * than [SERVER_TOLERANCE_MS] while NTP doesn't keep the clock, the laptop's time is taken back
+     * to it: a clock set ahead across a reboot, where there was nothing to compare against. Only
+     * ever back: the server's time never takes the laptop's forward, so an answer from anywhere
+     * else can't end a lock or start a day. NTP keeping the clock again trusts it ([check]).
+     */
+    @Synchronized
+    fun serverTime(dateMs: Long, tookMs: Long) {
+        val wall = raw.nowWallMs()
+        val s = book(wall, raw.nowMonotonicMs())
+        val latest = dateMs + 1_000 + tookMs.coerceAtLeast(0)
+        if (wall - s.skewMs - latest <= SERVER_TOLERANCE_MS || synced()) return
+        // The times seen since the boot were the hand-set ones: not a floor for the next boot.
+        save(s.copy(skewMs = wall - latest, seenWall = minOf(s.seenWall, latest)))
+    }
+
     /** What a person should know about the clock on the local page, or null. */
     fun note(): String? {
         val skew = skewMs
         val zone = zone()
         val picked = handPickedZone
         return when {
-            skew != 0L -> "This laptop's clock was set ${duration(abs(skew))} ${if (skew > 0) "ahead" else "back"} by hand, " +
-                "so blocks keep the time it had. Turn automatic time back on (timedatectl set-ntp true) and it's trusted again."
-            picked != null -> "This laptop is set to ${picked.id} by hand, so blocks go by ${zone.id}: " +
-                if (sharedZone() != null) "the zone your phone set itself." else "Linux sets no time zone by itself, and once your phone syncs, blocks go by its zone."
+            skew != 0L -> "Set ${duration(abs(skew))} ${if (skew > 0) "ahead" else "back"} by hand. To trust it again: timedatectl set-ntp true"
+            picked != null -> "Set to ${picked.id} by hand: blocks go by ${zone.id}"
             else -> null
         }
     }
@@ -150,6 +168,9 @@ class ClockGuard(
     companion object {
         /** Clock drift and NTP's small corrections stay well under this; a change by hand doesn't. */
         const val TOLERANCE_MS = 5_000L
+
+        /** How far ahead of the sync server's time the laptop's may be ([serverTime]): its seconds, slow answers, its own clock. */
+        const val SERVER_TOLERANCE_MS = 2 * 60_000L
 
         /** How often [check] notes the time seen; staler only makes the floor after a boot lower. */
         const val SEEN_EVERY_MS = 10 * 60_000L

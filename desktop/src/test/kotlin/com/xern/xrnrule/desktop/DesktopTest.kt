@@ -22,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.ZoneId
 
 class DesktopTest {
@@ -224,6 +225,41 @@ class DesktopTest {
     }
 
     @Test
+    fun i49_aPageTitledLikeDevToolsIsNoDevTools() {
+        // A bookmarklet, document.title = "DevTools - x": the window's title began like DevTools',
+        // so a browser without the extension was never in front, and every blocked site was open in it.
+        for (title in listOf(
+            "DevTools - x - Chromium", "DevTools - www.youtube.com/watch?v=1 - Brave",
+            "Developer Tools — x — Zen Browser", "Developer Tools — x — https://www.youtube.com/ — Mozilla Firefox",
+            "Developer Tools — https://www.youtube.com/ — Zen Browser Private Browsing",
+        )) {
+            assertFalse(title, Foreground.isOwnWindow(title))
+        }
+        for (title in listOf("Developer Tools — about:blank", "Developer Tools — https://www.youtube.com/")) {
+            assertTrue(title, Foreground.isOwnWindow(title))
+        }
+    }
+
+    @Test
+    fun i49_aBrowserWithoutTheExtensionIsWatchedWhicheverOfItsWindowsIsInFront() {
+        val clock = TestClock()
+        val known = File(Files.createTempDirectory("xrnrule").toFile(), "browsers.txt").apply { writeText("zen\n") }
+        val store = Store(BlockEngine(), NoPersist, clock, CoroutineScope(Dispatchers.Unconfined))
+        val fg = Foreground(store, known)
+        val config = Config("", "", "", 0, File("/nonexistent"), openBlockPage = false)
+        val quiet = object : Notifier(config) {
+            override fun notify(title: String, body: String, urgent: Boolean) = Unit
+            override fun blocked(appId: String) = Unit
+        }
+        val enforcer = Enforcer(store, quiet, config).also { it.foreground = fg }
+        // Chromium has never had the extension: its video in Picture-in-Picture, clicked, is still it.
+        enforcer.Activated("chromium", "chromium", "20")
+        enforcer.Titled("Picture in picture")
+        clock.mono += BrowserWatch.OTHER_GRACE_MS
+        assertEquals("chromium", fg.browsers.toClose(clock.mono))
+    }
+
+    @Test
     fun i16_theBlockPageStandsInOnlyForAnAppThatIsBlocked() {
         val fg = Foreground(blocking("steam", TestClock()))
         // /block?app=… is anyone's to type: named after a habit app, it would run that app's timer unopened.
@@ -249,6 +285,30 @@ class DesktopTest {
         assertEquals("http://127.0.0.1:40000", config.localUrl)
         assertTrue(config.syncConfigured)
         assertTrue(config.openBlockPage)
+    }
+
+    @Test
+    fun theSyncPasswordGoesOnlyOverHttpsOrToThisMachine() {
+        // Basic auth goes with every request: over plain HTTP anyone on the way reads the password.
+        fun config(server: String) = Config(server = server, user = "you", password = "secret", port = 0, dataDir = File("/nonexistent"))
+        assertFalse(config("http://home.example.org").syncConfigured)
+        assertEquals("http://home.example.org/xrnrule isn't https", config("http://home.example.org").syncRefusal)
+        assertTrue(config("https://home.example.org").syncConfigured)
+        assertTrue(config("http://127.0.0.1:5232").syncConfigured)
+        assertTrue(config("http://localhost:5232").syncConfigured)
+        assertFalse(config("https://home.example.org").copy(loopUrl = "http://home.example.org/xrnloops").syncConfigured)
+    }
+
+    @Test
+    fun filesHoldingThePasswordThatOthersCanReadAreNamed() {
+        val dir = Files.createTempDirectory("xrnrule").toFile()
+        val pw = File(dir, "pw").apply { writeText("secret\n") }
+        val props = File(dir, "desktop.properties").apply { writeText("server=https://example.org/\nuser=you\npasswordFile=${pw.path}\n") }
+        Files.setPosixFilePermissions(props.toPath(), PosixFilePermissions.fromString("rw-------"))
+        Files.setPosixFilePermissions(pw.toPath(), PosixFilePermissions.fromString("rw-r--r--"))
+        assertEquals(listOf(pw), Config.load(props).exposedFiles(props))
+        Files.setPosixFilePermissions(pw.toPath(), PosixFilePermissions.fromString("rw-------"))
+        assertEquals(emptyList<File>(), Config.load(props).exposedFiles(props))
     }
 
     @Test

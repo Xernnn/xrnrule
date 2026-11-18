@@ -81,7 +81,7 @@ function cancelGuard() {
   if (!guard) return;
   post("/api/confirm", { token: guard.token, cancel: true });
   guard = null;
-  message = "The wait was cancelled because you left the page.";
+  message = "Wait cancelled";
 }
 document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && cancelGuard());
 window.addEventListener("pagehide", cancelGuard);
@@ -134,6 +134,21 @@ const siteMatches = (location, target) => {
   const path = location.slice(host.length);
   return !want || path === want || path.startsWith(want + "/");
 };
+/**
+ * Whether [back], the address a blocked tab left, is on [site]'s own host or one under it: only
+ * then does the page go back to it once the site opens. Any page can open /block with an address
+ * after the "#", and would otherwise send a visitor through xrnrule's own page wherever it liked.
+ */
+const backHere = (back, site) => {
+  if (!back || !site || !/^https?:/i.test(back)) return false;
+  let host;
+  try {
+    host = new URL(back).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  return siteMatches(host, site.split("/")[0].toLowerCase());
+};
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
@@ -156,10 +171,10 @@ function habitItem(x) {
     return h("label", {},
       h("input", { type: "checkbox", checked: ticked || x.dayValue === YES_AUTO, onchange: () => act({ type: "set", habitId: x.id, day: x.day, value: ticked ? NO : YES_MANUAL }) }),
       x.name + day,
-      x.unlock === null ? h("span", { class: "linked" }, "an \"at most\" habit can't open a block")
-        : x.spent > 0 && x.amount < 1 && h("span", { class: "linked" }, "done; that already opened this block"));
+      x.unlock === null ? h("span", { class: "linked" }, "never opens")
+        : x.spent > 0 && x.amount < 1 && h("span", { class: "linked" }, "used"));
   }
-  const toward = x.unlock === null ? "an \"at most\" habit can't open a block"
+  const toward = x.unlock === null ? "never opens"
     : x.kind === "TIMER" ? `${Math.floor(Math.min(x.amount, x.unlock) / 1000)} / ${units(x.unlock)} min` : `${units(Math.min(x.amount, x.unlock))} / ${units(x.unlock)}${unit}`;
   return h("div", { class: "habit" },
     h("div", { class: "actions" },
@@ -180,7 +195,7 @@ function limitHow(b) {
   if (b.openWaitS > 0) parts.push(`a ${b.openWaitS} s pause before each open`);
   const limit = `${parts.join(", ")}${parts.length ? "; " : ""}${b.perDevice ? "each device has its own" : "phone and laptop share it"}.`;
   if (b.mode !== "HABIT") return limit;
-  return `${limit} ${b.limitFirst ? "The limit comes first, then the habit opens it." : "The habit comes first, then the limit holds."}`;
+  return `${limit} ${b.limitFirst ? "Limit first." : "Habit first."}`;
 }
 
 function habitHow(b) {
@@ -237,8 +252,7 @@ function blockCard(b) {
     const capped = b.redeemRejection === "CAP_REACHED";
     const held = b.redeemRejection === "HELD"; // I44: opening now would open nothing
     actions.push(h("button", { class: "btn primary", disabled: capped || held, onclick: () => act({ type: "redeem", blockId: b.id }) }, `Open for ${min(b.unlockMs)} min`));
-    if (capped) actions.push(h("span", { class: "note" }, `Today's ${min(state.dailyCapMs)} min of unlocks is used up.`));
-    if (held) actions.push(h("span", { class: "note" }, "It can open once it's no longer blocked."));
+    if (capped) actions.push(h("span", { class: "note" }, `${min(state.dailyCapMs)} min used today`));
   }
   if (b.mode === "LOCKDOWN" && b.lockdownRemainingMs === 0 && b.enabled) {
     actions.push(h("button", { class: "btn", onclick: () => act({ type: "lockdown", blockId: b.id }) }, `Start lockdown (${min(b.lockdownMs)} min)`));
@@ -259,8 +273,7 @@ function blockCard(b) {
       h("div", { class: "progress" }, h("i", { style: `width:${Math.min(100, (b.timerMs / Math.max(1, b.requiredMs)) * 100)}%` })),
       h("div", { class: "actions", style: "margin-top:8px" },
         h("span", { class: "note" }, `${clock(b.timerMs)} of ${clock(b.requiredMs)}`),
-        h("button", { class: "btn", onclick: () => act({ type: "timer", blockId: b.id, running: !b.timerRunning }) }, b.timerRunning ? "Pause" : "Start"),
-        b.timerRunning && !onBlockPage && h("span", { class: "note" }, "It counts while you wait on this block's block page."))),
+        h("button", { class: "btn", onclick: () => act({ type: "timer", blockId: b.id, running: !b.timerRunning }) }, b.timerRunning ? "Pause" : "Start"))),
     b.items.length > 0 && b.mode === "HABIT" && h("div", { class: "items" }, b.items.map((i) => i.habit ? habitItem(i.habit) :
       // An NFC tag (I43): only the phone ticks it, by reading the tag.
       i.tag ? h("label", {},
@@ -414,10 +427,10 @@ function buildForm(b) {
     h("input", { type: "search", placeholder: "Find a laptop app", value: form.filter, oninput: (e) => { form.filter = e.target.value; drawList(); } }),
     list,
     field("Websites", h("textarea", { value: form.sitesText, placeholder: "youtube.com\nreddit.com", oninput: (e) => (form.sitesText = e.target.value) }),
-      `One per line; each covers its subdomains.${d.devices === "LAPTOP" ? "" : " The phone blocks these too."}`),
+      "One per line"),
     field("Leave these alone", h("textarea", { class: "short", value: form.exceptText, placeholder: "music.youtube.com", oninput: (e) => (form.exceptText = e.target.value) }),
-      "Parts of those sites this block doesn't touch, one per line."),
-    b?.phoneApps > 0 && h("div", { class: "note" }, `Also ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}: change those on the phone.`));
+      "One per line"),
+    b?.phoneApps > 0 && h("div", { class: "note" }, `+ ${b.phoneApps} phone app${b.phoneApps === 1 ? "" : "s"}`));
 
   // Days and times, for a schedule or a block's blocked hours.
   const dayPick = (days, set) => h("div", { class: "daypick" }, DAYS.map((name, i) => h("label", {},
@@ -438,31 +451,27 @@ function buildForm(b) {
       times(w),
       h("button", { class: "btn ghost", type: "button", onclick: () => { s.moreWindows.splice(i, 1); rebuildForm(); } }, "Remove these times"))),
     h("button", { class: "btn", type: "button", onclick: () => { s.moreWindows.push({ days: [1, 2, 3, 4, 5, 6, 7], startMin: 1080, endMin: 1320 }); rebuildForm(); } }, "More times"),
-    h("div", { class: "note" }, "A window past midnight belongs to the day it starts on."),
   ];
 
   // The limit and blocked hours go on a habit block too (I44).
   const limitFields = () => [
     check("dailyOn", "A limit a day"),
-    d.dailyOn && field("Minutes a day", number("allowanceMin"), mode === "ALLOWANCE" ? "Once used up, it's blocked until tomorrow." : null),
+    d.dailyOn && field("Minutes a day", number("allowanceMin")),
     check("rowOn", "At most so long in a row"),
     d.rowOn && h("div", { class: "row" }, field("Minutes in a row", number("rowMin")), field("Then a break of (minutes)", number("rowBreakMin"))),
-    d.rowOn && h("div", { class: "note" }, "Resting that long on your own counts as the break."),
     check("opensOn", "At most so many opens a day"),
-    d.opensOn && field("Opens a day", number("opensPerDay"), "Coming back within a minute is the same open. The last one lasts until you leave it."),
+    d.opensOn && field("Opens a day", number("opensPerDay")),
     check("openWaitOn", "A pause before it opens"),
-    d.openWaitOn && field("Seconds", number("openWaitS"), "The block page stays up this long, then the site opens by itself. Websites only here: a laptop app can't wait."),
+    d.openWaitOn && field("Seconds", number("openWaitS"), "Websites only"),
     field("Phone and laptop", seg("perDevice", [[false, "Share one limit"], [true, "Each has its own"]])),
   ];
   const limitSet = mode === "ALLOWANCE" ? h("fieldset", {}, h("legend", {}, "Daily limit"), limitFields())
     : mode === "HABIT" && h("fieldset", {}, h("legend", {}, "Daily limit"),
       check("limitOn", "Limit it too"),
       d.limitOn && limitFields(),
-      d.limitOn && (d.dailyOn || d.opensOn) && field("What comes first", seg("habitFirst", [[false, "Limit first"], [true, "Habit first"]]),
-        d.habitFirst ? "Blocked until the habit is done. The limit still holds after that." : "Open for the limit's minutes each day. After that, the habit opens it again."));
+      d.limitOn && (d.dailyOn || d.opensOn) && field("What comes first", seg("habitFirst", [[false, "Limit first"], [true, "Habit first"]])));
   const hoursSet = (mode === "HABIT" || mode === "ALLOWANCE") && h("fieldset", {}, h("legend", {}, "Blocked hours"),
     check("hoursOn", "Block it outright at set times"),
-    d.hoursOn && h("div", { class: "note" }, "Blocked in these hours, whatever minutes are left and even with a habit done."),
     d.hoursOn && check("hoursAllDay", "All day on these days"),
     d.hoursOn && timesEditor(d.hours, d.hoursAllDay));
 
@@ -479,7 +488,7 @@ function buildForm(b) {
           x.name,
           on && h("small", {}, h("label", { class: "check inline" }, h("input", { type: "checkbox", checked: d.linked.get(x.uuid).yesterday, onchange: (e) => (d.linked.get(x.uuid).yesterday = e.target.checked) }), "counts yesterday's tick")));
       }) : h("div", { class: "note" }, "No habits yet."))
-      : h("div", { class: "note" }, habits?.error ?? (state?.syncConfigured ? "Loading your habits…" : "Linking habits needs sync with the home server."));
+      : h("div", { class: "note" }, habits?.error ?? (state?.syncConfigured ? "Loading…" : "Needs sync"));
     rules = h("fieldset", {},
       h("legend", {}, "How it unlocks"),
       isNew
@@ -503,14 +512,12 @@ function buildForm(b) {
               if (x) itemOp({ op: "link", habit: { uuid: x.uuid, name: x.name } });
             },
           }, "Link habit"))),
-      field("Block again after (minutes)", number("unlockMin", { max: min(state.dailyCapMs) }), `Up to ${min(state.dailyCapMs)} min a day across phone and laptop.`),
-      field("Counted as", seg("selfPaced", [[false, "Timer"], [true, "Self paced"]]),
-        d.selfPaced ? "Only time spent in its apps and sites counts, on any device, until it's used up or the day ends."
-          : "A timer starts, and it blocks again at the end of it."));
+      field("Block again after (minutes)", number("unlockMin", { max: min(state.dailyCapMs) }), `Up to ${min(state.dailyCapMs)} min a day`),
+      field("Counted as", seg("selfPaced", [[false, "Timer"], [true, "Self paced"]])));
   } else if (mode === "SCHEDULE") {
     rules = h("fieldset", {}, h("legend", {}, "When it blocks"), timesEditor(d));
   } else if (mode === "LOCKDOWN") {
-    rules = h("fieldset", {}, h("legend", {}, "Lockdown"), field("Minutes", number("lockdownMin"), isNew ? "It starts as soon as you create it." : "How long each lockdown lasts."));
+    rules = h("fieldset", {}, h("legend", {}, "Lockdown"), field("Minutes", number("lockdownMin")));
   }
 
   // An error is about what was sent: it goes as soon as something changes.
@@ -520,11 +527,7 @@ function buildForm(b) {
     isNew && field("Kind", seg("kind", [["HABIT", "Habit"], ["ALLOWANCE", "Daily limit"], ["TIME", "Set time"]])),
     isNew && d.kind === "TIME" && seg("setTime", [["SCHEDULE", "On a schedule"], ["LOCKDOWN", "For a while, from now"]]),
     targets,
-    field("Blocks on", seg("devices", [["BOTH", "Both"], ["PHONE", "Phone"], ["LAPTOP", "Laptop"]]), {
-      BOTH: "The phone and this laptop. Its websites are blocked in both browsers.",
-      PHONE: "The phone only: this laptop leaves its apps and websites alone. You can still unlock it from here.",
-      LAPTOP: "This laptop only: the phone leaves its websites alone.",
-    }[d.devices]),
+    field("Blocks on", seg("devices", [["BOTH", "Both"], ["PHONE", "Phone"], ["LAPTOP", "Laptop"]])),
     rules,
     limitSet,
     hoursSet,
@@ -589,7 +592,7 @@ async function submitForm() {
     hoursMore: d.hours.moreWindows,
   });
   if (result.error) showFormError(result.error);
-  else if (result.token) startGuard(result.token, result.waitMs, result.label ?? "Saving (it makes the block easier to get past)");
+  else if (result.token) startGuard(result.token, result.waitMs, result.label ?? "Saving");
   else {
     closeForm();
     refresh();
@@ -625,7 +628,7 @@ async function deleteBlock(b) {
 
 function guardView() {
   if (!guard) return "";
-  return h("div", { class: "alert" }, h("b", {}, `${guard.label}…`), `Wait ${Math.ceil((guard.until - Date.now()) / 1000)} s and keep this page open. Leaving it cancels.`);
+  return h("div", { class: "alert" }, h("b", {}, `${guard.label}…`), `${Math.ceil((guard.until - Date.now()) / 1000)} s · leaving cancels`);
 }
 
 // ---- buying minutes (contract I34) ---------------------------------------------------------
@@ -649,11 +652,11 @@ function buyView() {
   const s = state.subject;
   if (!s) return null;
   const minutes = min(state.settings.grantMs);
-  if (s.overrideRejection === "NONE_LEFT") return h("p", { class: "note" }, "Today's bought minutes for this are used up.");
+  if (s.overrideRejection === "NONE_LEFT") return h("p", { class: "note" }, "None left to buy today");
   if (s.overrideRejection) return null;
   if (!s.overrideReadyAtWall) {
     buyNode = null;
-    return h("div", { class: "buy" }, h("button", { class: "quiet", onclick: () => buy("begin") }, `Need it anyway? Take ${minutes} more minutes`));
+    return h("div", { class: "buy" }, h("button", { class: "quiet", onclick: () => buy("begin") }, `Take ${minutes} more minutes`));
   }
   if (!buyNode || buyKey !== s.overrideReadyAtWall) {
     buyKey = s.overrideReadyAtWall;
@@ -682,9 +685,9 @@ function settingsView() {
       h("div", { class: "top" }, h("h3", {}, "Settings"), h("span", { class: "spacer" }),
         h("button", { class: "btn ghost", onclick: () => { settingsForm = { phrase: s.phrase, waitSec: Math.round(s.waitMs / 1000), grantMin: min(s.grantMs), perDay: s.perDay, showClock: s.showClock, blockOtherBrowsers: s.blockOtherBrowsers }; render(); } }, "Edit")),
       h("div", { class: "note" },
-        s.perDay > 0 ? `Extra minutes: type “${s.phrase}” after ${Math.round(s.waitMs / 1000)} s for ${min(s.grantMs)} min, ${s.perDay} a day per block.` : "Buying minutes is off.",
-        ` Corner clock on limited sites: ${s.showClock ? "on" : "off"}.`,
-        ` Other browsers: ${s.blockOtherBrowsers ? "closed while a block has websites" : "allowed"}.`));
+        s.perDay > 0 ? `Buying minutes: ${Math.round(s.waitMs / 1000)} s, ${min(s.grantMs)} min, ${s.perDay} a day` : "Buying minutes: off",
+        ` · Corner clock: ${s.showClock ? "on" : "off"}`,
+        ` · Other browsers: ${s.blockOtherBrowsers ? "closed" : "allowed"}`));
   }
   if (!settingsNode) settingsNode = buildSettings();
   return settingsNode;
@@ -699,13 +702,13 @@ function buildSettings() {
   return h("section", { class: "card settings" },
     h("h3", {}, "Settings"),
     h("div", { class: "editor form" },
-      field("Sentence for extra minutes", h("input", { type: "text", value: f.phrase, oninput: (e) => (f.phrase = e.target.value) }), "Accents, case and punctuation don't matter when you type it."),
+      field("Sentence for extra minutes", h("input", { type: "text", value: f.phrase, oninput: (e) => (f.phrase = e.target.value) })),
       h("div", { class: "row" },
         field("Wait (seconds)", num("waitSec")),
         field("Minutes bought", num("grantMin", { min: 1 })),
         field("Times a day per block", num("perDay"), "0 turns it off.")),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.showClock, onchange: (e) => (f.showClock = e.target.checked) }), "Show the corner clock on limited sites"),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.blockOtherBrowsers, onchange: (e) => (f.blockOtherBrowsers = e.target.checked) }), "Close browsers without the extension while a block has websites"),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: f.blockOtherBrowsers, onchange: (e) => (f.blockOtherBrowsers = e.target.checked) }), "Close other browsers"),
       h("div", { class: "actions" },
         h("button", { class: "btn primary", onclick: saveSettings }, "Save"),
         h("button", { class: "btn ghost", onclick: () => { settingsForm = null; settingsNode = null; render(); } }, "Cancel"))));
@@ -714,7 +717,7 @@ function buildSettings() {
 async function saveSettings() {
   const result = await post("/api/settings", settingsForm);
   if (result.error) message = result.error;
-  else if (result.token) startGuard(result.token, result.waitMs, "Saving the settings (they make blocks easier to get past)");
+  else if (result.token) startGuard(result.token, result.waitMs, "Saving the settings");
   settingsForm = null;
   settingsNode = null;
   refresh();
@@ -726,15 +729,15 @@ function alerts() {
   if (!state) return out;
   if (state.kwinSeenAgoMs == null) {
     if (state.windowSystem === "hyprland") out.push(["Desktop apps aren't being watched", "Hyprland's sockets haven't answered. Is HYPRLAND_INSTANCE_SIGNATURE in the service's environment? systemctl --user show-environment"]);
-    else out.push(["Desktop apps aren't being watched", "The KWin script hasn't reported in. Run desktop/install.sh again, or turn on \"xrnrule\" in System Settings → Window Management → KWin Scripts."]);
+    else out.push(["Desktop apps aren't being watched", "Run desktop/install.sh again"]);
   }
-  if (state.extensionMissing) out.push(["Website blocking is off in this browser", "The xrnrule extension isn't answering for the window in front. Turn it on in the browser's extensions page, allow it in private windows, or use a profile that has it."]);
-  if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow the xrnrule extension in incognito on the browser's extensions page."]);
-  if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `It is ${state.extensionVersion}; ${state.extensionLatest} is out. It reloads itself when its folder changes: if it hasn't, press its reload button on the browser's extensions page.`]);
+  if (state.extensionMissing) out.push(["Website blocking is off in this browser", "Turn it on in the browser's extensions page"]);
+  if (state.extensionNoIncognito) out.push(["Sites aren't blocked in private windows", "Allow it in incognito on the extensions page"]);
+  if (!state.extensionMissing && state.extensionLatest) out.push(["The browser extension is out of date", `${state.extensionVersion}; ${state.extensionLatest} is out. Reload it on the extensions page`]);
   if (state.syncConfigured && state.sync && !state.sync.ok) out.push(["Not syncing with the phone", state.sync.message]);
   if (state.phoneQuiet) out.push(["The phone has gone quiet", state.phoneQuiet]);
   if (state.clockNote) out.push(["Blocks keep their own clock", state.clockNote]);
-  if (!state.syncConfigured) out.push(["Not syncing", `Fill in ~/.config/xrnrule/desktop.properties to share blocks and unlocks with the phone.`]);
+  if (!state.syncConfigured) out.push(["Not syncing", "Fill in ~/.config/xrnrule/desktop.properties"]);
   return out;
 }
 
@@ -766,8 +769,7 @@ function render() {
     // Only what's holding this: a block over the same site that's open has nothing to say here.
     blocks = blocks.filter((b) => s?.blockers.includes(b.id));
     const what = blockedApp ? appName(blockedApp) : blockedSite;
-    const timer = blocks.some((b) => b.reason === "HABIT" && b.state === "ARMED" && (b.trigger === "TIMER" || b.trigger === "COMBINED"));
-    if (!still && backUrl && /^https?:/.test(backUrl)) {
+    if (!still && backHere(backUrl, blockedSite)) {
       location.replace(backUrl);
       return;
     }
@@ -775,8 +777,7 @@ function render() {
       blockedSite && !blockedApp && siteIcon(blockedSite),
       h("h2", {}, s?.opening ? `${what} is opening` : still ? `${what} is blocked` : `${what} is open`),
       still && s?.back && h("div", { class: "back" }, s.back),
-      h("p", {}, still ? s?.why ?? "xrnrule is keeping this closed." : blockedApp ? "You can start it again." : "Go back to it."),
-      still && timer && h("p", { class: "note" }, "A timer counts while you wait on this page."));
+      still && s?.why && h("p", {}, s.why));
     way = still && h("section", { class: "way" },
       h("div", { class: "actions" }, h("button", { class: "btn primary", onclick: leaveBlockPage }, blockedApp ? "Close this page" : "Leave this site")),
       buyView());
@@ -788,7 +789,7 @@ function render() {
 
   const pause = !state.pauseRemainingMs && !state.breakLifts ? null : state.pauseRemainingMs > 0
     ? h("div", { class: "actions" }, h("span", { class: "note" }, `On a break: ${clock(state.pauseRemainingMs)} left`), h("button", { class: "btn", onclick: () => act({ type: "endPause" }) }, "End it now"))
-    : h("button", { class: "btn", disabled: !state.canPause || !!guard, title: state.canPause ? "Lifts soft blocks for 15 minutes, once a day, but not locked ones" : "Today's break is used", onclick: () => act({ type: "pause" }) }, state.canPause ? "Take a 15-min break" : "Break used today");
+    : h("button", { class: "btn", disabled: !state.canPause || !!guard, onclick: () => act({ type: "pause" }) }, state.canPause ? "Take a 15-min break" : "Break used today");
 
   app.replaceChildren(header, h("main", { class: "wrap" + (onBlockPage ? " focus" : "") },
     alerts().map(([t, d]) => h("div", { class: "alert" }, h("b", {}, t), d)),
@@ -796,12 +797,12 @@ function render() {
     message && h("div", { class: "alert" }, message),
     guard && !form && guardView(),
     !onBlockPage && h("section", { class: "card summary" },
-      h("div", { class: "stat" }, h("b", {}, `${min(state.unlockUsedMs)} / ${min(state.dailyCapMs)} min`), h("span", {}, "Unlocked today (phone and laptop)")),
+      h("div", { class: "stat" }, h("b", {}, `${min(state.unlockUsedMs)} / ${min(state.dailyCapMs)} min`), h("span", {}, "Unlocked today")),
       h("span", { class: "spacer" }),
       pause,
       !form && h("button", { class: "btn primary", onclick: () => openForm(null) }, "+ New block")),
     form && !form.blockId && !onBlockPage && h("section", { class: "card" }, formView(null)),
-    blocks.length ? h("div", { class: "blocks" }, blocks.map(blockCard)) : !form && !onBlockPage && h("section", { class: "card note" }, "No blocks yet. Make one here, or in xrnrule on the phone."),
+    blocks.length ? h("div", { class: "blocks" }, blocks.map(blockCard)) : !form && !onBlockPage && h("section", { class: "card note" }, "No blocks"),
     !onBlockPage && settingsView(),
     way,
     rules,

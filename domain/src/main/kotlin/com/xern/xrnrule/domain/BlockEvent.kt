@@ -66,8 +66,11 @@ sealed interface BlockEvent {
      */
     data class LogHabit(val habitId: String, val amount: Long) : BlockEvent
 
-    /** Sets a habit's entry on any habit day up to today: Loop's value and the day's notes (I35). */
-    data class SetHabitEntry(val habitId: String, val epochDay: Long, val value: Long, val notes: String = "") : BlockEvent
+    /**
+     * Sets a habit's entry on any habit day up to today: Loop's value and the day's notes (I35).
+     * Null [notes] keeps the day's note as it is: a tick or an amount never says anything about it.
+     */
+    data class SetHabitEntry(val habitId: String, val epochDay: Long, val value: Long, val notes: String? = null) : BlockEvent
 
     /**
      * Records read from the habit server, after [seq] (§2.5): merged into this device's habits and

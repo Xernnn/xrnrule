@@ -272,7 +272,6 @@ fun BlocksScreen(
         AlertDialog(
             onDismissRequest = { breakUsed = false },
             title = { Text("No more breaks today") },
-            text = { Text("You've had today's break. The next one is available tomorrow.") },
             confirmButton = { TextButton(onClick = { breakUsed = false }) { Text("OK") } },
         )
     }

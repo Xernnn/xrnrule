@@ -98,6 +98,7 @@ import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.hardcore.PasswordTries
 import com.xern.xrnrule.app.loop.LoopHabits
 import com.xern.xrnrule.app.loop.LoopStatus
 import com.xern.xrnrule.app.ui.theme.Appearance
@@ -202,16 +203,10 @@ private fun SettingsList(world: World, deps: SettingsDeps, onOpen: (SettingsPage
             }
         }
         if (clockSkew != 0L) {
-            FootNote(
-                "The phone's clock was set ${formatDuration(kotlin.math.abs(clockSkew))} " +
-                    "${if (clockSkew > 0) "ahead" else "back"} by hand. Blocks keep using the real time.",
-            )
+            FootNote("Clock set ${formatDuration(kotlin.math.abs(clockSkew))} ${if (clockSkew > 0) "ahead" else "back"} by hand")
         }
         if (handPickedZone != null) {
-            FootNote(
-                "The phone's time zone (${handPickedZone.id}) was picked by hand. Blocks keep using " +
-                    "${deps.clockGuard.zone().id} until the phone sets its time zone automatically.",
-            )
+            FootNote("Time zone ${handPickedZone.id} picked by hand: blocks use ${deps.clockGuard.zone().id}")
         }
 
         SectionLabel("Integrations")
@@ -481,11 +476,6 @@ private fun HabitsPage(world: World, deps: SettingsDeps) {
     var confirmDelete by remember { mutableStateOf<Habit?>(null) }
     if (world.focus?.running == true) rememberTicker()
 
-    PageIntro(
-        "Blocks ask for these. They're the same habits as in xrnloops and the web app, kept on " +
-            "your home server. A day's share of a goal opens each block that asks for it once.",
-    )
-    Gap(16)
     if (world.habits.isNotEmpty()) {
         GroupCard {
             world.habits.filterNot { it.archived }.sortedBy { it.position }.forEachIndexed { i, habit ->
@@ -612,11 +602,6 @@ private fun SyncPage(shared: SharedSync, habits: HabitSync) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    PageIntro(
-        "Shares blocks, unlocks, breaks and lockdowns with xrnrule on your laptop, and your habits with xrnloops and the " +
-            "web app, through your home server. Off until you set it; nothing else leaves the phone.",
-    )
-    Gap(16)
     if (editing) {
         FieldLabel("Server address")
         FieldBox(url, { url = it }, "https://your-server/xrnrule", keyboard = KeyboardOptions(keyboardType = KeyboardType.Uri))
@@ -747,10 +732,9 @@ private fun BuyingMinutes(world: World, onSave: (com.xern.xrnrule.domain.Setting
                 title = if (settings.overridesPerDay > 0) "${settings.overridesPerDay} a day per block" else "Off",
                 icon = Icons.Outlined.Timer,
                 subtitle = if (settings.overridesPerDay > 0) {
-                    "On a daily limit or a schedule: wait ${settings.overrideWaitMs / 1000} s, type “${settings.overridePhrase}”, " +
-                        "get ${formatDuration(settings.overrideGrantMs)}. Phone and laptop together."
+                    "Wait ${settings.overrideWaitMs / 1000} s, type “${settings.overridePhrase}”, get ${formatDuration(settings.overrideGrantMs)}"
                 } else {
-                    "Nothing can be bought past a block."
+                    null
                 },
                 first = true,
                 chevron = false,
@@ -831,28 +815,16 @@ private fun SecurityPage(deps: SettingsDeps) {
             first = true,
         )
     }
-    FootNote(
-        when (method) {
-            AppLock.Method.FINGERPRINT ->
-                "Asked when you open the app, and again after 30 seconds away. The phone's screen-lock PIN works too. " +
-                    "The block screen isn't locked: it's how you get through a block."
-            AppLock.Method.PIN ->
-                "No fingerprint is set up, so the phone's screen-lock PIN is asked instead. Add one in Android's settings."
-            AppLock.Method.NONE ->
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) "Needs Android 9 or later."
-                else "The phone has no screen lock, so there's nothing to check: set one in Android's settings first."
-        },
-    )
+    when (method) {
+        AppLock.Method.FINGERPRINT -> null
+        AppLock.Method.PIN -> "No fingerprint: the screen-lock PIN is asked"
+        AppLock.Method.NONE -> if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) "Needs Android 9 or later" else "No screen lock: set one in Android's settings"
+    }?.let { FootNote(it) }
 
     LockedBlocks(deps.store)
 
     if (!guard.isSupported()) return
     SectionLabel("Hardcore mode")
-    PageIntro(
-        "A hardcore block can only be loosened with this password, and while one is on, Android's Settings and " +
-            "uninstalling xrnrule ask for it too. It can be changed, never removed.",
-    )
-    Gap(12)
     when {
         !hasPassword -> PasswordForm(askCurrent = false, submitLabel = "Set password") { _, new ->
             guard.setPassword(new)
@@ -874,11 +846,14 @@ private fun SecurityPage(deps: SettingsDeps) {
             var changing by remember { mutableStateOf(false) }
             if (changing) {
                 PasswordForm(askCurrent = true, submitLabel = "Change password") { current, new ->
-                    if (guard.changePassword(current, new)) {
+                    val wait = guard.waitMs()
+                    if (wait > 0) {
+                        PasswordTries.waitText(wait)
+                    } else if (guard.changePassword(current, new)) {
                         changing = false
                         null
                     } else {
-                        "The current password is wrong."
+                        "The current password is wrong." + guard.waitMs().takeIf { it > 0 }?.let { " " + PasswordTries.waitText(it) }.orEmpty()
                     }
                 }
             } else {
@@ -899,15 +874,11 @@ private fun LockedBlocks(store: WorldStore) {
         GroupRow(
             title = "Emergency unlocks",
             icon = Icons.Outlined.LockClock,
-            subtitle = "${BlockEdits.emergencyLeft(world)} of ${Defaults.EMERGENCY_UNLOCKS} left, on every device together",
+            subtitle = "${BlockEdits.emergencyLeft(world)} of ${Defaults.EMERGENCY_UNLOCKS} left",
             first = true,
         )
         locked.forEach { b -> GroupRow(title = b.name, subtitle = "Locked until ${formatLockEnd(b.lock!!.untilWall, now)}", icon = Icons.Outlined.Lock) }
     }
-    FootNote(
-        "Lock a block from its edit page. Until the lock ends nothing that makes it easier to get past can change, " +
-            "not even with the wait or the password; an emergency unlock ends a lock early. Used ones never come back.",
-    )
 }
 
 /**
@@ -947,19 +918,13 @@ private fun CornerClockPage() {
     GroupCard {
         SwitchRow("Show it in apps", look.on, { CornerClockLook.set(look.copy(on = it)) }, icon = Icons.Outlined.AccessTime, first = true)
     }
-    FootNote(
-        "The time left, faintly, in the corner of an app with a limit or an unlock. It stands out for a few seconds at " +
-            CornerClock.MILESTONES_MIN.joinToString(", ") + " minutes left, and for the last ${CornerClock.LAST_MS / 1000} seconds.",
-    )
     if (!look.on) return
     SectionLabel("Where")
     CornerClockPreview(look) { CornerClockLook.set(look.copy(corner = it)) }
-    FootNote("Tap a corner to put it there.")
     SectionLabel("Size")
     SegmentSwitch(ClockSize.entries.map { it.label }, look.size.ordinal, onSelect = { CornerClockLook.set(look.copy(size = ClockSize.entries[it])) })
     SectionLabel("How much shows")
     Slider(look.strength, onValueChange = { CornerClockLook.set(look.copy(strength = it)) }, valueRange = 0.2f..0.8f)
-    FootNote("While nothing is close. It always stands out at the times above.")
 }
 
 /** The clock over a pretend app, going through what it does there. */
@@ -1007,28 +972,24 @@ private fun AppearancePage() {
     val theme by Appearance.themeMode.collectAsState()
     SectionLabel("Theme")
     SegmentSwitch(ThemeMode.entries.map { it.label }, theme.ordinal, onSelect = { Appearance.setThemeMode(ThemeMode.entries[it]) })
-    FootNote("Auto follows the phone's dark mode. The block screen follows this too.")
 }
 
 @Composable
 private fun WebsitesPage(world: World, deps: SettingsDeps) {
     val context = LocalContext.current
     val url = deps.shared.settings.url.ifEmpty { "<your server>/xrnrule" }
-    PageIntro(
-        "Sites are blocked by the xrnrule extension in Quetta; nothing reads your screen. Install it once by opening " +
-            "$url/update/xrnrule.crx in Quetta; it keeps itself up to date from there.",
-    )
+    PageIntro("Install: open $url/update/xrnrule.crx in Quetta")
     deps.websites.version?.let { version ->
         // Quetta checks the home server every few hours; its options page has "Check now".
         if (deps.websites.outOfDate) {
-            StatusLine("Version $version, out of date: ${deps.websites.latestVersion} is out. It updates itself within a few hours, or now from its options page (Check now).", ok = false)
+            StatusLine("Version $version, out of date: ${deps.websites.latestVersion} is out", ok = false)
         } else {
             StatusLine("Version $version", ok = true)
         }
     }
     if ((deps.websites as? ExtensionWebsiteMonitor)?.incognitoAllowed == false) {
         Gap(8)
-        StatusLine("Not allowed in incognito tabs, so sites aren't blocked there. Turn it on in the extension's details.", ok = false)
+        StatusLine("Not allowed in incognito: turn it on in the extension's details", ok = false)
     }
     Gap(16)
     WebsiteTrackingWarning(deps.websites)
@@ -1049,7 +1010,6 @@ private fun OtherBrowsersSwitch(world: World, deps: SettingsDeps) {
             title = "Block other browsers",
             icon = Icons.Outlined.Language,
             first = true,
-            subtitle = "Browsers without the extension stay closed while a block has websites.",
             chevron = false,
             trailing = {
                 XSwitch(checked = on, onCheckedChange = { want ->
@@ -1076,10 +1036,7 @@ private fun UpdatesPage(updates: AppUpdates) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    PageIntro(
-        "Version ${updates.installedVersion}. New versions come from your home server and download by themselves. " +
-            "A notification and a banner on the Blocks tab say when one is ready, and it installs only when you tap Install here.",
-    )
+    PageIntro("Version ${updates.installedVersion}")
     Gap(16)
     GroupCard {
         PermissionRow("Allow installing updates", Icons.Outlined.SystemUpdate, canInstall, first = true) {
@@ -1107,12 +1064,6 @@ private fun UpdatesPage(updates: AppUpdates) {
             }
         },
     )
-    if (version != null) {
-        FootNote(
-            "xrnrule closes for a moment while it installs. Your phone may ask you to confirm, and some phones turn " +
-                "off drawing over other apps during an update: xrnrule tells you if that happens.",
-        )
-    }
 }
 
 @Composable
@@ -1154,8 +1105,6 @@ private fun BackupPage(world: World, store: WorldStore, guard: HardcoreGuard) {
         }
     }
     loosen?.let { request -> LoosenGuardDialog(request, guard, store, onDismiss = { loosen = null }) }
-    PageIntro("Save your blocks to a file, or add blocks from one. Importing only adds blocks; it never changes or removes the ones here.")
-    Gap(16)
     PillButton("Export blocks", enabled = world.blocks.isNotEmpty(), onClick = { exportLauncher.launch("xrnrule-blocks-${LocalDate.now()}.json") })
     Gap(8)
     OutlinePill("Import blocks", onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) })

@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.hardcore.PasswordTries
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.EnforcementTier
@@ -74,7 +75,7 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: World
     val locked = BlockEdits.lockedBy(world, request.blockIds, store.clock.nowWallMs())
     val usePassword = request.hardcore && guard.hasPassword()
     var password by remember { mutableStateOf("") }
-    var wrong by remember { mutableStateOf(false) }
+    var wrong by remember { mutableStateOf<String?>(null) }
     // The wait starts when there is one to sit through: after an emergency unlock, from then.
     val startedAt = remember(locked == null) { SystemClock.elapsedRealtime() }
     rememberTicker(250)
@@ -103,11 +104,11 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: World
                 if (usePassword) {
                     OutlinedTextField(
                         value = password,
-                        onValueChange = { password = it; wrong = false },
+                        onValueChange = { password = it; wrong = null },
                         label = { Text("Hardcore password") },
                         singleLine = true,
-                        isError = wrong,
-                        supportingText = if (wrong) ({ Text("Wrong password.") }) else null,
+                        isError = wrong != null,
+                        supportingText = wrong?.let { ({ Text(it) }) },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
@@ -129,8 +130,11 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: World
             TextButton(
                 enabled = if (usePassword) password.isNotEmpty() else leftMs == 0L,
                 onClick = {
-                    if (usePassword && !guard.verifyPassword(password)) {
-                        wrong = true
+                    val wait = if (usePassword) guard.waitMs() else 0
+                    if (wait > 0) {
+                        wrong = PasswordTries.waitText(wait)
+                    } else if (usePassword && !guard.verifyPassword(password)) {
+                        wrong = "Wrong password." + guard.waitMs().takeIf { it > 0 }?.let { " " + PasswordTries.waitText(it) }.orEmpty()
                     } else {
                         request.apply()
                         onDismiss()

@@ -163,16 +163,15 @@ class ExtensionServer(
     }
 
     private fun route(method: String, target: String, headers: Map<String, String>, body: String): Reply {
-        val host = headers["host"]
-        if (host != "127.0.0.1:$PORT" && host != "localhost:$PORT") return Reply(403, "wrong host")
-        if (method == "OPTIONS") return Reply(403, "no") // never approve a cross-origin preflight
-        if (method == "POST" && headers["x-xrnrule"] == null) return Reply(403, "missing X-Xrnrule")
         val path = target.substringBefore('?')
+        refusal(method, path, headers)?.let { return Reply(403, it) }
         val query = target.substringAfter('?', "").split('&').filter { '=' in it }.associate {
             decode(it.substringBefore('=')) to decode(it.substringAfter('='))
         }
-        SiteSightings.heard()
-        websites.onHeard()
+        if (speaksForTheExtension(headers)) {
+            SiteSightings.heard()
+            websites.onHeard()
+        }
         return when {
             method == "POST" && path == "/ext/heartbeat" -> {
                 val beat = runCatching { json.decodeFromString(Heartbeat.serializer(), body) }.getOrNull()
@@ -228,6 +227,29 @@ class ExtensionServer(
     companion object {
         /** The laptop daemon's port too, so the extension needs no setting on either. */
         const val PORT = 47321
+
+        /**
+         * Why a request is refused before it is routed, or null. A site that points its own name
+         * at 127.0.0.1 (DNS rebinding) sends that name as Host. Every write needs X-Xrnrule, which a
+         * page can't send without a preflight we never approve, and so does the rule list, as on
+         * the laptop: asking for it is the extension's minute call.
+         */
+        internal fun refusal(method: String, path: String, headers: Map<String, String>): String? {
+            val host = headers["host"]
+            return when {
+                host != "127.0.0.1:$PORT" && host != "localhost:$PORT" -> "wrong host"
+                method == "OPTIONS" -> "no" // never approve a cross-origin preflight
+                (method == "POST" || path == "/ext/rules") && headers["x-xrnrule"] == null -> "missing X-Xrnrule"
+                else -> null
+            }
+        }
+
+        /**
+         * Whether a request says the extension is there ([SiteSightings.heard]): only one with
+         * X-Xrnrule. Any page could fetch this address every minute, and the "sites aren't blocked"
+         * alert would never come with the extension turned off.
+         */
+        internal fun speaksForTheExtension(headers: Map<String, String>): Boolean = headers["x-xrnrule"] != null
 
         /** Where a blocked tab goes (`?site=…`, and the page it left as the hash). */
         const val BLOCK_PAGE = "http://127.0.0.1:$PORT/block"

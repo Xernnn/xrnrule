@@ -77,7 +77,11 @@ fun main() = runBlocking {
         }
     }
 
-    System.err.println("xrnrule-desktop on ${config.localUrl}, data in ${config.dataDir}" + if (config.syncConfigured) ", syncing with ${config.ruleUrl} and ${config.loopUrl}" else ", not syncing")
+    System.err.println(
+        "xrnrule-desktop on ${config.localUrl}, data in ${config.dataDir}" +
+            if (config.syncConfigured) ", syncing with ${config.ruleUrl} and ${config.loopUrl}" else ", not syncing" + config.syncRefusal?.let { ": $it" }.orEmpty(),
+    )
+    for (file in config.exposedFiles(Config.file())) System.err.println("xrnrule-desktop: other users can read $file, which holds the sync password (chmod 600 it)")
 
     // The tick: ~1 s while anything time-based is live; screen lock means nothing in use; a gap
     // (the laptop slept) re-anchors timers rather than crediting the sleep to whatever was in front.

@@ -794,7 +794,8 @@ class BlockEngine {
         if (event.epochDay > world.habitDay(clock)) return world
         val valid = if (habit.numerical) event.value >= 0 else event.value in setOf(HabitEntry.UNKNOWN, HabitEntry.NO, HabitEntry.YES_MANUAL, HabitEntry.SKIP)
         if (!valid) return world
-        return world.writeEntry(habit.id, event.epochDay, event.value, event.notes, clock)
+        val notes = event.notes ?: world.entry(habit.id, event.epochDay)?.notes ?: ""
+        return world.writeEntry(habit.id, event.epochDay, event.value, notes, clock)
     }
 
     /** I37: starts the focus timer, or resumes it; another habit's run is logged and ended first. */

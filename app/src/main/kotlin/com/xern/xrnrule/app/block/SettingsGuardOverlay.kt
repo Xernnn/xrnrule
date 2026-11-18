@@ -14,6 +14,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
+import com.xern.xrnrule.app.hardcore.PasswordTries
 import com.xern.xrnrule.app.ui.PasswordGateContent
 import com.xern.xrnrule.domain.World
 
@@ -36,7 +37,7 @@ class SettingsGuardOverlay(
     private val unlockGraceMs: Long = 5 * 60_000L,
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)
-    private val showError = mutableStateOf(false)
+    private val showError = mutableStateOf<String?>(null)
 
     private class Gate(val view: ComposeView, val owner: OverlayWindowOwner)
 
@@ -88,14 +89,17 @@ class SettingsGuardOverlay(
             setViewTreeSavedStateRegistryOwner(owner)
             setContent {
                 PasswordGateContent(
-                    showError = showError.value,
+                    error = showError.value,
                     onSubmit = { input ->
-                        if (guard.verifyPassword(input)) {
+                        val wait = guard.waitMs()
+                        if (wait > 0) {
+                            showError.value = PasswordTries.waitText(wait)
+                        } else if (guard.verifyPassword(input)) {
                             unlockedUntilMono = SystemClock.elapsedRealtime() + unlockGraceMs
-                            showError.value = false
+                            showError.value = null
                             hide()
                         } else {
-                            showError.value = true
+                            showError.value = "Wrong password." + guard.waitMs().takeIf { it > 0 }?.let { " " + PasswordTries.waitText(it) }.orEmpty()
                         }
                     },
                     onCancel = { goHome() },
