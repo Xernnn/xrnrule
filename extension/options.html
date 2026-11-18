@@ -6,18 +6,20 @@
   <title>xrnrule settings</title>
   <link rel="stylesheet" href="page.css">
 </head>
-<body>
-  <main class="card">
-    <h1>xrnrule</h1>
+<body class="options">
+  <main>
+    <img class="mark" src="icons/icon.svg" alt="xrnrule" width="56" height="56">
     <p id="access" class="note bad" hidden>No site access <button id="grant" class="btn primary" type="button">Allow</button></p>
-    <label for="port">Port</label>
-    <input id="port" type="number" min="1024" max="65535" placeholder="47321">
-    <div class="actions"><button id="save" class="btn primary" type="button">Save</button></div>
-    <p id="result" class="note"></p>
+    <h2 class="section">Connection</h2>
+    <section class="card">
+      <label class="srow" for="port"><span>Port</span><input id="port" type="number" min="1024" max="65535" placeholder="47321"></label>
+      <div class="actions"><button id="save" class="btn primary" type="button">Save</button><span id="result" class="note"></span></div>
+    </section>
     <h2 class="section">Updates</h2>
-    <p id="update-blurb" class="note"></p>
-    <div class="actions"><button id="update-check" class="btn" type="button">Check now</button></div>
-    <p id="update-result" class="note" hidden></p>
+    <section class="card">
+      <p id="update-blurb" class="note"></p>
+      <div class="actions"><button id="update-check" class="btn" type="button">Check now</button><span id="update-result" class="note" hidden></span></div>
+    </section>
   </main>
   <script src="shared.js"></script>
   <script src="options.js"></script>

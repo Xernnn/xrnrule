@@ -1,13 +1,19 @@
 // xrnrule status page: a read-only view of the state the phone and the laptop share
-// (docs/domain-contract.md §2.4), kept live with a long-poll. It shares its login with the
+// (docs/domain-contract.md §2.4), kept live with a long-poll, and Insights: both devices' event
+// log and limit use as this server keeps them (/events, /limits). It shares its login with the
 // xrnloops web app on the same server: a cookie either page's sign-in sets, which no script can
-// read (xrnrule-sync.py, "/session"). The password itself is never kept.
+// read (xrnrule-sync.py, "/session"). The password itself is never kept. The look, the icons and
+// Insights are shared with the laptop's local page (the desktop build copies them).
 
-import { blockStatus, chips, minutes, timeFmt, today, unlockMethod } from "./blocks.js";
+import { blockStatus, minutes, timeFmt, today, sharedZone, rulesOf, useToday, isLocked, windows } from "./blocks.js";
+import { h, icon, inkOn } from "./ui.js";
+import { PALETTE, normalizeBlocks, mergeShared, renderInsights } from "./insights.js";
 
 const KEY_SIGNED_IN = "xrn.signedIn"; // a hint only: whether to try the cookie or show the form
 const KEY_OLD_AUTH = "xrnloops.auth"; // the password, as these pages kept it before the cookie
+const KEY_INSIGHTS = "xrnrule.insights";
 const HEADERS = { "X-Xrn-Client": "web" }; // what makes the cookie count
+const DAY = 86_400_000;
 
 let signedIn = load(KEY_SIGNED_IN) === true;
 let doc = null;
@@ -15,6 +21,7 @@ let etag = "";
 let online = true;
 let updated = { at: "", by: "" };
 let devices = {}; // device -> epoch ms of its last check-in
+let tab = location.hash === "#insights" ? "insights" : "blocks";
 
 function load(key) {
   try {
@@ -31,19 +38,6 @@ function save(key, value) {
   } catch {
     /* private window: works for this visit only */
   }
-}
-
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else if (k === "class") el.className = v;
-    else if (k in el) el[k] = v;
-    else el.setAttribute(k, v);
-  }
-  for (const c of children.flat(Infinity)) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
-  return el;
 }
 
 class AuthError extends Error {}
@@ -115,6 +109,7 @@ async function start() {
   const gen = ++generation;
   await fetchState(0);
   await fetchDevices();
+  shell = null;
   render();
   live(gen);
 }
@@ -122,6 +117,8 @@ async function start() {
 function signOut(message) {
   generation++;
   signedIn = false;
+  shell = null;
+  hist = null;
   save(KEY_SIGNED_IN, null);
   fetch(new URL("session", location.href), { method: "DELETE", headers: HEADERS }).catch(() => {});
   loginView(message);
@@ -132,6 +129,7 @@ function loginView(message = "") {
   const password = h("input", { name: "password", type: "password", autocomplete: "current-password", required: true });
   const error = h("div", { class: "error" }, message);
   const form = h("form", {
+    class: "card",
     onsubmit: async (e) => {
       e.preventDefault();
       try {
@@ -141,9 +139,9 @@ function loginView(message = "") {
         error.textContent = err instanceof AuthError ? WRONG_LOGIN : err.message === LOCKED_OUT ? LOCKED_OUT : `Server unreachable · ${err.message}`;
       }
     },
-  }, h("label", {}, "User", user), h("label", {}, "Password", password), error, h("button", { class: "btn", type: "submit" }, "Sign in"));
-  document.getElementById("app").replaceChildren(h("div", { class: "wrap login" },
-    h("h1", {}, h("img", { src: "icon.svg", alt: "", width: 32, height: 32 }), "xrnrule"),
+  }, h("label", {}, "User", user), h("label", {}, "Password", password), error, h("button", { class: "btn primary big", type: "submit" }, "Sign in"));
+  document.getElementById("app").replaceChildren(h("div", { class: "login" },
+    h("img", { class: "login-mark", src: "icon.svg", alt: "xrnrule", width: 64, height: 64 }),
     form));
   setTimeout(() => password.focus(), 0);
 }
@@ -154,28 +152,82 @@ const whenFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "2-
 
 function ago(ms) {
   const m = Math.floor(ms / 60000);
-  if (m < 1) return "just now";
+  if (m < 1) return "Just now";
   if (m < 60) return `${m} min ago`;
   if (m < 48 * 60) return `${Math.floor(m / 60)} h ago`;
   return `${Math.floor(m / 1440)} days ago`;
 }
 
-/** Each device's last check-in. The phone checks in while its screen is on, the laptop while it's awake. */
-function devicesCard(now) {
-  const names = { phone: "Phone", laptop: "Laptop" };
-  const known = Object.entries(devices).sort(([a], [b]) => a.localeCompare(b));
-  if (!known.length) return null;
-  return h("section", { class: "card devices" }, known.map(([device, at]) => {
-    const stale = now.getTime() - at > 60 * 60000;
-    return h("div", { class: "device" + (stale ? " stale" : "") },
-      h("b", {}, names[device] ?? device), h("span", {}, `synced ${ago(now.getTime() - at)}`));
-  }));
+// ---- Blocks --------------------------------------------------------------------------------
+
+const TONE = { blocked: "blocked", open: "open", earned: "earned", idle: "idle" };
+
+/** One thing a block asks for or holds to (the phone's HabitRow), [kind] its colour. */
+function rrow({ ic, kind, label, value, fraction, note, dim, loop, done }) {
+  return h("div", { class: `rrow k-${kind}${dim ? " dim" : ""}` },
+    loop ? h("img", { class: "loop", src: "xrnloops.svg", alt: "xrnloops" }) : icon(ic),
+    h("div", { class: "main" },
+      h("div", { class: "top" }, h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
+      fraction != null && h("div", { class: "meter" }, h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } })),
+      note && h("span", { class: "note" }, note)),
+    h("div", { class: "acts" }, done != null && h("input", { type: "checkbox", class: "tick", checked: done, disabled: true, tabindex: -1, "aria-label": done ? "Done" : "Not done", style: loop ? { "--k": "var(--k-loop)" } : null })));
 }
 
-// ---- rendering -----------------------------------------------------------------------------
+/** A block's card, as the phone's, to look at: how it stands, and a row per rule and thing it asks for. */
+function blockCard(block, index, items, now) {
+  const colour = PALETTE[index % PALETTE.length];
+  const [cls, text] = blockStatus(doc, block, now);
+  const { mode, daily, opens, row, hasLimit } = rulesOf(block);
+  const rows = [];
+  if (hasLimit && block.enabled !== false) {
+    const use = useToday(doc, block, now);
+    if (daily > 0) rows.push(rrow({ ic: "hourglass", kind: "limit", label: "Daily limit", value: `${minutes(use.ms)} / ${minutes(daily)} min`, fraction: use.ms / daily }));
+    if (row) rows.push(rrow({ ic: "timer", kind: "limit", label: "Time in a row", value: `${minutes(block.sessionMs)} min · ${minutes(block.sessionBreakMs)} off` }));
+    if (opens > 0) rows.push(rrow({ ic: "openNew", kind: "limit", label: "Opens today", value: `${use.opens} / ${opens}`, fraction: use.opens / opens }));
+  }
+  const hours = mode === "SCHEDULE" ? block.schedule : block.blockedHours;
+  if (hours && (mode !== "SCHEDULE" || windows(hours).length || (hours.activeDays ?? []).length < 7)) {
+    rows.push(rrow({ ic: "calendar", kind: "strict", label: "Blocked hours", note: windows(hours).join(", ") || "All day", dim: cls !== "blocked" }));
+  }
+  if (mode === "LOCKDOWN") rows.push(rrow({ ic: "lock", kind: "strict", label: `${minutes(block.lockdownMs ?? 0)} min lockdown`, dim: cls !== "blocked" }));
+  if (mode === "HABIT") {
+    const t = block.trigger ?? {};
+    if (t.type !== "TIMER") {
+      for (const i of items) {
+        rows.push(i.habitId
+          ? rrow({ loop: true, kind: "loop", label: i.text + (i.linkedDay === "YESTERDAY" ? " (yesterday)" : "") })
+          : rrow({ ic: i.tag ? "nfc" : "task", kind: i.tag ? "blue" : "habit", label: i.text, dim: i.done, done: !!i.done }));
+      }
+    }
+    if (t.type === "TIMER" || t.type === "COMBINED") rows.push(rrow({ ic: "timer", kind: "timer", label: "Timer", value: `${minutes(t.requiredAmount ?? 0)} min` }));
+  }
+  const sub = [
+    block.devices === "PHONE" && h("span", {}, "Phone only"),
+    block.devices === "LAPTOP" && h("span", {}, "Laptop only"),
+    isLocked(block, now.getTime()) && h("span", { class: "locked" }, `Locked until ${new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" }).format(block.lock.untilWall)}`),
+    (block.enforcementTier ?? "SOFT") === "HARDCORE" && h("span", { class: "tag strict" }, "Hardcore"),
+  ].filter(Boolean);
+  const phone = block.targetPackages ?? [];
+  const targets = [
+    phone.length > 0 && h("span", { class: "target", title: "Phone apps" }, icon("phone"), `${phone.length} app${phone.length === 1 ? "" : "s"}`),
+    ...(block.targetSites ?? []).map((x) => h("span", { class: "target" }, icon("globe"), x)),
+    ...(block.exceptSites ?? []).map((x) => h("span", { class: "target except", title: "Left alone" }, x)),
+    ...(block.targetDesktopApps ?? []).map((a) => h("span", { class: "target", title: "Laptop app" }, icon("laptop"), a)),
+  ].filter(Boolean);
+  return h("section", { class: `card bcard${block.enabled === false ? " off" : ""}` },
+    h("div", { class: "head" },
+      h("div", { class: "open" },
+        h("div", { class: "tile letter", style: { "--c": colour, "--ink": inkOn(colour) } }, (block.name?.trim()[0] ?? "x").toUpperCase()),
+        h("div", { class: "name" }, h("h3", {}, block.name), h("div", { class: `headline ${TONE[cls] ?? "idle"}` }, text), sub.length > 0 && h("div", { class: "sub" }, sub)))),
+    rows.length > 0 && h("div", { class: "rows" }, rows),
+    targets.length > 0 && h("div", { class: "targets" }, targets));
+}
 
-function render() {
-  if (!doc) return;
+function stat(ic, cls, value, label) {
+  return h("div", { class: `stat ${cls}` }, h("span", { class: "stat-icon" }, icon(ic)), h("b", {}, value), h("span", { class: "label" }, label));
+}
+
+function blocksView() {
   const now = new Date();
   const blocks = Object.values(doc.blocks ?? {});
   const items = Object.values(doc.items ?? {});
@@ -184,47 +236,133 @@ function render() {
   const cap = doc.settings?.dailyCapMs ?? 3600000;
   const pause = doc.pause;
   const onBreak = pause && now.getTime() < pause.startedAtWall + pause.durationMs;
-  const breakText = onBreak ? `Until ${timeFmt.format(pause.startedAtWall + pause.durationMs)}` : doc.lastPauseEpochDay === day ? "Used today" : "Available";
+  const breakText = onBreak ? `Until ${timeFmt.format(pause.startedAtWall + pause.durationMs)}` : doc.lastPauseEpochDay === day ? "Used" : "Ready";
+  const statuses = blocks.map((b) => blockStatus(doc, b, now)[0]);
+  const summary = [["blocked", "blocked"], ["earned", "ready"], ["open", "open"]].map(([c, w]) => [statuses.filter((x) => x === c).length, w]).filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`).join(" · ");
+  const known = Object.entries(devices).sort(([a], [b]) => a.localeCompare(b));
+  return h("div", {},
+    h("div", { class: "page-title" }, h("h2", {}, "Blocks"), summary && h("span", { class: "summary" }, summary)),
+    h("div", { class: "stats" },
+      stat("lockOpen", "unlocked", `${minutes(usedMs)} / ${minutes(cap)} min`, "Unlocked today"),
+      stat("coffee", "breaks", breakText, "Break"),
+      known.map(([device, at]) => {
+        const stale = now.getTime() - at > 60 * 60000;
+        return stat(device === "phone" ? "phone" : device === "laptop" ? "laptop" : "devices", stale ? "stale" : "fresh", ago(now.getTime() - at), device === "phone" ? "Phone" : device === "laptop" ? "Laptop" : device);
+      })),
+    blocks.length ? h("div", { class: "blocks" }, blocks.map((b, i) => blockCard(b, i, items.filter((x) => x.blockId === b.id).sort((x, y) => x.order - y.order), now)))
+      : h("div", { class: "card empty" }, "No blocks"),
+    h("div", { class: "foot" }, updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` · ${updated.by}` : ""}` : "Not synced"));
+}
 
-  const cards = blocks.map((block) => {
-    const own = items.filter((i) => i.blockId === block.id).sort((a, b) => a.order - b.order);
-    const [cls, text] = blockStatus(doc, block, now);
-    const phone = block.targetPackages ?? [];
-    const sites = block.targetSites ?? [];
-    const laptop = block.targetDesktopApps ?? [];
-    return h("section", { class: "card block" },
-      h("div", { class: "top" },
-        h("h2", {}, block.name),
-        chips(block, now).map((c) => h("span", { class: "chip" }, c))),
-      h("div", { class: `status ${cls}` }, text),
-      h("div", { class: "targets" },
-        phone.length > 0 && h("span", { class: "target", title: phone.join("\n") }, `${phone.length} phone app${phone.length === 1 ? "" : "s"}`),
-        sites.map((s) => h("span", { class: "target" }, s)),
-        laptop.map((a) => h("span", { class: "target", title: "Laptop app" }, `💻 ${a}`))),
-      h("div", { class: "how" }, unlockMethod(block, own)),
-      own.length > 0 && (block.mode ?? "HABIT") === "HABIT" && h("ul", { class: "items" }, own.map((i) =>
-        h("li", { class: i.done && !i.habitId ? "done" : "" }, i.text,
-          i.habitId && h("span", { class: "link" }, i.linkedDay === "YESTERDAY" ? "habit · yesterday" : "habit")))));
+// ---- Insights ------------------------------------------------------------------------------
+
+let hist = null; // { events (merged), limits, at }
+let historyLoading = false;
+let insights = (() => {
+  const kept = load(KEY_INSIGHTS) ?? {};
+  return { range: kept.range ?? "week", device: kept.device ?? "all", block: null, historyDays: 7, openDays: {} };
+})();
+let insightsNode = null;
+let drawnFrom = null;
+
+async function loadHistory() {
+  if (historyLoading) return;
+  historyLoading = true;
+  try {
+    const since = Date.now() - 120 * DAY;
+    const [ev, lim] = await Promise.all([
+      fetch(new URL(`events?since=${since}`, location.href), { headers: HEADERS, cache: "no-store" }),
+      fetch(new URL("limits", location.href), { headers: HEADERS, cache: "no-store" }),
+    ]);
+    check(ev);
+    if (!ev.ok) throw new Error(`${ev.status}`);
+    const events = (await ev.json()).events ?? [];
+    const limits = lim.ok ? (await lim.json()).limits ?? {} : {}; // a server before /limits has none
+    hist = { events: mergeShared(events, doc.emergencyLog), limits, at: Date.now() };
+  } catch (e) {
+    if (e instanceof AuthError) return signOut("Signed out");
+    hist = hist ?? { events: [], limits: {}, at: Date.now(), failed: true };
+  } finally {
+    historyLoading = false;
+  }
+  render();
+}
+
+function setInsights(change) {
+  insights = { ...insights, ...change };
+  save(KEY_INSIGHTS, { range: insights.range, device: insights.device });
+  drawInsights(true);
+}
+
+function drawInsights(force) {
+  if (!insightsNode) insightsNode = h("div", { class: "insights" });
+  if (!hist) {
+    if (!insightsNode.firstChild) insightsNode.replaceChildren(h("p", { class: "boot" }, "Loading…"));
+    return insightsNode;
+  }
+  const key = `${hist.at}|${etag}`;
+  if (!force && drawnFrom === key) return insightsNode;
+  drawnFrom = key;
+  const input = {
+    events: hist.events,
+    blocks: normalizeBlocks(Object.values(doc.blocks ?? {})),
+    limits: hist.limits,
+    now: Date.now(),
+    zone: sharedZone(doc) ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+  renderInsights(insightsNode, input, insights, {
+    setRange: (range) => setInsights({ range, historyDays: 7 }),
+    setDevice: (device) => setInsights({ device }),
+    pickBlock: (block) => { setInsights({ block, historyDays: 7 }); window.scrollTo({ top: 0, behavior: "smooth" }); },
+    more: () => setInsights({ historyDays: insights.historyDays + 7 }),
+    toggleDay: (day, open) => setInsights({ openDays: { ...insights.openDays, [day]: open } }),
   });
+  return insightsNode;
+}
 
-  const updatedText = updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` by the ${updated.by}` : ""}` : "Not synced";
-  document.getElementById("app").replaceChildren(
-    h("header", { class: "bar" }, h("div", { class: "wrap" },
-      h("h1", {}, h("img", { src: "icon.svg", alt: "" }), "xrnrule"),
-      h("span", { class: "spacer" }),
-      h("span", { class: "live" + (online ? "" : " off") }, online ? "Live" : "Offline"),
-      h("a", { href: "../xrnloops/" }, "Habits"))),
-    h("main", { class: "wrap" },
-      h("section", { class: "card summary" },
-        h("div", {}, h("b", {}, `${minutes(usedMs)} / ${minutes(cap)} min`), h("span", {}, "Unlocked today"),
-          h("div", { class: "meter" }, h("i", { style: `width:${Math.min(100, (usedMs / cap) * 100)}%` }))),
-        h("div", {}, h("b", {}, breakText), h("span", {}, "15-minute break")),
-        h("div", {}, h("b", {}, blocks.length), h("span", {}, blocks.length === 1 ? "Block" : "Blocks"))),
-      devicesCard(now),
-      blocks.length ? cards : h("div", { class: "card empty" }, "No blocks"),
-      h("div", { class: "foot" },
-        h("span", {}, updatedText),
-        h("a", { href: "#", onclick: (e) => { e.preventDefault(); signOut(""); } }, "Sign out"))));
+function insightsView() {
+  if (!historyLoading && (!hist || Date.now() - hist.at > 60_000)) loadHistory();
+  return drawInsights(false);
+}
+
+// ---- the page ------------------------------------------------------------------------------
+
+let shell = null; // { bar, main }
+
+function header() {
+  return h("header", { class: "bar" }, h("div", { class: "wrap" },
+    h("a", { class: "mark", href: "./", title: "xrnrule" }, h("img", { src: "icon.svg", alt: "xrnrule" })),
+    h("nav", { class: "tabs" }, [["blocks", "Blocks", "shield"], ["insights", "Insights", "chart"]].map(([id, label, ic]) =>
+      h("button", { type: "button", class: tab === id ? "on" : "", "aria-current": tab === id ? "page" : null, onclick: () => goTo(id) }, icon(ic), h("span", {}, label)))),
+    h("span", { class: "spacer" }),
+    h("span", { class: `sync${online ? "" : " off"}` }, icon(online ? "cloud" : "cloudOff"), h("span", {}, online ? "Live" : "Offline")),
+    h("a", { class: "app-link", href: "../xrnloops/", title: "xrnloops" }, h("img", { src: "xrnloops.svg", alt: "xrnloops" })),
+    h("button", { class: "round", type: "button", title: "Sign out", "aria-label": "Sign out", onclick: () => signOut("") }, icon("logout"))));
+}
+
+function goTo(id) {
+  tab = id;
+  const hash = id === "blocks" ? "" : `#${id}`;
+  if (location.hash !== hash) window.history.replaceState(null, "", location.pathname + location.search + hash);
+  window.scrollTo(0, 0);
+  render();
+}
+window.addEventListener("hashchange", () => goTo(location.hash === "#insights" ? "insights" : "blocks"));
+
+function render() {
+  if (!doc || !signedIn) return;
+  const app = document.getElementById("app");
+  if (!shell) {
+    shell = { bar: h("div"), main: h("main", { class: "wrap" }) };
+    app.replaceChildren(shell.bar, shell.main);
+  }
+  shell.bar.replaceChildren(header());
+  const view = tab === "insights" ? insightsView() : blocksView();
+  if (shell.main.firstChild !== view || shell.main.childNodes.length !== 1) {
+    const y = window.scrollY;
+    shell.main.replaceChildren(view);
+    window.scrollTo(0, y);
+  }
 }
 
 // Statuses change with the clock alone (sessions end, schedules start): redraw each half minute.

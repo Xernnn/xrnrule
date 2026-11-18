@@ -13,7 +13,7 @@ bought minutes, the daily unlock limit, the 15-minute break and lockdowns are sh
    ├─ D-Bus  ← KWin script (kwin/): which window is in front; closes blocked ones
    │   (on Hyprland: its own sockets instead, see below)
    └─ http://127.0.0.1:47321
-        ├─ the local page: blocks, unlocks, laptop apps & sites per block
+        ├─ the local page: Blocks, Insights (both devices' history, /api/history), Settings
         ├─ /block: where blocked apps and sites land, with what unlocks them
         └─ /ext/*: the browser extension (../extension) asks what's blocked
 ```
@@ -78,7 +78,7 @@ Without a server it blocks on the laptop only, and nothing it does reaches the p
 
 ## Using it
 
-- **Blocks** can be made on either device. On the local page, **+ New block** makes one with
+- **Blocks** can be made on either device. On the local page, **New block** makes one with
   the phone's choices (a habit with tasks, a timer or both, a daily limit, a schedule or a
   lockdown), covering laptop apps and websites; add phone apps to it on the phone. A daily
   limit can also have "at most N minutes in a row, then a break" and can be shared or per
@@ -139,3 +139,17 @@ State lives in `~/.local/share/xrnrule/` (owner-only): `world.json`, `habit-entr
 habit history), `shared-base.json` (the copy last agreed with the server), `clock.json` (how far the clock was
 set by hand, and the time zone blocks go by), and `site-icons/`
 (each blocked website's own icon, asked of that site, served to the page at `/api/site-icon`).
+
+## Working on the page
+
+The page is `src/main/resources/web/`; what it shares with the sync server's status page (the
+look `xrn.css`, `ui.js`, Insights `insights.js`, the font, xrnloops' tile) lives in
+`server/web/` and the build copies it in. To look at it on made-up data, with nothing enforced,
+synced or fetched (never point it at the real data dir):
+
+```sh
+./gradlew --no-daemon :desktop:demo --args="47390 $(mktemp -d)"         # a month on both devices
+./gradlew --no-daemon :desktop:demo --args="47391 $(mktemp -d) empty"   # a fresh install
+```
+
+Tests: `node --test desktop/src/test/js server` (the page, Insights) besides `:desktop:test`.

@@ -25,6 +25,8 @@
   const BEAT_MS = 1000;
 
   document.getElementById("title").textContent = site ? `${site} is blocked` : "Blocked";
+  // The site's letter, as the laptop's block page shows one without the site's icon.
+  document.getElementById("pic").textContent = (X.hostOf(`https://${site}`) || site || "x")[0].toUpperCase();
   document.title = site ? `${site} is blocked · xrnrule` : "Blocked · xrnrule";
 
   const open = document.getElementById("open");

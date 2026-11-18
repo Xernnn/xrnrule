@@ -10,7 +10,8 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
 
     GET  /state               200, the document; ETag: "<version>"
                               If-None-Match: "<version>" -> 304 when unchanged (a cheap check)
-                              ?wait=S with If-None-Match long-polls up to S seconds (the laptop)
+                              ?wait=S with If-None-Match long-polls up to S seconds (the laptop);
+                              one whose caller hangs up first ends there, unanswered
     PUT  /state               needs If-Match: "<version>" (or "*"); 200 with the new ETag, or
                               412 if someone wrote first: re-read, merge, try again
                               503 if the stored file can't be read: never an empty document, which
@@ -21,6 +22,9 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               one stamped more than a day ahead of this server. 120 days kept,
                               and at most EVENTS_MAX of them
     GET  /events?since=MS     those events, for the weekly review in the habits web app
+    GET  /limits              each block's daily limit use per device and day, as the devices'
+                              writes of /state said it (its `allowance`), for the history pages:
+                              {"limits": {block: {device id: {day start ms: ms}}}}; 120 days kept
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out, and ends its cookie on every server (below)
     GET  /health              200 "ok", no login (for monitoring)
@@ -28,6 +32,7 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               extension's updates.xml and signed .crx with no login (a browser's
                               own updater fetches them), the phone app's app.json and .apk with it
     GET  /, /status.js, ...   a read-only status page (static files; the data needs a login)
+    HEAD                      any GET above, answered without its body
 
 The devices send Basic auth with every request. The web pages (this status page, the xrnloops
 web app on the same host) sign in once and then carry an HttpOnly cookie, `xrn_session`, so the
@@ -54,7 +59,9 @@ import math
 import mimetypes
 import os
 import re
+import select
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -67,6 +74,7 @@ MAX_BODY = 8 * 1024 * 1024
 FAIL_DELAY_S = 2  # after a wrong password, as Radicale does
 AUTH_CACHE_S = 600  # a bcrypt check costs ~0.3s on a phone; don't pay it per request
 MAX_WAIT_S = 55
+GONE_CHECK_S = 1  # how often a long-poll that hears nothing looks whether its caller is still there
 BACKUP_DAYS = 14  # daily copies of each user's state, next to it in backups/
 FAIL_LIMIT = 10  # wrong logins from one address within FAIL_WINDOW_S, then 429 until they age out
 FAIL_WINDOW_S = 15 * 60
@@ -77,6 +85,8 @@ EVENTS_AHEAD_MS = 86400 * 1000  # an event stamped further ahead of this server'
 # 5 MB of file and 30 MB here, where a device could otherwise send 8 MB a batch without end.
 EVENTS_MAX = 50000
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
+LIMITS_WRITE_S = 60  # limits.json is rewritten at most this often per user
+LIMITS_MAX_KEYS = 200  # blocks, devices per block: more than any real state has
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
 # are public, since a browser's updater sends no login; the app is the private repo's code.
@@ -105,6 +115,10 @@ seen_written = {}  # user -> time.monotonic() of the last devices.json write
 events_lock = threading.Lock()
 events = {}  # user -> list of event dicts, oldest first, mirrored to events.jsonl
 event_keys = {}  # user -> the event_key of each of events[user], so a batch needn't go over them all
+limits_lock = threading.Lock()
+limits = {}  # user -> {block: {device id: {day start ms (str): ms}}}, mirrored to limits.json
+limits_written = {}  # user -> time.monotonic() of the last limits.json write
+limits_dirty = set()  # users whose limits.json is behind what's here
 session_key = b""  # signs the web pages' login cookies; see load_session_key()
 signed_out_lock = threading.Lock()
 signed_out_seen = None  # the signed-out.json (path, inode, mtime, size) signed_out_list was read from
@@ -602,6 +616,95 @@ def add_events(user, device, raw_events):
         return len(new)
 
 
+def limits_path(user):
+    return os.path.join(args.data, "users", user, "limits.json")
+
+
+def load_limits(user):
+    """The user's limit record (cached). Call under limits_lock."""
+    if user not in limits:
+        try:
+            with open(limits_path(user), encoding="utf-8") as f:
+                kept = json.load(f)
+        except (OSError, ValueError):
+            kept = {}
+        # Only the shape note_limits writes: block -> device -> day -> ms.
+        limits[user] = {
+            block: {device: {day: ms for day, ms in days.items() if isinstance(ms, int)}
+                    for device, days in by_device.items() if isinstance(days, dict)}
+            for block, by_device in (kept.items() if isinstance(kept, dict) else []) if isinstance(by_device, dict)
+        }
+    return limits[user]
+
+
+def note_limits(user, data):
+    """Keeps each block's limit use per device and day out of a state document's `allowance`
+    (SharedState.allowance: block -> device id -> {dayStartWall, ms, ...}). A device reports only
+    its current day, so the day before is gone from the state once its next day starts: kept here,
+    the history pages can show a block's use against its limit day by day. The largest use seen
+    for a day stays (a day's use only grows). Anything malformed is skipped: this never stands in
+    the way of a write."""
+    allowance = data.get("allowance") if isinstance(data, dict) else None
+    if not isinstance(allowance, dict):
+        return
+    cutoff = int((time.time() - EVENTS_KEEP_DAYS * 86400) * 1000)
+    latest = int(time.time() * 1000) + EVENTS_AHEAD_MS
+    with limits_lock:
+        record = load_limits(user)
+        changed = False
+        for block, by_device in list(allowance.items())[:LIMITS_MAX_KEYS]:
+            if not isinstance(block, str) or not isinstance(by_device, dict):
+                continue
+            for device, use in list(by_device.items())[:LIMITS_MAX_KEYS]:
+                if not isinstance(device, str) or not isinstance(use, dict):
+                    continue
+                day, ms = use.get("dayStartWall"), use.get("ms")
+                if not isinstance(day, int) or not isinstance(ms, int) or isinstance(ms, bool) or ms < 0 \
+                        or not cutoff <= day <= latest:
+                    continue
+                days = record.setdefault(block[:200], {}).setdefault(device[:64], {})
+                if days.get(str(day), -1) < ms:
+                    days[str(day)] = ms
+                    changed = True
+        # Days past what events are kept for go, and blocks or devices left with none.
+        for block in list(record):
+            for device in list(record[block]):
+                days = record[block][device]
+                for day in [d for d in days if not d.lstrip("-").isdigit() or int(d) < cutoff]:
+                    del days[day]
+                    changed = True
+                if not days:
+                    del record[block][device]
+            if not record[block]:
+                del record[block]
+        if changed:
+            limits_dirty.add(user)
+        if user in limits_dirty and time.monotonic() - limits_written.get(user, -LIMITS_WRITE_S) >= LIMITS_WRITE_S:
+            write_limits(user)
+
+
+def write_limits(user):
+    """Call under limits_lock."""
+    limits_written[user] = time.monotonic()
+    limits_dirty.discard(user)
+    path = limits_path(user)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(limits[user], f, separators=(",", ":"))
+    os.replace(path + ".tmp", path)
+
+
+def limits_of(user):
+    """The limit record, with the stored state's own figures in it: the first read after an
+    update has them before any device writes again."""
+    try:
+        note_limits(user, read_state(user).get("data"))
+    except Unreadable:
+        pass
+    with limits_lock:
+        return json.loads(json.dumps(load_limits(user)))
+
+
 def state_path(user):
     return os.path.join(args.data, "users", user, "state.json")
 
@@ -670,6 +773,26 @@ class Handler(BaseHTTPRequestHandler):
         who = headers.get("X-Forwarded-For", self.client_address[0]) if headers else "-"
         sys.stderr.write(f"{who} {fmt % a}".translate(LOG_ESCAPES) + "\n")
 
+    def handle(self):
+        # A caller hanging up, mid-request or before the answer is out, is the network, not a fault
+        # here: the laptop's tailnet path drops, a phone loses its signal, a page is closed. One
+        # line says so. socketserver printed some 30 lines of traceback for each, which xrnhub's
+        # log page shows as an error.
+        try:
+            super().handle()
+        except ConnectionError as e:
+            self.close_connection = True
+            self.log_message("connection dropped: %s", type(e).__name__)
+
+    def caller_gone(self):
+        """Whether the caller has closed its end, as Funnel does once the caller gives up on a
+        long-poll: what it would have been told is then for no one."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
+        except (OSError, ValueError):
+            return True
+
     def parse_request(self):
         if not super().parse_request():
             return False
@@ -715,6 +838,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send(413, "body missing or too large")
             return None
         raw = self.rfile.read(length)
+        if len(raw) < length:
+            # The connection closed part way: what came is no document, so it isn't read as one.
+            self.close_connection = True
+            self.send(400, "the upload stopped short")
+            return None
         if (self.headers.get("Content-Encoding") or "").lower() != "gzip":
             return raw
         # Unpacked only up to MAX_BODY: a few megabytes of gzip can unpack to gigabytes.
@@ -790,6 +918,12 @@ class Handler(BaseHTTPRequestHandler):
                 found = [e for e in load_events(user) if e.get("at", 0) >= since]
             return self.send(200, json.dumps({"events": found}, ensure_ascii=False, separators=(",", ":")),
                              "application/json; charset=utf-8")
+        if path == "/limits":
+            user = self.login()
+            if user:
+                self.send(200, json.dumps({"limits": limits_of(user)}, separators=(",", ":")),
+                          "application/json; charset=utf-8")
+            return
         if path != "/state":
             return self.static(path)
         user = self.login()
@@ -811,8 +945,12 @@ class Handler(BaseHTTPRequestHandler):
                     left = deadline - time.monotonic()
                     if left <= 0:
                         break
-                    changed.wait(left)
-                    doc = read_state(user)
+                    if changed.wait(min(left, GONE_CHECK_S)):
+                        doc = read_state(user)
+                    elif self.caller_gone():
+                        self.close_connection = True
+                        return self.log_message("caller left a long-poll after %.0fs",
+                                                wait - (deadline - time.monotonic()))
         except Unreadable:
             return self.send(503, "the stored state can't be read")
         etag = {"ETag": f'"{doc["version"]}"'}
@@ -821,6 +959,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(doc.get("data") or {}, ensure_ascii=False, separators=(",", ":"))
         self.send(200, body, "application/json; charset=utf-8",
                   {**etag, "X-Updated": doc.get("updated", ""), "X-Updated-By": doc.get("by", "")})
+
+    # A GET's answer without its body, as curl -I and monitors ask: http.server answered 501
+    # "Unsupported method", which xrnhub's log page shows as an error.
+    do_HEAD = do_GET
 
     def do_POST(self):
         path, _ = self.route()
@@ -893,6 +1035,10 @@ class Handler(BaseHTTPRequestHandler):
             write_state(user, {"version": version, "updated": datetime.now(timezone.utc).isoformat(),
                                "by": by, "data": data})
             changed.notify_all()
+        try:
+            note_limits(user, data)
+        except Exception as e:  # a history for the pages: never a failed write for a device
+            print(f"limits of {user} not kept: {e}", file=sys.stderr, flush=True)
         self.send(200, '{"ok":true}', "application/json", {"ETag": f'"{version}"'})
 
     def update_file(self, name):
@@ -917,7 +1063,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", UPDATE_TYPES[ext])
             self.send_header("Content-Length", str(size))
             self.end_headers()
-            shutil.copyfileobj(f, self.wfile)
+            if self.command != "HEAD":
+                shutil.copyfileobj(f, self.wfile)
 
     def static(self, path):
         if path in ("", "/"):

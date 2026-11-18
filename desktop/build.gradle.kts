@@ -32,6 +32,12 @@ application {
 // The extension this build was made with, to tell an out-of-date one (see Foreground.extensionVersion).
 tasks.processResources {
     from(rootProject.file("extension/manifest.json")) { rename { "extension-manifest.json" } }
+    // What the local page shares with the sync server's status page (server/web): the look, the
+    // icons, the Insights page, the font and xrnloops' tile. One copy of each, kept there.
+    from(rootProject.file("server/web")) {
+        include("xrn.css", "ui.js", "insights.js", "MiSansLatinVF.woff2", "xrnloops.svg")
+        into("web")
+    }
 }
 
 dependencies {
@@ -42,4 +48,10 @@ dependencies {
     runtimeOnly(libs.slf4j.nop)
 
     testImplementation(libs.junit)
+}
+
+// The page on made-up data, to look at it (DemoDaemon.kt): ./gradlew :desktop:demo --args="<port> <empty dir> [empty]"
+tasks.register<JavaExec>("demo") {
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.xern.xrnrule.desktop.DemoDaemonKt")
 }

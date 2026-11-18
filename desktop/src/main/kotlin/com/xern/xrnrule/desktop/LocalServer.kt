@@ -66,8 +66,11 @@ class LocalServer(
     private val habitClient: HabitClient,
     private val siteIcons: SiteIconCache,
     private val telemetry: FileTelemetry,
+    /** Both devices' history on the server, with sync on (the Insights page). */
+    remote: RemoteHistory? = shared.takeIf { config.syncConfigured },
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
+    private val history = History(telemetry, remote, store.clock)
 
     /**
      * A loosening change waiting out its 60 s (contract §2.3); applied only if confirmed in time,
@@ -105,6 +108,8 @@ class LocalServer(
         when {
             ex.requestMethod == "GET" && path == "/api/state" -> send(ex, 200, json.encodeToString(UiState.serializer(), view(query["app"], query["site"])))
             ex.requestMethod == "GET" && path == "/api/habits" -> send(ex, 200, habits())
+            ex.requestMethod == "GET" && path == "/api/history" ->
+                send(ex, 200, history.json(store.world.value, query["days"]?.toIntOrNull() ?: History.KEEP_DAYS))
             ex.requestMethod == "GET" && path == "/api/site-icon" -> siteIcon(ex, query["host"].orEmpty())
             ex.requestMethod == "POST" && path == "/api/block" -> send(ex, 200, saveBlock(body(ex)))
             ex.requestMethod == "POST" && path == "/api/block/delete" -> send(ex, 200, deleteBlock(json.parseToJsonElement(body(ex)).jsonObject))
@@ -529,6 +534,8 @@ class LocalServer(
         val hoursStart: Int?,
         val hoursEnd: Int?,
         val hoursMore: List<UiWindow>,
+        /** I39: when its lock ends, while it is locked. */
+        val lockedUntilWall: Long? = null,
     )
 
     /** The block page's app or site: what blocks it, and whether minutes can be bought past it (I34). */
@@ -752,6 +759,7 @@ class LocalServer(
             hoursStart = hours?.activeWindow?.startMinuteOfDay,
             hoursEnd = hours?.activeWindow?.endMinuteOfDay,
             hoursMore = hours?.moreWindows.orEmpty().map { UiWindow(it.days.sorted(), it.window.startMinuteOfDay, it.window.endMinuteOfDay) },
+            lockedUntilWall = b.lock?.untilWall?.takeIf { BlockEdits.locked(b, clock.nowWallMs()) },
         )
     }
 
