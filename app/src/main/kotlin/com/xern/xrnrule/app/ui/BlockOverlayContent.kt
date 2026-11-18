@@ -108,8 +108,13 @@ fun BlockOverlayContent(
         } else {
             emptyList()
         }
-        rememberTicker() // keeps the time to go live
+        // Keeps the time to go live; four times a second while a wait's ring is running.
+        val waiting = ui?.overrideReadyAtElapsed != null || ui?.reason == BlockReason.WAIT
+        rememberTicker(if (waiting) 250 else 1_000)
         val back = ui?.back?.invoke()
+        // A wait under way (buying minutes, I34; the pause before an open, I53): its ring leads the screen.
+        val overrideLeft = ui?.overrideReadyAtElapsed?.let { (it - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0) }
+        val openWaitLeft = if (ui?.reason == BlockReason.WAIT) ui.openWaitLeftMs?.invoke() else null
 
         // Surface, not a bare Column: it sets LocalContentColor so headline Text with no
         // explicit colour isn't left as the default black on our dark ground.
@@ -133,7 +138,11 @@ fun BlockOverlayContent(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Gap(24)
-                        SubjectIcon(ui, block, strict)
+                        when {
+                            overrideLeft != null -> CountdownRing(overrideLeft, ui.overrideWaitMs, LocalKinds.current.limit.color, size = 150.dp)
+                            openWaitLeft != null && block != null -> CountdownRing(openWaitLeft, block.openWaitS * 1000L, LocalKinds.current.limit.color, size = 150.dp)
+                            else -> SubjectIcon(ui, block, strict)
+                        }
                         Gap(24)
                         Text(
                             when {
@@ -146,7 +155,7 @@ fun BlockOverlayContent(
                             style = MaterialTheme.typography.headlineMedium,
                             textAlign = TextAlign.Center,
                         )
-                        if (strict && back != null) {
+                        if (strict && back != null && openWaitLeft == null) {
                             Gap(14)
                             Text(
                                 back.at,
@@ -181,7 +190,7 @@ fun BlockOverlayContent(
                         }
                         Gap(28)
                         if (ui != null && strict) {
-                            Column(Modifier.fillMaxWidth()) { OverrideSection(ui, onBeginOverride, onClaimOverride, onCancelOverride) }
+                            Column(Modifier.fillMaxWidth()) { OverrideSection(ui, overrideLeft, onClaimOverride, onCancelOverride) }
                         }
                         if (block != null && !strict && parts.isNotEmpty()) {
                             HFCard(Modifier.fillMaxWidth()) {
@@ -334,12 +343,13 @@ private fun OverlayPartRow(
 
 /**
  * Buying a few minutes past a daily limit or a schedule (contract I34): start, wait out the
- * delay, type the sentence. The engine checks all of it; this only shows it.
+ * delay (the ring at the top counts it, [waitLeft]), type the sentence. The engine checks all of
+ * it; this only shows it.
  */
 @Composable
 private fun OverrideSection(
     ui: OverlayShieldPort.OverlayUi,
-    onBegin: (Set<String>) -> Unit,
+    waitLeft: Long?,
     onClaim: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -348,7 +358,7 @@ private fun OverrideSection(
         null -> Unit
         OverrideRejection.NONE_LEFT -> {
             Text(
-                "You've taken today's extra minutes for this.",
+                "Today's extra minutes are used up",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -360,17 +370,10 @@ private fun OverrideSection(
     }
     // Not started: the offer is under the Leave button (OverrideOffer).
     val readyAt = ui.overrideReadyAtElapsed ?: return
-    var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
-    LaunchedEffect(readyAt) {
-        while (true) {
-            now = android.os.SystemClock.elapsedRealtime()
-            delay(250)
-        }
-    }
     var typed by remember(readyAt) { mutableStateOf("") }
-    val waitLeft = readyAt - now
+    val waiting = (waitLeft ?: 0) > 0
     HFCard(Modifier.fillMaxWidth()) {
-        Text("Type: “${ui.overridePhrase}”", style = MaterialTheme.typography.bodyLarge)
+        Text("“${ui.overridePhrase}”", style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
         Gap(10)
         SearchField(
             value = typed,
@@ -379,15 +382,11 @@ private fun OverrideSection(
             icon = Icons.Outlined.Lock,
             // A password field keeps keyboards like Laban Key from turning "oo" into "ô" as you type.
             keyboard = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-            actions = KeyboardActions(onDone = { if (waitLeft <= 0) onClaim(typed) }),
+            actions = KeyboardActions(onDone = { if (!waiting) onClaim(typed) }),
         )
         Gap(12)
-        PillButton(
-            if (waitLeft > 0) "Wait ${(waitLeft + 999) / 1000} s" else "Open for $minutes",
-            onClick = { onClaim(typed) },
-            enabled = waitLeft <= 0,
-        )
-        TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Never mind") }
+        PillButton("Open for $minutes", onClick = { onClaim(typed) }, enabled = !waiting)
+        TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Cancel") }
     }
 }
 
