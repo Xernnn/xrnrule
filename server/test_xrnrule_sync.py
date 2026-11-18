@@ -506,6 +506,36 @@ class SyncServerTest(unittest.TestCase):
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
 
+    def test_each_days_limit_use_is_kept_after_the_state_moves_on(self):
+        # A device's use of a limit is in the state for its current day only; the history pages
+        # show a block's use against its limit day by day, so the server keeps each day's.
+        now = int(time.time() * 1000)
+        day1, day2 = now - 2 * 86400 * 1000, now - 86400 * 1000
+        use = lambda day, ms: {"dayStartWall": day, "ms": ms, "atWall": day + 1000, "opens": 0}
+        state = lambda allowance: {"blocks": {}, "allowance": allowance}
+        self.assertEqual(200, self.call("PUT", "/state", state({"yt": {"phone-1": use(day1, 600000)}}), {"If-Match": "*"})[0])
+        self.call("PUT", "/state", state({"yt": {"phone-1": use(day1, 900000), "laptop-1": use(day1, 60000)}}), {"If-Match": "*"})
+        self.call("PUT", "/state", state({"yt": {"phone-1": use(day2, 120000), "laptop-1": use(day1, 30000)}}), {"If-Match": "*"})
+        status, body, _ = self.call("GET", "/limits")
+        self.assertEqual(200, status)
+        got = json.loads(body)["limits"]["yt"]
+        self.assertEqual({str(day1): 900000, str(day2): 120000}, got["phone-1"])
+        self.assertEqual({str(day1): 60000}, got["laptop-1"], "a day's use only grows: the largest stays")
+
+    def test_limit_use_that_makes_no_sense_is_skipped_and_the_write_still_goes(self):
+        now = int(time.time() * 1000)
+        old = now - (srv.EVENTS_KEEP_DAYS + 1) * 86400 * 1000
+        weird = {"blocks": {}, "allowance": {
+            "a": {"phone-1": {"dayStartWall": "today", "ms": 5}, "laptop-1": {"dayStartWall": now - 1000, "ms": -4}},
+            "b": ["not", "a", "map"],
+            "c": {"phone-1": {"dayStartWall": old, "ms": 60000}},
+            "d": {"phone-1": {"dayStartWall": now - 1000, "ms": True}},
+        }}
+        self.assertEqual(200, self.call("PUT", "/state", weird, {"If-Match": "*"})[0])
+        got = json.loads(self.call("GET", "/limits")[1])["limits"]
+        self.assertFalse({"a", "b", "c", "d"} & set(got), got)
+        self.assertEqual(401, self.call("GET", "/limits", password=WRONG)[0])
+
     def test_an_event_whose_type_is_no_string_is_dropped_not_a_dropped_connection(self):
         # A list or an object can't be looked up in the set of types: TypeError, no answer at all.
         day_ago = int(time.time() * 1000) - 86400 * 1000  # out of the other tests' way

@@ -21,6 +21,9 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
                               one stamped more than a day ahead of this server. 120 days kept,
                               and at most EVENTS_MAX of them
     GET  /events?since=MS     those events, for the weekly review in the habits web app
+    GET  /limits              each block's daily limit use per device and day, as the devices'
+                              writes of /state said it (its `allowance`), for the history pages:
+                              {"limits": {block: {device id: {day start ms: ms}}}}; 120 days kept
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out, and ends its cookie on every server (below)
     GET  /health              200 "ok", no login (for monitoring)
@@ -77,6 +80,8 @@ EVENTS_AHEAD_MS = 86400 * 1000  # an event stamped further ahead of this server'
 # 5 MB of file and 30 MB here, where a device could otherwise send 8 MB a batch without end.
 EVENTS_MAX = 50000
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
+LIMITS_WRITE_S = 60  # limits.json is rewritten at most this often per user
+LIMITS_MAX_KEYS = 200  # blocks, devices per block: more than any real state has
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
 # are public, since a browser's updater sends no login; the app is the private repo's code.
@@ -105,6 +110,10 @@ seen_written = {}  # user -> time.monotonic() of the last devices.json write
 events_lock = threading.Lock()
 events = {}  # user -> list of event dicts, oldest first, mirrored to events.jsonl
 event_keys = {}  # user -> the event_key of each of events[user], so a batch needn't go over them all
+limits_lock = threading.Lock()
+limits = {}  # user -> {block: {device id: {day start ms (str): ms}}}, mirrored to limits.json
+limits_written = {}  # user -> time.monotonic() of the last limits.json write
+limits_dirty = set()  # users whose limits.json is behind what's here
 session_key = b""  # signs the web pages' login cookies; see load_session_key()
 signed_out_lock = threading.Lock()
 signed_out_seen = None  # the signed-out.json (path, inode, mtime, size) signed_out_list was read from
@@ -602,6 +611,95 @@ def add_events(user, device, raw_events):
         return len(new)
 
 
+def limits_path(user):
+    return os.path.join(args.data, "users", user, "limits.json")
+
+
+def load_limits(user):
+    """The user's limit record (cached). Call under limits_lock."""
+    if user not in limits:
+        try:
+            with open(limits_path(user), encoding="utf-8") as f:
+                kept = json.load(f)
+        except (OSError, ValueError):
+            kept = {}
+        # Only the shape note_limits writes: block -> device -> day -> ms.
+        limits[user] = {
+            block: {device: {day: ms for day, ms in days.items() if isinstance(ms, int)}
+                    for device, days in by_device.items() if isinstance(days, dict)}
+            for block, by_device in (kept.items() if isinstance(kept, dict) else []) if isinstance(by_device, dict)
+        }
+    return limits[user]
+
+
+def note_limits(user, data):
+    """Keeps each block's limit use per device and day out of a state document's `allowance`
+    (SharedState.allowance: block -> device id -> {dayStartWall, ms, ...}). A device reports only
+    its current day, so the day before is gone from the state once its next day starts: kept here,
+    the history pages can show a block's use against its limit day by day. The largest use seen
+    for a day stays (a day's use only grows). Anything malformed is skipped: this never stands in
+    the way of a write."""
+    allowance = data.get("allowance") if isinstance(data, dict) else None
+    if not isinstance(allowance, dict):
+        return
+    cutoff = int((time.time() - EVENTS_KEEP_DAYS * 86400) * 1000)
+    latest = int(time.time() * 1000) + EVENTS_AHEAD_MS
+    with limits_lock:
+        record = load_limits(user)
+        changed = False
+        for block, by_device in list(allowance.items())[:LIMITS_MAX_KEYS]:
+            if not isinstance(block, str) or not isinstance(by_device, dict):
+                continue
+            for device, use in list(by_device.items())[:LIMITS_MAX_KEYS]:
+                if not isinstance(device, str) or not isinstance(use, dict):
+                    continue
+                day, ms = use.get("dayStartWall"), use.get("ms")
+                if not isinstance(day, int) or not isinstance(ms, int) or isinstance(ms, bool) or ms < 0 \
+                        or not cutoff <= day <= latest:
+                    continue
+                days = record.setdefault(block[:200], {}).setdefault(device[:64], {})
+                if days.get(str(day), -1) < ms:
+                    days[str(day)] = ms
+                    changed = True
+        # Days past what events are kept for go, and blocks or devices left with none.
+        for block in list(record):
+            for device in list(record[block]):
+                days = record[block][device]
+                for day in [d for d in days if not d.lstrip("-").isdigit() or int(d) < cutoff]:
+                    del days[day]
+                    changed = True
+                if not days:
+                    del record[block][device]
+            if not record[block]:
+                del record[block]
+        if changed:
+            limits_dirty.add(user)
+        if user in limits_dirty and time.monotonic() - limits_written.get(user, -LIMITS_WRITE_S) >= LIMITS_WRITE_S:
+            write_limits(user)
+
+
+def write_limits(user):
+    """Call under limits_lock."""
+    limits_written[user] = time.monotonic()
+    limits_dirty.discard(user)
+    path = limits_path(user)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(limits[user], f, separators=(",", ":"))
+    os.replace(path + ".tmp", path)
+
+
+def limits_of(user):
+    """The limit record, with the stored state's own figures in it: the first read after an
+    update has them before any device writes again."""
+    try:
+        note_limits(user, read_state(user).get("data"))
+    except Unreadable:
+        pass
+    with limits_lock:
+        return json.loads(json.dumps(load_limits(user)))
+
+
 def state_path(user):
     return os.path.join(args.data, "users", user, "state.json")
 
@@ -790,6 +888,12 @@ class Handler(BaseHTTPRequestHandler):
                 found = [e for e in load_events(user) if e.get("at", 0) >= since]
             return self.send(200, json.dumps({"events": found}, ensure_ascii=False, separators=(",", ":")),
                              "application/json; charset=utf-8")
+        if path == "/limits":
+            user = self.login()
+            if user:
+                self.send(200, json.dumps({"limits": limits_of(user)}, separators=(",", ":")),
+                          "application/json; charset=utf-8")
+            return
         if path != "/state":
             return self.static(path)
         user = self.login()
@@ -893,6 +997,10 @@ class Handler(BaseHTTPRequestHandler):
             write_state(user, {"version": version, "updated": datetime.now(timezone.utc).isoformat(),
                                "by": by, "data": data})
             changed.notify_all()
+        try:
+            note_limits(user, data)
+        except Exception as e:  # a history for the pages: never a failed write for a device
+            print(f"limits of {user} not kept: {e}", file=sys.stderr, flush=True)
         self.send(200, '{"ok":true}', "application/json", {"ETag": f'"{version}"'})
 
     def update_file(self, name):
