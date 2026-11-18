@@ -33,6 +33,7 @@ import java.time.Duration
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
+import java.util.zip.GZIPInputStream
 
 /** How the last attempt went, for the local page. */
 @Serializable
@@ -70,6 +71,28 @@ class Http(user: String, password: String, private val onServerTime: (dateMs: Lo
         return response
     }
 
+    /**
+     * A GET whose answer may come gzipped, the server's event log for one, which runs to
+     * megabytes over 120 days: its text and status.
+     */
+    fun getText(url: String, timeoutS: Long = 30): Pair<Int, String> {
+        val request = HttpRequest.newBuilder(URI(url))
+            .timeout(Duration.ofSeconds(timeoutS))
+            .header("Authorization", auth)
+            .header("X-Device", "laptop")
+            .header("Accept-Encoding", "gzip")
+            .GET()
+            .build()
+        val sent = System.nanoTime()
+        val response = client.send(request, HttpResponse.BodyHandlers.ofByteArray())
+        val took = (System.nanoTime() - sent) / 1_000_000
+        serverDate(response.uri(), response.headers().firstValue("Date").orElse(null))?.let { onServerTime(it, took) }
+        if (response.statusCode() == 401) throw AuthException()
+        val gzipped = response.headers().firstValue("Content-Encoding").orElse("").equals("gzip", ignoreCase = true)
+        val bytes = if (gzipped) GZIPInputStream(response.body().inputStream()).use { it.readBytes() } else response.body()
+        return response.statusCode() to bytes.decodeToString()
+    }
+
     companion object {
         /**
          * The time an answer says it was sent, when it came over HTTPS from another machine: a
@@ -95,7 +118,7 @@ class SharedSyncClient(
     private val store: Store,
     private val telemetry: FileTelemetry,
     private val scope: CoroutineScope,
-) {
+) : RemoteHistory {
     private val http = Http(config.user, config.password, serverTime(store))
     private val baseFile = File(config.dataDir, BASE_FILE)
     private val eventsSentFile = File(config.dataDir, "events-sent")
@@ -234,6 +257,18 @@ class SharedSyncClient(
         }
         telemetrySizeSent = size
     }
+
+    /** Both devices' events since [sinceMs], for the Insights page ([History]). Blocking. */
+    override fun events(sinceMs: Long): List<JsonObject>? = runCatching {
+        val (code, text) = http.getText("${config.ruleUrl}/events?since=$sinceMs")
+        if (code != 200) null else (json.parseToJsonElement(text) as? JsonObject)?.objects("events")
+    }.getOrNull()
+
+    /** Each block's daily limit use as the server kept it, for the Insights page. Blocking. */
+    override fun limits(): JsonObject? = runCatching {
+        val (code, text) = http.getText("${config.ruleUrl}/limits")
+        if (code != 200) null else (json.parseToJsonElement(text) as? JsonObject)?.get("limits") as? JsonObject
+    }.getOrNull()
 
     private fun loadBase(): Base? = try {
         json.decodeFromString(Base.serializer(), baseFile.readText())
