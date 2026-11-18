@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.FreeBreakfast
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,7 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.WorldStore
-import com.xern.xrnrule.app.ui.theme.GeistMono
+import com.xern.xrnrule.app.ui.theme.TABULAR
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.HabitKind
@@ -116,9 +117,9 @@ fun FocusScreen(store: WorldStore, habitId: String, onClose: () -> Unit) {
                         left > 0 -> clockText(left)
                         else -> "+" + clockText(-left)
                     },
-                    fontFamily = GeistMono,
                     fontWeight = FontWeight.Bold,
                     fontSize = 54.sp,
+                    style = LocalTextStyle.current.copy(fontFeatureSettings = TABULAR),
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(

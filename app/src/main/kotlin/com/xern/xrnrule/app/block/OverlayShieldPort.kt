@@ -160,6 +160,7 @@ class OverlayShieldPort(
                 ?.takeIf { it.isNotEmpty() }
                 ?.joinToString(" or ") { appLabel(it) },
             back = block?.let { held -> { BlockTexts.back(engine, world, held, clock) } },
+            openWaitLeftMs = block?.let { held -> { engine.openWaitRemainingMs(world, held.id, clock) } },
             timerMs = block?.let { world.progress[it.id]?.accumulatedMs } ?: 0,
             timerRunning = block?.let { world.progress[it.id]?.timerRunning } == true,
             redeemRejection = block?.takeIf { it.state == BlockState.EARNED }?.let { engine.redeemRejection(world, it.id, clock) },
@@ -357,6 +358,8 @@ class OverlayShieldPort(
         val habitAppLabel: String? = null,
         /** Held by time: when it's back and why, what the screen leads with. Asked each second, since time alone moves it. */
         val back: (() -> BlockTexts.Back?)? = null,
+        /** [BlockReason.WAIT]: what's left of the pause before the open (I53), for its ring. */
+        val openWaitLeftMs: (() -> Long)? = null,
         /** TIMER / COMBINED: time counted so far, and whether the timer is running. */
         val timerMs: Long = 0,
         val timerRunning: Boolean = false,

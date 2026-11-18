@@ -36,7 +36,7 @@ fun LockScreen(message: String?, onUnlock: () -> Unit) {
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Wordmark(size = 22)
+                BrandTile(size = 44.dp)
                 Gap(40)
                 Box(
                     Modifier.size(84.dp).clip(RoundedCornerShape(22.dp)).background(green.fill),
@@ -45,14 +45,16 @@ fun LockScreen(message: String?, onUnlock: () -> Unit) {
                     Icon(Icons.Filled.Fingerprint, contentDescription = null, tint = green.color, modifier = Modifier.size(44.dp))
                 }
                 Gap(24)
-                Text("xrnrule is locked", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
-                Gap(10)
-                Text(
-                    message ?: "Unlock it with your fingerprint or the phone's screen-lock PIN.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                Text("Locked", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+                if (message != null) {
+                    Gap(10)
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
             PillButton("Unlock", onClick = onUnlock, icon = Icons.Filled.Fingerprint)
         }
