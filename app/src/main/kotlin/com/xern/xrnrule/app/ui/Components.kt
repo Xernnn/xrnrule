@@ -73,6 +73,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,9 +81,9 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.ui.theme.ChartPalette
-import com.xern.xrnrule.app.ui.theme.GeistMono
 import com.xern.xrnrule.app.ui.theme.KindColors
 import com.xern.xrnrule.app.ui.theme.StatusPalette
 import com.xern.xrnrule.app.ui.theme.StatusStyle
@@ -195,17 +196,20 @@ fun PageTitle(
     }
 }
 
-/** "xrnrule" in the mono face, for the Blocks page header and the block screen. */
+/**
+ * xrnrule's tile (the family's rounded square in the app's orange, `extension/icons/icon.svg`):
+ * it stands for the name wherever the name was a title or a wordmark. The name stays for
+ * accessibility.
+ */
 @Composable
-fun Wordmark(modifier: Modifier = Modifier, size: Int = 22) {
-    Text(
-        "xrnrule",
-        modifier = modifier,
-        fontFamily = GeistMono,
-        fontWeight = FontWeight.Bold,
-        fontSize = size.sp,
-        color = MaterialTheme.colorScheme.onBackground,
-    )
+fun BrandTile(modifier: Modifier = Modifier, size: Dp = 30.dp) {
+    Image(painterResource(R.drawable.tile_xrnrule), contentDescription = "xrnrule", modifier = modifier.size(size))
+}
+
+/** xrnloops' tile, standing for its name where xrnrule names or links to it. */
+@Composable
+fun LoopsTile(modifier: Modifier = Modifier, size: Dp = 28.dp) {
+    Image(painterResource(R.drawable.tile_xrnloops), contentDescription = "xrnloops", modifier = modifier.size(size))
 }
 
 /**
@@ -435,6 +439,7 @@ fun GroupRow(
     chevron: Boolean = onClick != null,
     /** In place of [icon]: a picture, such as a site's own icon. */
     leading: (@Composable () -> Unit)? = null,
+    titleColor: Color? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     if (!first) Hairline(Modifier.padding(start = if (icon != null || leading != null) 52.dp else 16.dp))
@@ -454,7 +459,7 @@ fun GroupRow(
             WGap(14)
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor ?: Color.Unspecified)
             if (subtitle != null) {
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = subtitleColor)
             }
@@ -663,7 +668,7 @@ private const val HOLD_TICK_MS = 700
 // ---- app icons ----------------------------------------------------------------------
 
 @Composable
-fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp) {
+fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fallback: (@Composable () -> Unit)? = null) {
     val context = LocalContext.current
     val icon = remember(packageName) {
         runCatching {
@@ -672,6 +677,8 @@ fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp
     }
     if (icon != null) {
         Image(bitmap = icon, contentDescription = null, modifier = modifier.size(size))
+    } else if (fallback != null) {
+        fallback()
     } else {
         Box(modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)))
     }
@@ -684,7 +691,18 @@ fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp
 @Composable
 fun SiteIcon(site: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fallback: (@Composable () -> Unit)? = null) {
     val host = Sites.hostOf(site) // I46: a target can carry a path
-    val icons = (LocalContext.current.applicationContext as XrnruleApp).container.siteIcons
+    // A preview has no app (and no icon cache) behind it: the globe.
+    val icons = (LocalContext.current.applicationContext as? XrnruleApp)?.container?.siteIcons
+    if (icons == null) {
+        if (fallback != null) {
+            fallback()
+        } else {
+            Box(modifier.size(size), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Language, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(size * 0.8f))
+            }
+        }
+        return
+    }
     val loaded by icons.loaded.collectAsState()
     val icon = remember(host, loaded) { icons.icon(host) }
     if (icon != null) {

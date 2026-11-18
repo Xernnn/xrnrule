@@ -78,8 +78,9 @@ object CornerClockLook {
 class CornerClockOverlay(private val context: Context) {
     private val wm = context.getSystemService(WindowManager::class.java)
     private val density = context.resources.displayMetrics.density
-    private val medium by lazy { ResourcesCompat.getFont(context, R.font.geist_mono_medium) }
-    private val bold by lazy { ResourcesCompat.getFont(context, R.font.geist_mono_bold) }
+    // MiSans, the app's font; its tabular figures (set on the view) keep the clock from jittering.
+    private val medium by lazy { ResourcesCompat.getFont(context, R.font.misans_medium) }
+    private val bold by lazy { ResourcesCompat.getFont(context, R.font.misans_semibold) }
 
     private var label: TextView? = null
     private var params: WindowManager.LayoutParams? = null
@@ -117,6 +118,7 @@ class CornerClockOverlay(private val context: Context) {
         val view = TextView(context).apply {
             setTextColor(Color.WHITE)
             includeFontPadding = false
+            fontFeatureSettings = "tnum"
             alpha = 0f
             background = GradientDrawable().apply {
                 cornerRadius = 999f
