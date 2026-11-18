@@ -111,8 +111,8 @@ it has nothing to go back to, so the rest of the browser stays yours.
   takes it as an `.xpi`). Firefox drops a temporary add-on when it closes; to keep it, sign the
   zip with an unlisted upload to addons.mozilla.org, or, in a build that allows unsigned add-ons,
   set `xpinstall.signatures.required` to `false` in `about:config` and install the file. If the
-  toolbar popup says xrnrule isn't allowed on websites, click **Allow on all sites** (Firefox can
-  withhold or revoke an extension's site access in `about:addons`). There is no self-update
+  toolbar popup says **No site access**, click **Allow** (Firefox can withhold or revoke an
+  extension's site access in `about:addons`). There is no self-update
   there: a temporary add-on still reloads when its folder's version changes, an installed `.xpi`
   updates by installing a newer one.
 - **Phone (Quetta):** open `https://<your server>/xrnrule/update/xrnrule.crx` in Quetta →
@@ -124,22 +124,25 @@ it has nothing to go back to, so the rest of the browser stays yours.
 The extension's settings page shows its version and where it updates from, with **Check now**.
 The phone app warns when the browser the extension lives in goes quiet, without ever blocking
 that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
-off is closed after two minutes in front, and so is one whose window in front the extension can't
+off is closed after two minutes in front, and so is one that withholds the extension's site access
+(Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:
+the extension then stops talking to xrnrule), or whose window in front the extension can't
 see: a private window it isn't allowed in, or another profile without it. Browsers can't be seen
 inside other apps: a page opened in an app's own in-app browser isn't blocked.
 
 ## Updates
 
 `node scripts/release.mjs` publishes both halves to your server; `… extension` or `… app` does
-one. It bumps the version past what the server already has, since a browser or phone only takes
-a newer one, and needs `~/.config/xrnrule/release.json`:
+one. It only runs on `main` with everything committed (`--force` overrides that). It bumps the
+version past what the server already has, since a browser or phone only takes a newer one, so
+bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
 
 ```json
 { "server": "https://<your server>/xrnrule", "ssh": ["<ssh host>", "<another way in>"] }
 ```
 
-- **The extension** is signed with `~/.config/xrnrule/extension.pem`, made on the first release.
-  **Back it up.** The key is the extension's identity: an update signed with another one is
+- **The extension** is signed with `~/.config/xrnrule/extension.pem`, made on the first release
+  (`--new-key`; without it a missing key stops the release). **Back it up.** The key is the extension's identity: an update signed with another one is
   refused, and the phone would have to install afresh under a new ID.
 - **The app** is the sideload release build, signed with the key it shares with xrnloops
   (`../xrn-signing.properties`; the release refuses to go without it, since the phone only takes
@@ -200,6 +203,7 @@ for Java 17 whatever the JDK) and the Android SDK (platform 35, build tools 36).
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
 ./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
 node --test extension/test             # the extension's helpers and its signed .crx
+node --test server                     # the status page's reading of the shared state
 scripts/smoke.sh                       # the block screen on an emulator of its own, end to end
 node scripts/release.mjs               # publish the extension and the app; see Updates
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)

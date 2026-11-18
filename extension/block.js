@@ -13,8 +13,11 @@
   const X = self.Xrn;
   const params = new URLSearchParams(location.search);
   const site = params.get("site") || "";
-  // Raw, as the redirect put it there: decoding could break a URL with a "%" of its own.
+  // Raw, as the redirect put it there: decoding could break a URL with a "%" of its own. Only
+  // followed back to the site this page stands in for: any site may open this page, and could
+  // otherwise send a visitor through it to an address of its choosing.
   const back = location.hash.slice(1);
+  const backHere = /^https?:/.test(back) && X.matches(X.locationOf(back) || "", site.split("/")[0]);
   const android = /Android/i.test(navigator.userAgent);
   /** Served by xrnrule itself, not the extension: it asks xrnrule directly. */
   const served = location.protocol === "http:";
@@ -32,11 +35,8 @@
   }
 
   const leaveButton = document.getElementById("leave");
-  const quiet = document.getElementById("why").textContent;
   /** Without xrnrule there's no telling when it's back, only that it stays blocked. */
-  const offline = android
-    ? "xrnrule isn't answering, so this stays blocked. Open it and this page comes back by itself."
-    : "The xrnrule service isn't running on this laptop, so this stays blocked until it does.";
+  const offline = "xrnrule offline";
 
   /** What xrnrule says about the site, or that it says nothing. */
   function show(v) {
@@ -44,7 +44,9 @@
     const when = document.getElementById("back");
     when.textContent = off ? "" : v.back ?? "";
     when.hidden = !when.textContent;
-    document.getElementById("why").textContent = off ? offline : v.why ?? quiet;
+    const why = document.getElementById("why");
+    why.textContent = off ? offline : v.why ?? "";
+    why.hidden = !why.textContent;
     // Leaving is the point of this page, unless opening xrnrule is what gets it going again.
     leaveButton.classList.toggle("primary", !(off && android));
     open.classList.toggle("primary", off && android);
@@ -110,7 +112,7 @@
         leave();
       } else if (!v.blocked && !v.offline) {
         gone = true;
-        if (/^https?:/.test(back)) location.replace(back);
+        if (backHere) location.replace(back);
         else document.getElementById("title").textContent = `${site} is open again`;
       } else if (v.page && !location.href.startsWith(v.page)) {
         // xrnrule answers again and has a block page of its own: that one says more.

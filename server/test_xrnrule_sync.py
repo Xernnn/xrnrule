@@ -373,7 +373,7 @@ class SyncServerTest(unittest.TestCase):
             status = conn.getresponse().status
             conn.close()
             return status, time.monotonic() - start
-        srv.failures["203.0.113.61"] = [time.monotonic()] * srv.FAIL_LIMIT  # locked out
+        srv.failures["203.0.113.61"] = [(time.monotonic(), "sonn")] * srv.FAIL_LIMIT  # locked out
         with unittest.mock.patch.object(srv, "FAIL_DELAY_S", 0.5):
             for addr, status in (("203.0.113.60", 401), ("203.0.113.61", 429)):
                 got, took = timed(addr)
@@ -399,9 +399,66 @@ class SyncServerTest(unittest.TestCase):
         typo = {"X-Forwarded-For": "203.0.113.20"}
         for _ in range(srv.FAIL_LIMIT - 1):
             self.call("GET", "/state", password=WRONG, headers=typo)
+        srv.auth_cache.clear()  # typed in, not the copy a device keeps sending
         self.assertEqual(200, self.call("GET", "/state", headers=typo)[0])
         self.assertEqual(401, self.call("GET", "/state", password=WRONG, headers=typo)[0])
         self.assertEqual(200, self.call("GET", "/state", headers=typo)[0])
+
+    def guess_as(self, name, password, addr):
+        req = urllib.request.Request(self.base + "/state")
+        req.add_header("Authorization", "Basic " + base64.b64encode(f"{name}:{password}".encode()).decode())
+        req.add_header("X-Forwarded-For", addr)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_a_right_login_clears_only_its_own_users_mistakes(self):
+        # A login for one account wiped the whole address's count: guesses at another name from
+        # the same address started over with every login of the first.
+        addr = "203.0.113.80"
+        for _ in range(5):
+            self.assertEqual(401, self.guess_as("admin", WRONG, addr))
+        for _ in range(4):
+            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
+        srv.auth_cache.clear()
+        self.assertEqual(200, self.guess_as("sonn", RIGHT, addr))  # sonn's four go, admin's five stay
+        for _ in range(srv.FAIL_LIMIT - 5):
+            self.assertEqual(401, self.guess_as("admin", WRONG, addr))
+        self.assertEqual(429, self.guess_as("admin", WRONG, addr))
+
+    def test_a_device_sending_the_password_it_had_clears_nothing(self):
+        # A device at the same address as a guesser (home Wi-Fi, a carrier's shared address)
+        # cleared the guesser's count with every sync, so the guesses never ran out. A password
+        # the server already knows is right (its auth cache) is a session, not a login.
+        addr = "203.0.113.81"
+        self.assertEqual(200, self.guess_as("sonn", RIGHT, addr))  # the device, signed in
+        for _ in range(srv.FAIL_LIMIT - 1):
+            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
+            self.assertEqual(200, self.guess_as("sonn", RIGHT, addr))  # it syncs on
+        self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
+        self.assertEqual(429, self.guess_as("sonn", WRONG, addr))
+
+    def test_a_login_in_flight_is_not_a_wrong_guess(self):
+        # Counted as wrong before it was checked, a right login being checked took a place: two
+        # devices signing in at once, at an address with a few mistakes behind it, got a 429.
+        addr = "203.0.113.82"
+        real = srv.check_login
+        def slow(header):
+            time.sleep(0.3)
+            return real(header)
+        with unittest.mock.patch.object(srv, "FAIL_LIMIT", 3):
+            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
+            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))  # one place left
+            srv.auth_cache.clear()
+            start = threading.Barrier(2)
+            def login(_):
+                start.wait()
+                return self.guess_as("sonn", RIGHT, addr)
+            with unittest.mock.patch.object(srv, "check_login", slow):
+                with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                    self.assertEqual([200, 200], list(pool.map(login, range(2))))
 
     def test_devices_report_when_each_last_checked_in(self):
         before = int(time.time() * 1000)
@@ -446,6 +503,13 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual([("laptop", "unlock", 300000), ("phone", "unlock", 300000)],
                          sorted((e["d"], e["t"], e["ms"]) for e in got))
         self.assertEqual({now - 301000}, {e["start"] for e in got})  # one session, logged by both
+
+    def test_an_event_whose_type_is_no_string_is_dropped_not_a_dropped_connection(self):
+        # A list or an object can't be looked up in the set of types: TypeError, no answer at all.
+        day_ago = int(time.time() * 1000) - 86400 * 1000  # out of the other tests' way
+        batch = {"events": [{"t": [], "at": day_ago}, {"t": {"a": 1}, "at": day_ago}, {"t": "break", "at": day_ago, "ms": 1000}]}
+        status, body, _ = self.call("POST", "/events", batch, {"X-Device": "phone"})
+        self.assertEqual((200, 1), (status, json.loads(body)["added"]))
 
     def test_an_event_stamped_far_ahead_of_the_clock_is_refused(self):
         # One would never age out, and xrnhub would count it among today's every day.
@@ -494,6 +558,22 @@ class SyncServerTest(unittest.TestCase):
                 srv.events.pop("busy")
                 self.assertEqual([f"t{i}" for i in range(8, 18)], [e["target"] for e in srv.load_events("busy")])
             self.assertEqual([f"t{i}" for i in range(8, 18)], on_disk())
+
+    def test_a_batch_doesnt_go_over_the_whole_log_again(self):
+        # The set of every stored event's key, up to 50,000, was built anew for each POST /events.
+        now = int(time.time() * 1000)
+        srv.add_events("long", "phone", [{"t": "blocked", "at": now - 10**6 + i, "target": f"t{i}"} for i in range(500)])
+        with unittest.mock.patch.object(srv, "event_key", wraps=srv.event_key) as keyed:
+            self.assertEqual(1, srv.add_events("long", "phone", [{"t": "blocked", "at": now, "target": "new"}]))
+            self.assertLess(keyed.call_count, 10)
+        # Still each one once, after the log is cut down to its newest as well.
+        self.assertEqual(0, srv.add_events("long", "phone", [{"t": "blocked", "at": now, "target": "new"}]))
+        with unittest.mock.patch.object(srv, "EVENTS_MAX", 100):
+            srv.add_events("long", "phone", [{"t": "blocked", "at": now - 1, "target": "newer"}])
+            with srv.events_lock:
+                self.assertEqual(90, len(srv.load_events("long")))
+            self.assertEqual(0, srv.add_events("long", "phone", [{"t": "blocked", "at": now - 1, "target": "newer"}]))
+            self.assertEqual(1, srv.add_events("long", "phone", [{"t": "blocked", "at": now - 10**6, "target": "t0"}]))
 
     def test_a_page_on_another_site_cant_write_with_the_browsers_password(self):
         # A browser sends the password it was once given with a form another site posts here,

@@ -39,8 +39,21 @@
     });
   }
 
+  /**
+   * Sound from anywhere in this tab as the browser hears it, which the background passes on
+   * (I47): an inner frame's player or WebAudio, which this script can't see.
+   */
+  let tabSounding = false;
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type !== "audible") return;
+      tabSounding = !!msg.audible;
+      beat();
+    });
+  } catch {} // orphaned: send() stops this copy
+
   /** Sound coming out of this page: muted previews and paused players don't count. */
-  const sounding = () => [...document.querySelectorAll("video, audio")]
+  const sounding = () => tabSounding || [...document.querySelectorAll("video, audio")]
     .some((m) => !m.paused && !m.ended && !m.muted && m.volume > 0 && m.readyState > 2);
 
   /**
@@ -58,8 +71,11 @@
   function handle(v) {
     if (!v || stopped) return;
     if (v.blocked) {
-      stopped = true;
+      // Not stopped here: a page can refuse to go (beforeunload, "Stay on page"), and then this
+      // copy must beat on and send it off again, or it would never be counted or blocked again.
+      // What it plays stops meanwhile.
       clearTimeout(deadline);
+      for (const m of document.querySelectorAll("video, audio")) m.pause();
       location.replace(X.blockUrl(v.page, OWN_PAGE, v.site || X.locationOf(location.href), location.href));
       return;
     }
@@ -70,6 +86,13 @@
     clearTimeout(deadline);
     const left = leftNow();
     if (left != null) deadline = setTimeout(beat, Math.min(left + 250, 2_147_000_000));
+    // The clock runs only while something is left: most pages have no rule at all.
+    if (left != null) {
+      painter ??= setInterval(tick, 1000);
+    } else {
+      clearInterval(painter);
+      painter = null;
+    }
     paint();
     warn();
   }
@@ -190,8 +213,9 @@
     node.title = base.label ? `${base.label}: ${X.mmss(left)} ${X.CLOCK_LABEL[base.left.kind] ?? ""}` : "";
   }
 
-  // Once a second: count time in front (what xrnrule counts too) and repaint.
-  const painter = setInterval(() => {
+  // Once a second while something is left: count time in front (what xrnrule counts too) and repaint.
+  let painter = null;
+  function tick() {
     if (stopped) return;
     const now = Date.now();
     // Clamped: a throttled background timer can hand back a huge gap.
@@ -201,7 +225,7 @@
       paint();
       warn();
     }
-  }, 1000);
+  }
 
   const beats = setInterval(beat, X.HEARTBEAT_MS);
   document.addEventListener("visibilitychange", beat);
