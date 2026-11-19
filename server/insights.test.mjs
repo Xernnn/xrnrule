@@ -1,5 +1,5 @@
-// The Insights page's reading of both devices' event log (server/web/insights.js): block colours,
-// which block a try counts for, one of each shared event, ranges and days where the devices are
+// The Insights page's reading of both devices' event log (server/web/insights.js): the blocks it
+// reads, which block a try counts for, one of each shared event, ranges and days where the devices are
 // (I54), clean-day streaks and a limit's use day by day.
 //
 //     node --test server        (from the repo root)
@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 // Viewed from a browser in another zone than the devices': their days are the ones counted.
 process.env.TZ = "America/Los_Angeles";
-const { PALETTE, normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline } = await import("./web/insights.js");
+const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline } = await import("./web/insights.js");
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -27,8 +27,9 @@ const blocks = normalizeBlocks([
 ]);
 const tried = (d, target, at, name = target) => ({ d, t: "blocked", target, name, at });
 
-test("blocks take the palette in list order, round again past the eighth", () => {
-  assert.deepEqual(blocks.map((b) => b.colour), [...PALETTE, PALETTE[0]]);
+test("blocks keep their list order and carry no colour: a block is told by its name", () => {
+  assert.deepEqual(blocks.map((b) => b.id), ["social", "yt", "games", "a", "b", "c", "d", "e", "f"]);
+  assert.ok(blocks.every((b) => !("colour" in b)));
   // The laptop's /api/history shape reads the same.
   const laptop = normalizeBlocks([{ id: "x", name: "X", apps: ["steam"], sites: ["youtube.com/shorts"], except: [], dailyMs: 5, perDevice: true }]);
   assert.deepEqual([...laptop[0].apps], ["steam"]);

@@ -90,21 +90,20 @@ export function deviceIcon(device, cls = "") {
   return icon(device === "phone" ? "phone" : device === "laptop" ? "laptop" : "devices", `dev ${cls}`.trim());
 }
 
+/**
+ * What a block covers, as one quiet line: [names] (its sites and laptop apps), how many phone
+ * apps (the pages know their count, not their names), and what it leaves alone.
+ */
+export function coverText(names, phoneApps = 0, except = []) {
+  const covers = [...names, phoneApps > 0 && `${phoneApps} phone app${phoneApps === 1 ? "" : "s"}`].filter(Boolean).join(", ");
+  return [covers, except.length ? `except ${except.join(", ")}` : ""].filter(Boolean).join(" · ");
+}
+
 /** "1 h 05", "25 min", "0 min": a duration in whole minutes. */
 export function duration(ms) {
   const m = Math.max(0, Math.round(ms / 60000));
   if (m < 60) return `${m} min`;
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
-}
-
-/** Dark text on the light ones of [hex] (amber), white on the rest. */
-export function inkOn(hex) {
-  const n = parseInt(String(hex).replace("#", ""), 16);
-  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
-    const x = c / 255;
-    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? "#1b1b1e" : "#ffffff";
 }
 
 /** The page's theme: "auto" follows the system, else "light" or "dark" (kept in this browser). */

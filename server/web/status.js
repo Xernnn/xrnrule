@@ -6,8 +6,8 @@
 // Insights are shared with the laptop's local page (the desktop build copies them).
 
 import { blockStatus, minutes, timeFmt, today, sharedZone, rulesOf, useToday, isLocked, windows } from "./blocks.js";
-import { h, icon, inkOn } from "./ui.js";
-import { PALETTE, normalizeBlocks, mergeShared, renderInsights } from "./insights.js";
+import { h, icon, coverText } from "./ui.js";
+import { normalizeBlocks, mergeShared, renderInsights } from "./insights.js";
 
 const KEY_SIGNED_IN = "xrn.signedIn"; // a hint only: whether to try the cookie or show the form
 const KEY_OLD_AUTH = "xrnloops.auth"; // the password, as these pages kept it before the cookie
@@ -162,70 +162,71 @@ function ago(ms) {
 
 const TONE = { blocked: "blocked", open: "open", earned: "earned", idle: "idle" };
 
-/** One thing a block asks for or holds to (the phone's HabitRow), [kind] its colour. */
-function rrow({ ic, kind, label, value, fraction, note, dim, loop, done }) {
-  return h("div", { class: `rrow k-${kind}${dim ? " dim" : ""}` },
-    loop ? h("img", { class: "loop", src: "xrnloops.svg", alt: "xrnloops" }) : icon(ic),
+/**
+ * One thing a block asks for or holds to (the phone's HabitRow): its words, its figure, and a
+ * meter for what it has used. No icon or colour of its own: only a habit linked to xrnloops
+ * carries xrnloops' tile, and a meter the one data colour.
+ */
+function rrow({ label, value, fraction, note, dim, loop, done }) {
+  return h("div", { class: `rrow${dim ? " dim" : ""}` },
     h("div", { class: "main" },
-      h("div", { class: "top" }, h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
+      h("div", { class: "top" },
+        loop && h("img", { class: "loop", src: "xrnloops.svg", alt: "xrnloops" }),
+        h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
       fraction != null && h("div", { class: "meter" }, h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } })),
       note && h("span", { class: "note" }, note)),
-    h("div", { class: "acts" }, done != null && h("input", { type: "checkbox", class: "tick", checked: done, disabled: true, tabindex: -1, "aria-label": done ? "Done" : "Not done", style: loop ? { "--k": "var(--k-loop)" } : null })));
+    h("div", { class: "acts" }, done != null && h("input", { type: "checkbox", class: "tick", checked: done, disabled: true, tabindex: -1, "aria-label": done ? "Done" : "Not done" })));
 }
 
-/** A block's card, as the phone's, to look at: how it stands, and a row per rule and thing it asks for. */
-function blockCard(block, index, items, now) {
-  const colour = PALETTE[index % PALETTE.length];
+/** What a block covers, in one quiet line. */
+function targetLine(block) {
+  const text = coverText([...(block.targetSites ?? []), ...(block.targetDesktopApps ?? [])], (block.targetPackages ?? []).length, block.exceptSites ?? []);
+  return text && h("p", { class: "targets" }, text);
+}
+
+/** A block's card, as the phone's, to look at: its name, how it stands, and a row per rule and thing it asks for. */
+function blockCard(block, items, now) {
   const [cls, text] = blockStatus(doc, block, now);
   const { mode, daily, opens, row, hasLimit } = rulesOf(block);
   const rows = [];
   if (hasLimit && block.enabled !== false) {
     const use = useToday(doc, block, now);
-    if (daily > 0) rows.push(rrow({ ic: "hourglass", kind: "limit", label: "Daily limit", value: `${minutes(use.ms)} / ${minutes(daily)} min`, fraction: use.ms / daily }));
-    if (row) rows.push(rrow({ ic: "timer", kind: "limit", label: "Time in a row", value: `${minutes(block.sessionMs)} min · ${minutes(block.sessionBreakMs)} off` }));
-    if (opens > 0) rows.push(rrow({ ic: "openNew", kind: "limit", label: "Opens today", value: `${use.opens} / ${opens}`, fraction: use.opens / opens }));
+    if (daily > 0) rows.push(rrow({ label: "Daily limit", value: `${minutes(use.ms)} / ${minutes(daily)} min`, fraction: use.ms / daily }));
+    if (row) rows.push(rrow({ label: "Time in a row", value: `${minutes(block.sessionMs)} min · ${minutes(block.sessionBreakMs)} off` }));
+    if (opens > 0) rows.push(rrow({ label: "Opens today", value: `${use.opens} / ${opens}`, fraction: use.opens / opens }));
   }
   const hours = mode === "SCHEDULE" ? block.schedule : block.blockedHours;
   if (hours && (mode !== "SCHEDULE" || windows(hours).length || (hours.activeDays ?? []).length < 7)) {
-    rows.push(rrow({ ic: "calendar", kind: "strict", label: "Blocked hours", note: windows(hours).join(", ") || "All day", dim: cls !== "blocked" }));
+    rows.push(rrow({ label: "Blocked hours", note: windows(hours).join(", ") || "All day", dim: cls !== "blocked" }));
   }
-  if (mode === "LOCKDOWN") rows.push(rrow({ ic: "lock", kind: "strict", label: `${minutes(block.lockdownMs ?? 0)} min lockdown`, dim: cls !== "blocked" }));
+  if (mode === "LOCKDOWN") rows.push(rrow({ label: `${minutes(block.lockdownMs ?? 0)} min lockdown`, dim: cls !== "blocked" }));
   if (mode === "HABIT") {
     const t = block.trigger ?? {};
     if (t.type !== "TIMER") {
       for (const i of items) {
         rows.push(i.habitId
-          ? rrow({ loop: true, kind: "loop", label: i.text + (i.linkedDay === "YESTERDAY" ? " (yesterday)" : "") })
-          : rrow({ ic: i.tag ? "nfc" : "task", kind: i.tag ? "blue" : "habit", label: i.text, dim: i.done, done: !!i.done }));
+          ? rrow({ loop: true, label: i.text + (i.linkedDay === "YESTERDAY" ? " (yesterday)" : "") })
+          : rrow({ label: i.text, dim: i.done, done: !!i.done }));
       }
     }
-    if (t.type === "TIMER" || t.type === "COMBINED") rows.push(rrow({ ic: "timer", kind: "timer", label: "Timer", value: `${minutes(t.requiredAmount ?? 0)} min` }));
+    if (t.type === "TIMER" || t.type === "COMBINED") rows.push(rrow({ label: "Timer", value: `${minutes(t.requiredAmount ?? 0)} min` }));
   }
   const sub = [
-    block.devices === "PHONE" && h("span", {}, "Phone only"),
-    block.devices === "LAPTOP" && h("span", {}, "Laptop only"),
-    isLocked(block, now.getTime()) && h("span", { class: "locked" }, `Locked until ${new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" }).format(block.lock.untilWall)}`),
-    (block.enforcementTier ?? "SOFT") === "HARDCORE" && h("span", { class: "tag strict" }, "Hardcore"),
-  ].filter(Boolean);
-  const phone = block.targetPackages ?? [];
-  const targets = [
-    phone.length > 0 && h("span", { class: "target", title: "Phone apps" }, icon("phone"), `${phone.length} app${phone.length === 1 ? "" : "s"}`),
-    ...(block.targetSites ?? []).map((x) => h("span", { class: "target" }, icon("globe"), x)),
-    ...(block.exceptSites ?? []).map((x) => h("span", { class: "target except", title: "Left alone" }, x)),
-    ...(block.targetDesktopApps ?? []).map((a) => h("span", { class: "target", title: "Laptop app" }, icon("laptop"), a)),
+    block.devices === "PHONE" && "Phone only",
+    block.devices === "LAPTOP" && "Laptop only",
+    isLocked(block, now.getTime()) && `Locked until ${new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" }).format(block.lock.untilWall)}`,
+    (block.enforcementTier ?? "SOFT") === "HARDCORE" && "Hardcore",
   ].filter(Boolean);
   return h("section", { class: `card bcard${block.enabled === false ? " off" : ""}` },
     h("div", { class: "head" },
       h("div", { class: "open" },
-        h("div", { class: "tile letter", style: { "--c": colour, "--ink": inkOn(colour) } }, (block.name?.trim()[0] ?? "x").toUpperCase()),
-        h("div", { class: "name" }, h("h3", {}, block.name), h("div", { class: `headline ${TONE[cls] ?? "idle"}` }, text), sub.length > 0 && h("div", { class: "sub" }, sub)))),
+        h("div", { class: "name" }, h("h3", {}, block.name), h("div", { class: `headline ${TONE[cls] ?? "idle"}` }, text), sub.length > 0 && h("div", { class: "sub" }, sub.join(" · "))))),
     rows.length > 0 && h("div", { class: "rows" }, rows),
-    targets.length > 0 && h("div", { class: "targets" }, targets));
+    targetLine(block));
 }
 
-function stat(ic, cls, value, label) {
-  return h("div", { class: `stat ${cls}` }, h("span", { class: "stat-icon" }, icon(ic)), h("b", {}, value), h("span", { class: "label" }, label));
-}
+/** A figure at the right of the page's title, as the laptop's page has it. */
+const figure = (value, label) => h("div", { class: "figure" }, h("b", {}, value), h("span", {}, label));
 
 function blocksView() {
   const now = new Date();
@@ -239,19 +240,18 @@ function blocksView() {
   const breakText = onBreak ? `Until ${timeFmt.format(pause.startedAtWall + pause.durationMs)}` : doc.lastPauseEpochDay === day ? "Used" : "Ready";
   const statuses = blocks.map((b) => blockStatus(doc, b, now)[0]);
   const summary = [["blocked", "blocked"], ["earned", "ready"], ["open", "open"]].map(([c, w]) => [statuses.filter((x) => x === c).length, w]).filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`).join(" · ");
-  const known = Object.entries(devices).sort(([a], [b]) => a.localeCompare(b));
+  // When each device last checked in, and when the state last changed: one line under the blocks.
+  const seen = Object.entries(devices).sort(([a], [b]) => a.localeCompare(b)).map(([device, at]) =>
+    h("span", { class: now.getTime() - at > 60 * 60000 ? "stale" : "" }, `${device === "phone" ? "Phone" : device === "laptop" ? "Laptop" : device} ${ago(now.getTime() - at).toLowerCase()}`));
+  const foot = [...seen, h("span", {}, updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}` : "Not synced")];
   return h("div", {},
-    h("div", { class: "page-title" }, h("h2", {}, "Blocks"), summary && h("span", { class: "summary" }, summary)),
-    h("div", { class: "stats" },
-      stat("lockOpen", "unlocked", `${minutes(usedMs)} / ${minutes(cap)} min`, "Unlocked today"),
-      stat("coffee", "breaks", breakText, "Break"),
-      known.map(([device, at]) => {
-        const stale = now.getTime() - at > 60 * 60000;
-        return stat(device === "phone" ? "phone" : device === "laptop" ? "laptop" : "devices", stale ? "stale" : "fresh", ago(now.getTime() - at), device === "phone" ? "Phone" : device === "laptop" ? "Laptop" : device);
-      })),
-    blocks.length ? h("div", { class: "blocks" }, blocks.map((b, i) => blockCard(b, i, items.filter((x) => x.blockId === b.id).sort((x, y) => x.order - y.order), now)))
+    h("div", { class: "page-title" },
+      h("h2", {}, "Blocks"), summary && h("span", { class: "summary" }, summary),
+      h("span", { class: "spacer" }),
+      h("div", { class: "today" }, figure(`${minutes(usedMs)} / ${minutes(cap)} min`, "Unlocked today"), figure(breakText, "Break"))),
+    blocks.length ? h("div", { class: "blocks" }, blocks.map((b) => blockCard(b, items.filter((x) => x.blockId === b.id).sort((x, y) => x.order - y.order), now)))
       : h("div", { class: "card empty" }, "No blocks"),
-    h("div", { class: "foot" }, updated.at ? `Updated ${whenFmt.format(new Date(updated.at))}${updated.by ? ` · ${updated.by}` : ""}` : "Not synced"));
+    h("div", { class: "foot" }, foot.flatMap((x, i) => (i ? [" · ", x] : [x]))));
 }
 
 // ---- Insights ------------------------------------------------------------------------------
@@ -335,9 +335,9 @@ function header() {
     h("nav", { class: "tabs" }, [["blocks", "Blocks", "shield"], ["insights", "Insights", "chart"]].map(([id, label, ic]) =>
       h("button", { type: "button", class: tab === id ? "on" : "", "aria-current": tab === id ? "page" : null, onclick: () => goTo(id) }, icon(ic), h("span", {}, label)))),
     h("span", { class: "spacer" }),
-    h("span", { class: `sync${online ? "" : " off"}` }, icon(online ? "cloud" : "cloudOff"), h("span", {}, online ? "Live" : "Offline")),
+    h("span", { class: `sync${online ? "" : " off"}` }, !online && icon("cloudOff"), h("span", {}, online ? "Live" : "Offline")),
     h("a", { class: "app-link", href: "../xrnloops/", title: "xrnloops" }, h("img", { src: "xrnloops.svg", alt: "xrnloops" })),
-    h("button", { class: "round", type: "button", title: "Sign out", "aria-label": "Sign out", onclick: () => signOut("") }, icon("logout"))));
+    h("button", { class: "icon-btn", type: "button", title: "Sign out", "aria-label": "Sign out", onclick: () => signOut("") }, icon("logout"))));
 }
 
 function goTo(id) {
