@@ -177,6 +177,24 @@ object ChartPalette {
     val seriesDark = Green
 }
 
+/**
+ * xrnrule's orange (its tile): the one colour for single-series data, in both themes: the
+ * heatmap's ramp, a lone bar series, a limit's meter until it nears the limit. The web pages'
+ * `--data`.
+ */
+val DataColor = Color(0xFFE8590C)
+
+/**
+ * Muted colours for small marks that carry one meaning each: an event's kind in the history
+ * (a blocked try red, an unlock or a habit done green, minutes bought amber, a break blue) and a
+ * limit's meter (amber at [com.xern.xrnrule.app.ui.MeterTone.NEAR_LIMIT], [used] once used up).
+ * Icon or meter size only, never a fill or text.
+ */
+data class Tones(val red: Color, val green: Color, val amber: Color, val blue: Color, val used: Color)
+
+val TonesDark = Tones(red = Color(0xFFE0716A), green = Color(0xFF5FAE7A), amber = Color(0xFFD6A445), blue = Color(0xFF7199D6), used = Color(0xFFF04242))
+val TonesLight = Tones(red = Color(0xFFC8514A), green = Color(0xFF3B8A57), amber = Color(0xFFC4881C), blue = Color(0xFF4C76B8), used = Color(0xFFDC2626))
+
 /** One kind of habit or rule: its colour, and the tinted fill and border of a card picked for it. */
 data class KindColors(val color: Color, val fill: Color, val border: Color)
 

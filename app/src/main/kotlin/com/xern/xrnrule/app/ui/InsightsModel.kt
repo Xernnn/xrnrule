@@ -142,13 +142,45 @@ object InsightsModel {
     fun select(events: List<InsightEvent>, device: DeviceFilter, blockId: String?): List<InsightEvent> =
         events.filter { device.shows(it.device) && (blockId == null || it.blockId == blockId) }
 
+    /** The first moment of the stretch before [range]: yesterday for today, the 7 or 30 days before. */
+    fun previousStart(range: InsightRange, nowWallMs: Long, zone: ZoneId): Long =
+        today(nowWallMs, zone).minusDays(2L * range.days - 1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+    /** The tiles' figures for [events]. */
+    fun figures(events: List<InsightEvent>): Figures {
+        val unlocks = events.filter { it.kind == EventKind.UNLOCK }
+        val bought = events.filter { it.kind == EventKind.BOUGHT }
+        return Figures(
+            tries = events.count { it.kind == EventKind.BLOCKED },
+            unlocks = unlocks.size,
+            unlockedMs = unlocks.sumOf { it.ms },
+            bought = bought.size,
+            boughtMs = bought.sumOf { it.ms },
+            breaks = events.count { it.kind == EventKind.BREAK },
+            habits = events.count { it.kind == EventKind.HABIT },
+        )
+    }
+
     /**
      * Everything the page shows for [range] ending now, from [events] already narrowed by
-     * [select]. Streaks look at all of [events], not just the range.
+     * [select]. Streaks look at all of [events], not just the range. [logStartMs] is when the
+     * whole log (not just what [select] kept) begins: the stretch before the range has figures
+     * only when the log reaches back to that stretch's first day, or a log begun since would say
+     * "0 before" about days it never saw.
      */
-    fun summarize(events: List<InsightEvent>, blocks: List<Block>, range: InsightRange, nowWallMs: Long, zone: ZoneId): InsightsSummary {
+    fun summarize(
+        events: List<InsightEvent>,
+        blocks: List<Block>,
+        range: InsightRange,
+        nowWallMs: Long,
+        zone: ZoneId,
+        logStartMs: Long? = events.minOfOrNull { it.atWallMs },
+    ): InsightsSummary {
         val start = rangeStart(range, nowWallMs, zone)
         val inRange = events.filter { it.atWallMs in start..nowWallMs }
+        val previousStart = previousStart(range, nowWallMs, zone)
+        val covered = logStartMs != null && Instant.ofEpochMilli(logStartMs).atZone(zone).toLocalDate() <= Instant.ofEpochMilli(previousStart).atZone(zone).toLocalDate()
+        val previous = if (covered) figures(events.filter { it.atWallMs in previousStart until start }) else null
         val today = today(nowWallMs, zone)
         fun dateOf(e: InsightEvent): LocalDate = Instant.ofEpochMilli(e.atWallMs).atZone(zone).toLocalDate()
         val tries = inRange.filter { it.kind == EventKind.BLOCKED }
@@ -201,35 +233,108 @@ object InsightsModel {
                 boughtMs = bought.sumOf { it.ms },
                 habits = mine.count { it.kind == EventKind.HABIT },
                 cleanDays = streak(b.id),
+                trend = bars.map { bar -> bar.segments.firstOrNull { it.blockId == b.id }?.count ?: 0 },
             )
         }
 
         val targets = tries.filter { it.target != null }
             .groupBy { targetKey(it.target!!, it.isSite) }
             .map { (key, list) ->
-                TargetTries(key.first, key.second, list.firstNotNullOfOrNull { it.label?.takeIf { l -> l != it.target } }, list.size, list.mapNotNullTo(HashSet()) { it.device }, list.first().blockId)
+                TargetTries(
+                    key.first, key.second, list.firstNotNullOfOrNull { it.label?.takeIf { l -> l != it.target } }, list.size,
+                    list.mapNotNullTo(HashSet()) { it.device }, list.first().blockId,
+                    phone = list.count { it.device == Device.PHONE }, laptop = list.count { it.device == Device.LAPTOP },
+                )
             }
             .sortedByDescending { it.tries }
 
-        val history = inRange.sortedByDescending { it.atWallMs }.groupBy(::dateOf).map { (d, list) -> HistoryDay(d, list) }
+        val history = inRange.sortedByDescending { it.atWallMs }.groupBy(::dateOf).map { (d, list) -> historyDay(d, list, ::segments) }
 
-        val unlocks = inRange.filter { it.kind == EventKind.UNLOCK }
-        val bought = inRange.filter { it.kind == EventKind.BOUGHT }
         return InsightsSummary(
             range = range,
             today = today,
-            tries = tries.size,
-            unlocks = unlocks.size,
-            unlockedMs = unlocks.sumOf { it.ms },
-            bought = bought.size,
-            boughtMs = bought.sumOf { it.ms },
-            breaks = inRange.count { it.kind == EventKind.BREAK },
-            habits = inRange.count { it.kind == EventKind.HABIT },
+            nowHour = Instant.ofEpochMilli(nowWallMs).atZone(zone).hour,
+            figures = figures(inRange),
+            previous = previous,
+            split = segments(tries),
             bars = bars,
             heat = heat,
             blocks = perBlock,
             targets = targets,
             history = history,
+        )
+    }
+
+    /** Tries at one thing on one device this close together, the same day, are one row of the history. */
+    const val RUN_MS = 30 * 60_000L
+
+    /** A day of the history from its [events], newest first: tries at one thing in a run are one row. */
+    private fun historyDay(date: LocalDate, events: List<InsightEvent>, segments: (List<InsightEvent>) -> List<Segment>): HistoryDay {
+        val rows = ArrayList<HistoryRow>()
+        for (e in events) {
+            val last = rows.lastOrNull()
+            if (e.kind == EventKind.BLOCKED && last != null && last.event.kind == EventKind.BLOCKED && last.event.device == e.device &&
+                last.event.target != null && e.target != null && targetKey(last.event.target, last.event.isSite) == targetKey(e.target, e.isSite) &&
+                last.fromMs - e.atWallMs <= RUN_MS
+            ) {
+                rows[rows.lastIndex] = last.copy(n = last.n + 1, fromMs = e.atWallMs)
+                continue
+            }
+            rows += HistoryRow(e)
+        }
+        val unlocks = events.filter { it.kind == EventKind.UNLOCK }
+        val tries = events.filter { it.kind == EventKind.BLOCKED }
+        return HistoryDay(date, rows, tries.size, unlocks.size, unlocks.sumOf { it.ms }, segments(tries))
+    }
+
+    /** Which device a limit record's device id is ("phone-…", "laptop-…"), as the web pages tell. */
+    fun deviceOfId(id: String): Device? = when {
+        id.startsWith("phone", ignoreCase = true) -> Device.PHONE
+        id.startsWith("laptop", ignoreCase = true) -> Device.LAPTOP
+        else -> null
+    }
+
+    /**
+     * A block's daily limit use over [range]: the past days from the server's record ([record]:
+     * device id -> day start -> ms, `GET /limits`), today from [today] (the engine's own figure,
+     * newer than the record's). A block shared by the devices adds their use up; one with a limit
+     * on each (I33) goes by the device that used the most, as the engine does. Only days some
+     * device reported count, so a day before sync was set up isn't a day of nothing.
+     */
+    fun limitUse(
+        block: Block,
+        record: Map<String, Map<Long, Long>>,
+        today: BlockToday?,
+        range: InsightRange,
+        device: DeviceFilter,
+        nowWallMs: Long,
+        zone: ZoneId,
+    ): LimitUse {
+        val todayDate = today(nowWallMs, zone)
+        val first = todayDate.minusDays(range.days - 1L)
+        val byDay = HashMap<LocalDate, Long>()
+        for ((id, days) in record) {
+            val dev = deviceOfId(id)
+            if (device != DeviceFilter.ALL && (dev == null || !device.shows(dev))) continue
+            for ((start, ms) in days) {
+                // Midday of the day it starts: a day 23 or 25 hours long is still that day.
+                val day = Instant.ofEpochMilli(start + 12 * 3_600_000L).atZone(zone).toLocalDate()
+                if (day.isBefore(first) || day.isAfter(todayDate)) continue
+                val had = byDay[day] ?: 0L
+                byDay[day] = if (block.perDevice) maxOf(had, ms) else had + ms
+            }
+        }
+        if (today != null) {
+            val phone = if (device.shows(Device.PHONE)) today.phoneMs else 0L
+            val laptop = if (device.shows(Device.LAPTOP)) today.laptopMs else 0L
+            byDay[todayDate] = maxOf(byDay[todayDate] ?: 0L, if (block.perDevice) maxOf(phone, laptop) else phone + laptop)
+        }
+        return LimitUse(
+            dailyMs = block.dailyAllowanceMs,
+            usedMs = byDay.values.sum(),
+            days = byDay.size,
+            over = byDay.count { it.value >= block.dailyAllowanceMs },
+            todayOnly = byDay.keys == setOf(todayDate),
         )
     }
 
@@ -258,7 +363,8 @@ object InsightsModel {
                 .filter { covered(it, site) }
                 .map { t ->
                     val n = triesOf[t to site]
-                    TopTarget(t, labels[t] ?: n?.label, site, time[t] ?: 0L, n?.tries ?: 0, blockFor(blocks, t, site))
+                    val ms = time[t] ?: 0L
+                    TopTarget(t, labels[t] ?: n?.label, site, ms, n?.tries ?: 0, blockFor(blocks, t, site), laptopOnly = ms == 0L && n?.devices == setOf(Device.LAPTOP))
                 }
                 .filter { it.ms >= 60_000 || it.tries > 0 }
                 .sortedWith(compareByDescending<TopTarget> { it.ms }.thenByDescending { it.tries })
@@ -283,6 +389,17 @@ data class Bar(val date: LocalDate, val hour: Int?, val segments: List<Segment>)
     val total: Int get() = segments.sumOf { it.count }
 }
 
+/** The tiles: what happened in a stretch of time. */
+data class Figures(
+    val tries: Int = 0,
+    val unlocks: Int = 0,
+    val unlockedMs: Long = 0,
+    val bought: Int = 0,
+    val boughtMs: Long = 0,
+    val breaks: Int = 0,
+    val habits: Int = 0,
+)
+
 data class BlockSummary(
     val blockId: String,
     val tries: Int,
@@ -293,29 +410,85 @@ data class BlockSummary(
     val habits: Int,
     /** Days in a row up to today with nothing of it tried, bought past or unlocked in an emergency. */
     val cleanDays: Int,
+    /** Its tries in each of the chart's bars: a day each, or an hour each on Today. */
+    val trend: List<Int> = emptyList(),
 )
 
-data class TargetTries(val target: String, val isSite: Boolean, val label: String?, val tries: Int, val devices: Set<Device>, val blockId: String?)
+/** A daily limit's use over a range: [usedMs] over the [days] some device reported, [over] of them at or past the limit. */
+data class LimitUse(val dailyMs: Long, val usedMs: Long, val days: Int, val over: Int = 0, val todayOnly: Boolean = false) {
+    val perDayMs: Long get() = if (days == 0) 0L else usedMs / days
+    val fraction: Float get() = if (dailyMs <= 0L) 0f else perDayMs.toFloat() / dailyMs
+}
 
-data class TopTarget(val target: String, val label: String?, val isSite: Boolean, val ms: Long, val tries: Int, val blockId: String?)
+/** How a meter of a limit is drawn: in the data colour, amber from [NEAR_LIMIT], red once used up. */
+enum class MeterTone {
+    DATA, NEAR, OVER;
 
-data class HistoryDay(val date: LocalDate, val events: List<InsightEvent>)
+    companion object {
+        const val NEAR_LIMIT = 0.8f
+        fun of(fraction: Float): MeterTone = when {
+            fraction >= 1f -> OVER
+            fraction >= NEAR_LIMIT -> NEAR
+            else -> DATA
+        }
+    }
+}
+
+/** Today's use of a block's daily limit, here and on the laptop (I19, §2.4). */
+data class BlockToday(val phoneMs: Long, val laptopMs: Long, val allowanceMs: Long)
+
+data class TargetTries(
+    val target: String,
+    val isSite: Boolean,
+    val label: String?,
+    val tries: Int,
+    val devices: Set<Device>,
+    val blockId: String?,
+    val phone: Int = 0,
+    val laptop: Int = 0,
+)
+
+/** An app or a site: time on the phone, tries on the devices shown. [laptopOnly]: only ever met on the laptop. */
+data class TopTarget(val target: String, val label: String?, val isSite: Boolean, val ms: Long, val tries: Int, val blockId: String?, val laptopOnly: Boolean = false)
+
+/** One row of the history: an event, or [n] tries at one thing in a run, the first at [fromMs]. */
+data class HistoryRow(val event: InsightEvent, val n: Int = 1, val fromMs: Long = event.atWallMs)
+
+/** A day of the history, newest row first, with its tries, unlocks and the tries' split by block. */
+data class HistoryDay(
+    val date: LocalDate,
+    val rows: List<HistoryRow>,
+    val tries: Int,
+    val unlocks: Int,
+    val unlockedMs: Long,
+    val split: List<Segment>,
+) {
+    val events: Int get() = rows.sumOf { it.n }
+}
 
 data class InsightsSummary(
     val range: InsightRange,
     val today: LocalDate,
-    val tries: Int,
-    val unlocks: Int,
-    val unlockedMs: Long,
-    val bought: Int,
-    val boughtMs: Long,
-    val breaks: Int,
-    val habits: Int,
+    /** The hour it is now: today's bar on Today. */
+    val nowHour: Int,
+    val figures: Figures,
+    /** The stretch before the range (yesterday, the 7 or 30 days before); null when the log doesn't reach back. */
+    val previous: Figures?,
+    /** The range's tries by block, in the list's order. */
+    val split: List<Segment>,
     val bars: List<Bar>,
     /** Blocked tries by weekday (Monday first) and hour. */
     val heat: List<IntArray>,
     val blocks: List<BlockSummary>,
     val targets: List<TargetTries>,
-    /** Newest day first, each newest event first. */
+    /** Newest day first, each newest row first. */
     val history: List<HistoryDay>,
-)
+) {
+    val tries: Int get() = figures.tries
+    val unlocks: Int get() = figures.unlocks
+    val unlockedMs: Long get() = figures.unlockedMs
+    val bought: Int get() = figures.bought
+    val boughtMs: Long get() = figures.boughtMs
+    val breaks: Int get() = figures.breaks
+    val habits: Int get() = figures.habits
+}

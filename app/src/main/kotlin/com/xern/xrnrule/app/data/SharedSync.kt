@@ -288,6 +288,15 @@ class SharedSync(
         }.getOrNull()
     }
 
+    /**
+     * Each block's daily limit use per device and day as the server kept it (`GET /limits`), for
+     * Insights: nothing with sync off, null when the server couldn't be asked. Blocking.
+     */
+    fun limitsRecord(): Map<String, Map<String, Map<Long, Long>>>? {
+        if (!settings.isConfigured) return emptyMap()
+        return runCatching { limitsFrom(Api(settings.url, settings.user, settings.password).limits()) }.getOrNull()
+    }
+
     private fun loadBase(): Base? = try {
         json.decodeFromString(Base.serializer(), baseFile.readFully().decodeToString())
     } catch (_: FileNotFoundException) {
@@ -375,6 +384,16 @@ class SharedSync(
 
         fun events(sinceMs: Long): String {
             val conn = open("GET", "?since=$sinceMs", "/events")
+            try {
+                check(conn, conn.responseCode)
+                return conn.inputStream.use { it.readBytes().decodeToString() }
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        fun limits(): String {
+            val conn = open("GET", path = "/limits")
             try {
                 check(conn, conn.responseCode)
                 return conn.inputStream.use { it.readBytes().decodeToString() }

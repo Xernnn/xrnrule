@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.block.OverlayShieldPort
 import com.xern.xrnrule.app.data.TelemetryEvent
-import com.xern.xrnrule.app.ui.theme.LocalKinds
+import com.xern.xrnrule.app.ui.theme.DataColor
 import com.xern.xrnrule.app.ui.theme.MiSans
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 import com.xern.xrnrule.domain.Block
@@ -82,9 +82,9 @@ private val sampleBlocks = listOf(
 private fun at(daysBack: Int, hour: Int, minute: Int): Long =
     LocalDateTime.of(2026, 11, 19, hour, minute).minusDays(daysBack.toLong()).atZone(zone).toInstant().toEpochMilli()
 
-/** A month of a phone and a laptop: tries late in the evening, habits in the morning, a few shortcuts. */
+/** Two months of a phone and a laptop: tries late in the evening, habits in the morning, a few shortcuts. */
 private val phoneLog: List<TelemetryEvent> = buildList {
-    for (d in 0 until 30) {
+    for (d in 0 until 60) {
         val n = (d * 7 + 3) % 5
         for (k in 0..n) {
             val hour = listOf(8, 13, 20, 21, 22, 23)[(d + k) % 6]
@@ -100,7 +100,7 @@ private val phoneLog: List<TelemetryEvent> = buildList {
 }
 
 private val laptopLog: List<TelemetryEvent> = buildList {
-    for (d in 0 until 30) {
+    for (d in 0 until 60) {
         if (d % 2 == 0) add(TelemetryEvent.Blocked("youtube.com", at(d, 14, 20), "youtube.com"))
         if (d % 3 == 2) add(TelemetryEvent.Blocked("steam", at(d, 22, 15), "Steam"))
         if (d % 5 == 4) add(TelemetryEvent.Blocked("reddit.com", at(d, 23, 40), "reddit.com"))
@@ -112,8 +112,19 @@ private val laptopLog: List<TelemetryEvent> = buildList {
 
 private val sampleEmergencies = mapOf("games@${at(9, 19, 0)}" to at(9, 19, 0))
 
+/** Each limited block's use a day as the server kept it: under the limit, near it, past it now and then. */
+private val sampleLimits: Map<String, Map<String, Map<Long, Long>>> = mapOf(
+    "yt" to mapOf(
+        "phone-1a2b3c4d" to (1..60).associate { d -> at(d, 0, 0) to (14 + (d * 7) % 13) * MIN },
+        "laptop-9f8e7d6c" to (1..60).filter { it % 2 == 0 }.associate { d -> at(d, 0, 0) to (3 + d % 6) * MIN },
+    ),
+    "news" to mapOf("phone-1a2b3c4d" to (1..60).associate { d -> at(d, 0, 0) to (8 + (d * 5) % 9) * MIN }),
+)
+
+private val sampleToday = mapOf("yt" to BlockToday(18 * MIN, 7 * MIN, 30 * MIN), "news" to BlockToday(4 * MIN, 0, 20 * MIN))
+
 private fun sampleUi(events: List<InsightEvent>, range: InsightRange, device: DeviceFilter = DeviceFilter.ALL, blockId: String? = null, laptop: LaptopLog = LaptopLog.OK): InsightsUi {
-    val summary = InsightsModel.summarize(InsightsModel.select(events, device, blockId), sampleBlocks, range, now, zone)
+    val summary = InsightsModel.summarize(InsightsModel.select(events, device, blockId), sampleBlocks, range, now, zone, logStartMs = events.firstOrNull()?.atWallMs)
     val phone = device != DeviceFilter.LAPTOP
     val k = range.days
     val appTime = if (!phone) emptyMap() else mapOf(
@@ -130,7 +141,9 @@ private fun sampleUi(events: List<InsightEvent>, range: InsightRange, device: De
         blocks = sampleBlocks,
         apps = apps,
         sites = sites,
-        today = mapOf("yt" to BlockToday(18 * MIN, 7 * MIN, 30 * MIN), "news" to BlockToday(4 * MIN, 0, 20 * MIN)),
+        limits = sampleBlocks.filter { it.dailyAllowanceMs > 0 }.associate { b ->
+            b.id to InsightsModel.limitUse(b, sampleLimits[b.id].orEmpty(), sampleToday[b.id], range, device, now, zone)
+        },
         usageAccess = true,
         sitesOn = true,
         laptop = laptop,
@@ -148,8 +161,8 @@ private fun Frame(content: @Composable () -> Unit) = XrnruleTheme {
 }
 
 @Composable
-private fun Insights(ui: InsightsUi, range: InsightRange, device: DeviceFilter = DeviceFilter.ALL, blockId: String? = null, scrolledTo: Int = 0) =
-    InsightsContent(ui, range, {}, device, {}, blockId, {}, scroll = androidx.compose.foundation.ScrollState(scrolledTo))
+private fun Insights(ui: InsightsUi, range: InsightRange, device: DeviceFilter = DeviceFilter.ALL, blockId: String? = null, scrolledTo: Int = 0, chartPick: Int = -1) =
+    InsightsContent(ui, range, {}, device, {}, blockId, {}, scroll = androidx.compose.foundation.ScrollState(scrolledTo), chartPick = chartPick)
 
 // ---- Insights --------------------------------------------------------------------------------
 
@@ -166,11 +179,20 @@ fun InsightsWeekLowerPreview() = Frame { Insights(sampleUi(busyEvents, InsightRa
 @Composable
 fun InsightsWeekLightPreview() = Frame { Insights(sampleUi(busyEvents, InsightRange.WEEK), InsightRange.WEEK) }
 
-@Preview(name = "Insights 30 days", widthDp = 393, heightDp = 1400, uiMode = Configuration.UI_MODE_NIGHT_YES)
+/** A bar tapped: Tuesday's tries and their split by block. */
+@Preview(name = "Insights week, a day tapped", widthDp = 393, heightDp = 900, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+fun InsightsTappedPreview() = Frame { Insights(sampleUi(busyEvents, InsightRange.WEEK), InsightRange.WEEK, chartPick = 4) }
+
+@Preview(name = "Insights today light", widthDp = 393, heightDp = 2600, uiMode = Configuration.UI_MODE_NIGHT_NO)
+@Composable
+fun InsightsTodayLightPreview() = Frame { Insights(sampleUi(busyEvents, InsightRange.TODAY), InsightRange.TODAY) }
+
+@Preview(name = "Insights 30 days", widthDp = 393, heightDp = 2600, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun InsightsMonthPreview() = Frame { Insights(sampleUi(busyEvents, InsightRange.MONTH), InsightRange.MONTH) }
 
-@Preview(name = "Insights today", widthDp = 393, heightDp = 1400, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Preview(name = "Insights today", widthDp = 393, heightDp = 2600, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun InsightsTodayPreview() = Frame { Insights(sampleUi(busyEvents, InsightRange.TODAY), InsightRange.TODAY) }
 
@@ -183,7 +205,7 @@ fun InsightsBlockLaptopPreview() = Frame {
 @Preview(name = "Insights empty", widthDp = 393, heightDp = 2600, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun InsightsEmptyPreview() = Frame {
-    val ui = sampleUi(emptyList(), InsightRange.WEEK, laptop = LaptopLog.OFF).copy(apps = emptyList(), sites = emptyList(), today = emptyMap(), usageAccess = false, sitesOn = false)
+    val ui = sampleUi(emptyList(), InsightRange.WEEK, laptop = LaptopLog.OFF).copy(apps = emptyList(), sites = emptyList(), limits = emptyMap(), usageAccess = false, sitesOn = false)
     Insights(ui, InsightRange.WEEK)
 }
 
@@ -246,7 +268,7 @@ private fun Dimmed(content: @Composable () -> Unit) {
 @Composable
 fun LoosenWaitPreview() = Frame {
     Dimmed {
-        LoosenWait("Delete YouTube?", "It stops blocking for good.", listOf("YouTube" to Color(BlockColors.PALETTE[0])), Color(BlockColors.PALETTE[0]), 42_000, usePassword = false, onGoAhead = {}, onCancel = {})
+        LoosenWait("Delete YouTube?", "It stops blocking for good.", listOf("YouTube" to Color(BlockColors.PALETTE[0])), DataColor, 42_000, usePassword = false, onGoAhead = {}, onCancel = {})
     }
 }
 
@@ -257,7 +279,7 @@ fun LoosenWaitBlocksPreview() = Frame {
         LoosenWait(
             "Save these changes?", "They make Social easier to get past.",
             listOf("Social" to Color(BlockColors.PALETTE[1]), "Reddit at night" to Color(BlockColors.PALETTE[2])),
-            Color(BlockColors.PALETTE[1]), 7_400, usePassword = false, onGoAhead = {}, onCancel = {},
+            DataColor, 7_400, usePassword = false, onGoAhead = {}, onCancel = {},
         )
     }
 }
@@ -266,7 +288,7 @@ fun LoosenWaitBlocksPreview() = Frame {
 @Composable
 fun LoosenWaitDonePreview() = Frame {
     Dimmed {
-        LoosenWait("Take a 15 min break?", "", emptyList(), LocalKinds.current.strict.color, 0, usePassword = false, onGoAhead = {}, onCancel = {})
+        LoosenWait("Take a 15 min break?", "", emptyList(), DataColor, 0, usePassword = false, onGoAhead = {}, onCancel = {})
     }
 }
 
@@ -274,7 +296,7 @@ fun LoosenWaitDonePreview() = Frame {
 @Composable
 fun LoosenPasswordPreview() = Frame {
     Dimmed {
-        LoosenWait("Turn Games off?", "", listOf("Games" to Color(BlockColors.PALETTE[3])), Color(BlockColors.PALETTE[3]), 60_000, usePassword = true, password = "hunter", wrong = "Wrong password.", onGoAhead = {}, onCancel = {})
+        LoosenWait("Turn Games off?", "", listOf("Games" to Color(BlockColors.PALETTE[3])), DataColor, 60_000, usePassword = true, password = "hunter", wrong = "Wrong password.", onGoAhead = {}, onCancel = {})
     }
 }
 
@@ -282,7 +304,7 @@ fun LoosenPasswordPreview() = Frame {
 @Composable
 fun LoosenWaitLightPreview() = Frame {
     Dimmed {
-        LoosenWait("Raise the limit to 1 h 30 min?", "", emptyList(), LocalKinds.current.strict.color, 23_000, usePassword = false, onGoAhead = {}, onCancel = {})
+        LoosenWait("Raise the limit to 1 h 30 min?", "", emptyList(), DataColor, 23_000, usePassword = false, onGoAhead = {}, onCancel = {})
     }
 }
 
