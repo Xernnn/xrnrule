@@ -1,10 +1,7 @@
-/* xrnrule status page: what only this page has (its sign-in, the devices' check-ins). The look is
-   xrn.css, shared with the laptop's local page. */
+/* xrnrule status page: what only this page has (its sign-in). The look is xrn.css, shared with
+   the laptop's local page. */
 
 .card.empty { padding: 40px 16px; }
-.foot { color: var(--muted); font-size: 13px; margin-top: 18px; text-align: center; font-variant-numeric: tabular-nums; }
-/* A device that hasn't checked in for an hour. */
-.foot .stale { color: var(--text); }
 
 .login { max-width: 380px; margin: 12vh auto 0; padding: 0 16px; display: grid; justify-items: center; gap: 22px; }
 .login-mark { width: 64px; height: 64px; display: block; }
