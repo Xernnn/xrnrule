@@ -79,11 +79,11 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Backup.** Export your blocks to a file and import them on a new install.
 - **Insights.** Both devices' history (the laptop's comes through the sync server), for today,
   7 or 30 days, all devices or one: blocked tries, time unlocked, minutes bought, breaks and
-  habits; tries per day in each block's colour and by hour of the week; a card per block (tries,
-  unlocks, today's limit on each device, clean days in a row); the top apps and sites; and a
-  day-by-day timeline. A block's colour is its place in the block list, the same on the laptop's
-  page. A habit or an unlock both devices logged counts once. The laptop's page and the server's
-  status page show the same Insights.
+  habits; tries per day and by hour of the week; a card per block (tries, unlocks, today's limit
+  on each device, clean days in a row); the top apps and sites; and a day-by-day timeline. On the
+  phone a block's colour is its place in the block list. A habit or an unlock both devices logged
+  counts once. The laptop's page and the server's status page show the same Insights in greys and
+  xrnrule's orange alone, a row per block, where a block goes by its name.
 - Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
   turns its autostart off, which Xiaomi phones do at every install.
 

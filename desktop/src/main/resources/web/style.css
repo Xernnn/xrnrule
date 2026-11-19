@@ -4,17 +4,16 @@
 
 /* ---- notices ------------------------------------------------------------------------------ */
 .alerts { display: grid; gap: 10px; margin-bottom: 14px; }
-.alert { display: flex; gap: 14px; align-items: flex-start; background: var(--blocked); color: #fff; border-radius: 22px; padding: 14px 18px; font-size: 14px; }
-.alert .icon { width: 22px; height: 22px; margin-top: 1px; }
-.alert b { display: block; font-size: 15px; font-weight: 650; }
-.alert div > span { opacity: 0.88; overflow-wrap: anywhere; }
-.alert.calm { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
+/* A card like any other; only the sign says it needs doing, red when blocking has stopped working. */
+.alert { display: flex; gap: 14px; align-items: flex-start; background: var(--surface); color: var(--text); border-radius: var(--radius); padding: 14px 18px; font-size: 14px; }
+.alert .icon { width: 20px; height: 20px; margin-top: 1px; color: var(--blocked); }
+.alert b { display: block; font-size: 15px; font-weight: 600; }
+.alert div > span { color: var(--muted); overflow-wrap: anywhere; }
 .alert.calm .icon { color: var(--muted); }
-.alert.calm div > span { color: var(--muted); opacity: 1; }
-.notice { display: flex; align-items: center; gap: 10px; background: var(--surface-2); border-radius: 16px; padding: 10px 12px 10px 16px; font-size: 14px; margin-bottom: 14px; }
+.notice { display: flex; align-items: center; gap: 10px; background: var(--surface-2); border-radius: 14px; padding: 10px 12px 10px 16px; font-size: 14px; margin-bottom: 14px; }
 .notice span { flex: 1; }
-.banner { display: flex; align-items: center; gap: 14px; border-radius: 22px; padding: 12px 10px 12px 18px; margin-bottom: 14px; background: color-mix(in srgb, var(--k-habit) var(--tint), var(--surface)); border: 1px solid color-mix(in srgb, var(--k-habit) 40%, var(--surface)); }
-.banner > .icon { color: var(--k-habit); width: 24px; height: 24px; }
+.banner { display: flex; align-items: center; gap: 14px; border-radius: var(--radius); padding: 12px 10px 12px 18px; margin-bottom: 14px; background: var(--surface); }
+.banner > .icon { color: var(--muted); width: 22px; height: 22px; }
 .banner > div { flex: 1; }
 .banner b { display: block; font-weight: 650; }
 .banner .left { color: var(--muted); font-size: 13.5px; font-variant-numeric: tabular-nums; }
@@ -23,14 +22,14 @@
 .subpage { max-width: 760px; margin: 0 auto; }
 .subpage .page-title h2 { flex: 1; }
 .form { display: grid; gap: 4px; }
-.form .group { background: var(--surface); border: 1px solid var(--line); border-radius: 24px; padding: 18px; display: grid; gap: 14px; margin-bottom: 14px; min-width: 0; }
+.form .group { background: var(--surface); border-radius: var(--radius); padding: 18px; display: grid; gap: 14px; margin-bottom: 14px; min-width: 0; }
 .form .section { margin: 6px 4px 8px; }
 .field { display: grid; gap: 6px; font-size: 14px; min-width: 0; }
 .field > span { font-size: 13px; color: var(--muted); }
 .form input[type="text"], .form input[type="number"], .form input[type="search"], .form select, .form textarea {
   border: 1px solid transparent; background: var(--surface-2); border-radius: 12px; padding: 10px 14px; width: 100%;
 }
-.form input:focus, .form textarea:focus, .form select:focus { outline: none; border-color: var(--accent); }
+.form input:focus, .form textarea:focus, .form select:focus { outline: none; border-color: var(--outline); }
 .form input[type="number"] { max-width: 130px; font-variant-numeric: tabular-nums; }
 .form input.clock { max-width: 110px; font-variant-numeric: tabular-nums; }
 .form textarea { min-height: 76px; resize: vertical; }
@@ -48,9 +47,9 @@
 .applist.short { max-height: 190px; }
 .daypick { display: flex; gap: 8px; flex-wrap: wrap; }
 .daypick label { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 650; cursor: pointer; }
-.daypick label:has(input:checked) { background: var(--k-blue); color: #fff; }
+.daypick label:has(input:checked) { background: var(--accent); color: var(--on-accent); }
 .daypick input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
-.daypick label:has(input:focus-visible) { outline: 2px solid var(--k-blue); outline-offset: 2px; }
+.daypick label:has(input:focus-visible) { outline: 2px solid var(--text); outline-offset: 2px; }
 .window { border-top: 1px dashed var(--outline); padding-top: 12px; display: grid; gap: 12px; }
 .form-items { display: grid; }
 .row.item { justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
@@ -60,22 +59,22 @@
 .form .note { color: var(--muted); font-size: 13px; }
 .form-foot { display: flex; gap: 10px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 
-/* The phone's switch: green when on, a grey ring when off. */
+/* A switch: filled in the text colour when on, a grey ring when off. */
 .switch { appearance: none; position: relative; width: 50px; height: 30px; margin: 0; flex: none; border-radius: 999px; border: 2px solid var(--muted); background: none; cursor: pointer; transition: background 0.15s, border-color 0.15s; }
 .switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); transition: transform 0.15s, background 0.15s; }
 .switch:checked { background: var(--accent); border-color: var(--accent); }
-.switch:checked::after { background: #fff; transform: translateX(20px); }
+.switch:checked::after { background: var(--on-accent); transform: translateX(20px); }
 /* A round tick in the app lists. */
 .applist input[type="checkbox"], .form .pick {
   appearance: none; flex: none; width: 22px; height: 22px; margin: 0; border-radius: 50%; border: 1.6px solid var(--muted); display: grid; place-items: center; cursor: pointer;
 }
 .applist input[type="checkbox"]:checked, .form .pick:checked { background: var(--accent); border-color: var(--accent); }
-.applist input[type="checkbox"]:checked::after, .form .pick:checked::after { content: ""; width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
+.applist input[type="checkbox"]:checked::after, .form .pick:checked::after { content: ""; width: 5px; height: 10px; border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
 
 /* ---- Settings: grouped rows, as the phone's -------------------------------------------------- */
 .settings { max-width: 760px; margin: 0 auto; display: grid; gap: 4px; }
 .settings .section { margin: 18px 6px 8px; }
-.group-card { background: var(--surface); border: 1px solid var(--line); border-radius: 24px; overflow: hidden; }
+.group-card { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
 .srow { display: flex; align-items: center; gap: 14px; padding: 12px 16px; min-height: 56px; }
 .srow + .srow { border-top: 1px solid var(--line); }
 .srow > .icon { color: var(--muted); width: 22px; height: 22px; }
@@ -88,14 +87,13 @@
 .srow input[type="text"], .srow input[type="number"] { border: 1px solid transparent; background: var(--surface-2); border-radius: 10px; padding: 8px 12px; }
 .srow input[type="text"] { width: min(320px, 46vw); }
 .srow input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
-.srow input:focus { outline: none; border-color: var(--accent); }
+.srow input:focus { outline: none; border-color: var(--outline); }
 .srow .unit { color: var(--muted); font-size: 13px; min-width: 26px; }
-.srow .ok { color: var(--accent); }
+.srow .ok { color: var(--open); }
 .srow .bad { color: var(--blocked); }
 .sync-card { display: flex; align-items: center; gap: 16px; padding: 18px 20px; }
-.sync-card > .icon { width: 28px; height: 28px; color: var(--accent); }
-.sync-card.off > .icon { color: var(--blocked); }
-.sync-card.idle > .icon { color: var(--muted); }
+.sync-card > .icon { width: 26px; height: 26px; color: var(--muted); }
+.sync-card.off > .icon { color: var(--text); }
 .sync-card .stitle { flex: 1; display: grid; }
 .sync-card .stitle b { font-weight: 600; }
 .sync-card .stitle small { color: var(--muted); }
@@ -110,11 +108,11 @@
 .hero { text-align: center; display: grid; justify-items: center; gap: 4px; }
 .hero .pic { position: relative; width: 76px; height: 76px; border-radius: 20px; margin-bottom: 14px; display: grid; place-items: center; overflow: hidden; }
 .hero .pic .favicon { position: absolute; inset: 0; width: 100%; height: 100%; padding: 8px; margin: 0; border-radius: 0; background: #fff; }
-.hero .pic.letter { background: var(--c); color: var(--ink); font-size: 34px; font-weight: 650; }
+.hero .pic.letter { font-size: 34px; }
 .hero h2 { font-size: 26px; font-weight: 650; margin: 0; overflow-wrap: anywhere; letter-spacing: -0.01em; }
 .hero .back { font-size: 52px; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; margin: 14px 0 2px; font-variant-numeric: tabular-nums; }
 .hero p { margin: 0; color: var(--muted); }
-.hero.open h2 { color: var(--k-habit); }
+.hero.open h2 { color: var(--open); }
 .way { display: grid; justify-items: center; gap: 8px; }
 .way .btn.leave { background: var(--text); color: var(--bg); min-width: 240px; }
 .quiet { border: 0; background: none; color: var(--muted); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; padding: 6px; }

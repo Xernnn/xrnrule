@@ -1,19 +1,17 @@
 /* xrnrule status page: what only this page has (its sign-in, the devices' check-ins). The look is
    xrn.css, shared with the laptop's local page. */
 
-.stat.fresh { --k: var(--accent); }
-.stat.stale { --k: var(--ready); }
-.blocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px; align-items: start; }
 .card.empty { padding: 40px 16px; }
-.foot { color: var(--muted); font-size: 13px; margin-top: 18px; text-align: center; }
-.bar .round { width: 34px; height: 34px; }
+.foot { color: var(--muted); font-size: 13px; margin-top: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+/* A device that hasn't checked in for an hour. */
+.foot .stale { color: var(--text); }
 
 .login { max-width: 380px; margin: 12vh auto 0; padding: 0 16px; display: grid; justify-items: center; gap: 22px; }
 .login-mark { width: 64px; height: 64px; display: block; }
 .login form { width: 100%; display: grid; gap: 14px; padding: 22px; }
 .login label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 .login input { border: 1px solid transparent; background: var(--surface-2); color: var(--text); border-radius: 12px; padding: 10px 14px; font-size: 15px; }
-.login input:focus { outline: none; border-color: var(--accent); }
+.login input:focus { outline: none; border-color: var(--outline); }
 .login .btn { width: 100%; margin-top: 4px; }
 .error { color: var(--blocked); font-size: 13.5px; }
 .error:empty { display: none; }

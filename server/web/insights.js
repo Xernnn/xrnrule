@@ -10,12 +10,7 @@
 // that covers it. A habit done or an unlock is shared, so each device logs it; one of each is
 // kept. The rules are the phone's (app/.../ui/InsightsModel.kt), so both show the same figures.
 
-import { h, s, icon, deviceIcon, deviceOf, duration, inkOn } from "./ui.js";
-
-/** A block's colour: by its place in the block list, round again past the eighth. */
-export const PALETTE = ["#E8590C", "#1C6FD8", "#2B9348", "#7048E8", "#D6336C", "#0CA678", "#F59F00", "#1283C4"];
-/** What no block covers any more (a block deleted, a target taken off). */
-export const OTHER = "#8A8A93";
+import { h, s, icon, deviceIcon, deviceOf, duration } from "./ui.js";
 
 export const RANGES = { today: 1, week: 7, month: 30 };
 const DAY = 86_400_000;
@@ -27,15 +22,14 @@ const RUN_MS = 30 * 60_000;
 // ---- blocks --------------------------------------------------------------------------------
 
 /**
- * The blocks as the insights need them, in list order with their colours, from either page's
+ * The blocks as the insights need them, in list order, from either page's
  * shape: the laptop's /api/history ({id, name, apps, sites, except, dailyMs, perDevice}) or the
  * shared state's ({id, name, targetPackages, targetDesktopApps, targetSites, exceptSites, …}).
  */
 export function normalizeBlocks(list) {
-  return (list ?? []).map((b, i) => ({
+  return (list ?? []).map((b) => ({
     id: b.id,
     name: b.name || "Block",
-    colour: PALETTE[i % PALETTE.length],
     apps: new Set(b.apps ?? [...(b.targetPackages ?? []), ...(b.targetDesktopApps ?? [])]),
     sites: (b.sites ?? b.targetSites ?? []).map((x) => String(x).split("/")[0].toLowerCase()),
     except: (b.except ?? b.exceptSites ?? []).map((x) => String(x).toLowerCase()),
@@ -198,7 +192,7 @@ export function compute(input, { range = "week", device = "all", block = null } 
     habits: inRange.filter((e) => e.t === "habit").length,
   };
 
-  // Blocked tries over time, each block its own part: by hour for today, else by day.
+  // Blocked tries over time, and each block's part of them: by hour for today, else by day.
   const order = [...blocks.map((b) => b.id), null];
   const bucketOf = range === "today" ? (e) => hourOf(zone, e.at) : (e) => dayOf(zone, e.at) - first;
   const size = range === "today" ? 24 : n;
@@ -236,7 +230,7 @@ export function compute(input, { range = "week", device = "all", block = null } 
     let streak = 0;
     for (let d = today; d >= firstDay && !dirtyOn.has(d); d--) streak++;
     return {
-      id: b.id, name: b.name, colour: b.colour,
+      id: b.id, name: b.name,
       tries: mine.filter((e) => e.t === "blocked").length,
       unlocks: unlocks.length,
       unlockedMs: unlocks.reduce((a, e) => a + (e.ms ?? 0), 0),
@@ -338,22 +332,13 @@ function clockIn(zone) {
 }
 
 function seg(options, value, onPick, cls = "") {
-  return h("div", { class: `seg ${cls}`.trim(), role: "tablist" }, options.map(([v, label, ic]) =>
-    h("button", { type: "button", class: v === value ? "on" : "", "aria-pressed": String(v === value), onclick: () => onPick(v) }, ic && icon(ic), label && h("span", {}, label))));
+  return h("div", { class: `seg ${cls}`.trim(), role: "group" }, options.map(([v, label]) =>
+    h("button", { type: "button", class: v === value ? "on" : "", "aria-pressed": String(v === value), onclick: () => onPick(v) }, label)));
 }
 
-/** A block's chip, in its colour; a click shows that block alone. */
-function chip(b, onPick, extra = null) {
-  if (!b) return h("span", { class: "bchip other" }, "Other");
-  return h("button", {
-    type: "button", class: "bchip", title: b.name,
-    style: { "--c": b.colour, "--ink": inkOn(b.colour) },
-    onclick: onPick ? () => onPick(b.id) : null,
-  }, h("span", {}, b.name), extra);
-}
-
-function stat(ic, cls, value, label) {
-  return h("div", { class: `stat ${cls}` }, h("span", { class: "stat-icon" }, icon(ic)), h("b", {}, value), h("span", { class: "label" }, label));
+/** A figure and what it counts: the label first, as the hub's tiles have it. */
+function stat(value, label) {
+  return h("div", { class: "stat" }, h("span", { class: "label" }, label), h("b", {}, value));
 }
 
 /** A round top for the chart, a little above its busiest column. */
@@ -364,7 +349,10 @@ function niceMax(max) {
   return 10 * p;
 }
 
-/** Blocked tries over time: a stacked column per hour or day, each block its own part. */
+/**
+ * Blocked tries over time: a column per hour or day, in the one data colour. A block is told by
+ * its name, not a colour, so each block's part is in the column's title, not drawn.
+ */
 function barsChart(data) {
   const bars = data.bars;
   const max = niceMax(Math.max(1, ...bars.map((b) => b.total)));
@@ -373,16 +361,13 @@ function barsChart(data) {
     : (bars.length - 1 - i) % labelEvery === 0 ? (bars.length <= 7 ? WEEKDAY[(((b.day + 3) % 7) + 7) % 7] : shortDay.format(new Date(b.day * DAY))) : "";
   const when = (b) => b.hour != null ? `${String(b.hour).padStart(2, "0")}:00` : dayTitle(b.day, data.today);
   const today = (b) => b.hour == null && b.day === data.today;
+  const title = (b) => [`${when(b)} · ${b.total}`, ...b.parts.map((p) => `${data.byId.get(p.block)?.name ?? "Other"} ${p.n}`)].join("\n");
   return h("div", { class: "bars", role: "img", "aria-label": "Blocked tries" },
     h("div", { class: "baxis" }, [max, max / 2, 0].map((v, i) => h("span", { style: { top: `${i * 50}%` } }, String(Math.round(v))))),
     h("div", { class: "bplot" },
       h("i", { class: "gl", style: { top: "0" } }), h("i", { class: "gl", style: { top: "50%" } }),
-      bars.map((b) => h("div", { class: `bcol${today(b) ? " now" : ""}`, title: `${when(b)} · ${b.total}` },
-        b.total > 0 && h("div", { class: "bstack", style: { height: `${(b.total / max) * 100}%` } },
-          b.parts.map((p) => h("i", {
-            style: { flex: `${p.n} 0 0px`, background: data.byId.get(p.block)?.colour ?? OTHER },
-            title: `${when(b)} · ${data.byId.get(p.block)?.name ?? "Other"} ${p.n}`,
-          })))))),
+      bars.map((b) => h("div", { class: `bcol${today(b) ? " now" : ""}`, title: title(b) },
+        b.total > 0 && h("i", { class: "bfill", style: { height: `${(b.total / max) * 100}%` } })))),
     h("span"),
     h("div", { class: "blabels" }, bars.map((b, i) => h("span", { class: today(b) ? "now" : "" }, label(b, i)))));
 }
@@ -401,9 +386,10 @@ function heatmap(data) {
   return h("div", { class: "heatmap", role: "img", "aria-label": "Blocked tries by weekday and hour" }, cells);
 }
 
+/** A limit's use day by day, against the limit (the dashed line); a day over it is drawn full. */
 function limitBars(limit) {
   const days = limit.days;
-  const W = 160, H = 34;
+  const W = 160, H = 22;
   const max = Math.max(limit.daily, ...days.map((d) => d.used ?? 0)) || 1;
   const step = W / days.length;
   const bw = Math.max(2, step * 0.7);
@@ -416,45 +402,45 @@ function limitBars(limit) {
     s("line", { x1: 0, x2: W, y1: line, y2: line, className: "allow" }));
 }
 
-function blockStatCard(p, data, actions, range) {
-  const limit = p.limit;
-  const pct = limit ? Math.min(1, limit.used / Math.max(1, limit.allowance)) : 0;
-  return h("section", { class: "card bstat", style: { "--c": p.colour, "--ink": inkOn(p.colour) } },
-    h("div", { class: "bstat-head" }, chip(data.byId.get(p.id), actions.pickBlock),
-      h("span", { class: "streak", title: "Clean days" }, icon("fire"), h("b", {}, String(p.streak)), h("span", {}, p.streak === 1 ? "day" : "days"))),
-    h("div", { class: "bstat-figs" },
-      h("div", {}, h("b", {}, String(p.tries)), h("span", {}, "tries")),
-      h("div", {}, h("b", {}, String(p.unlocks)), h("span", {}, p.unlocks === 1 ? "unlock" : "unlocks")),
-      // A limit or a schedule opens by minutes bought, not by unlocks: those are its time open.
-      p.unlocks === 0 && p.boughtMs > 0
-        ? h("div", {}, h("b", {}, duration(p.boughtMs)), h("span", {}, "bought"))
-        : h("div", {}, h("b", {}, duration(p.unlockedMs)), h("span", {}, "unlocked"))),
-    limit && h("div", { class: "bstat-limit" },
-      h("div", { class: "row-between" },
-        h("span", { class: "label" }, range === "today" ? "Today" : "A day"),
-        h("span", { class: "value" }, limit.tracked ? `${duration(limit.used / Math.max(1, range === "today" ? 1 : limit.tracked))} / ${duration(limit.daily)}` : `– / ${duration(limit.daily)}`)),
-      h("div", { class: "meter" }, h("i", { style: { width: `${pct * 100}%` } })),
-      range !== "today" && limitBars(limit)));
+/** A figure in the By block list: its column says what it is, or, too narrow for columns, its own label. */
+const fig = (value, label, title = null) => h("span", { class: "bb-fig", title }, h("b", {}, value), h("small", {}, label));
+
+/**
+ * Each block in a row: its tries, its time open (unlocked and bought), its clean days in a row,
+ * and, for a block with a daily limit, its use a day against the limit. A name shows that block alone.
+ */
+function byBlock(data, actions, view) {
+  const withLimit = data.perBlock.some((p) => p.limit);
+  const cls = `bb-row${withLimit ? " with-limit" : ""}`;
+  return h("div", { class: "bb" },
+    h("div", { class: `${cls} bb-head`, "aria-hidden": "true" }, h("span"), h("span", {}, "Tries"), h("span", {}, "Open"), h("span", {}, "Clean days"), withLimit && h("span", {}, "A day")),
+    data.perBlock.map((p) => {
+      const limit = p.limit;
+      const perDay = limit?.tracked ? limit.used / (view.range === "today" ? 1 : limit.tracked) : null;
+      return h("div", { class: cls },
+        view.block ? h("span", { class: "bb-name" }, p.name)
+          : h("button", { type: "button", class: "bb-name", title: p.name, onclick: () => actions.pickBlock(p.id) }, p.name),
+        fig(String(p.tries), p.tries === 1 ? "try" : "tries"),
+        fig(duration(p.unlockedMs + p.boughtMs), "open", `Unlocked ${duration(p.unlockedMs)} · bought ${duration(p.boughtMs)}`),
+        fig(String(p.streak), p.streak === 1 ? "clean day" : "clean days"),
+        withLimit && h("span", { class: "bb-limit" }, limit && [
+          h("span", { class: "value" }, `${perDay == null ? "–" : duration(perDay)} / ${duration(limit.daily)}`),
+          view.range === "today"
+            ? h("div", { class: "meter thin" }, h("i", { style: { width: `${Math.min(1, limit.used / Math.max(1, limit.allowance)) * 100}%` } }))
+            : limitBars(limit)]));
+    }));
 }
 
-function topList(data, actions, siteIcon) {
+/** What was tried most, as the hub ranks things: a name, a bar, a count; its block and devices in its title. */
+function topList(data) {
   const max = Math.max(1, ...data.top.map((t) => t.n));
-  return data.top.map((t) => {
-    const b = data.byId.get(t.block);
-    // The site's own icon over its letter: one the site hasn't given leaves the letter.
-    const letter = h("span", { class: "letter", style: { "--c": b?.colour ?? OTHER, "--ink": inkOn(b?.colour ?? OTHER) } }, (t.name[0] ?? "?").toUpperCase());
-    return h("div", { class: "top-row" },
-      h("span", { class: "top-pic" }, letter, t.site && siteIcon?.(t.key)),
-      h("div", { class: "top-main" },
-        h("div", { class: "row-between" },
-          h("span", { class: "top-name" }, t.name),
-          h("span", { class: "top-devs" },
-            t.phone > 0 && h("span", { title: "Phone" }, deviceIcon("phone"), String(t.phone)),
-            t.laptop > 0 && h("span", { title: "Laptop" }, deviceIcon("laptop"), String(t.laptop)),
-            h("b", {}, String(t.n)))),
-        h("div", { class: "meter thin" }, h("i", { style: { width: `${(t.n / max) * 100}%`, background: b?.colour ?? OTHER } }))),
-      b && chip(b, actions.pickBlock));
-  });
+  return h("div", { class: "ranked" }, data.top.map((t) => {
+    const title = [data.byId.get(t.block)?.name, t.phone > 0 && `Phone ${t.phone}`, t.laptop > 0 && `Laptop ${t.laptop}`].filter(Boolean).join(" · ");
+    return h("div", { class: "rank", title },
+      h("span", { class: "rank-name" }, t.name),
+      h("span", { class: "rank-bar" }, h("i", { style: { width: `${(t.n / max) * 100}%` } })),
+      h("b", {}, String(t.n)));
+  }));
 }
 
 function rowText(r) {
@@ -469,44 +455,25 @@ function rowText(r) {
   }
 }
 
-const ROW_ICON = { blocked: "blocked", habit: "task", unlock: "lockOpen", bought: "moreTime", break: "coffee", emergency: "warning" };
-
-/** A day's tries as one strip, each block its share, as long as the day is busy against the busiest. */
-function dayStrip(d, data, most) {
-  const by = new Map();
-  for (const r of d.rows) if (r.t === "blocked") by.set(r.blocks[0] ?? null, (by.get(r.blocks[0] ?? null) ?? 0) + r.n);
-  const order = [...data.byId.keys(), null].filter((id) => by.has(id));
-  return h("span", { class: "hstrip" }, h("span", { class: "hstrip-fill", style: { width: `${most ? (d.tries / most) * 100 : 0}%` } },
-    order.map((id) => h("i", { style: { flex: `${by.get(id)} 0 0px`, background: data.byId.get(id)?.colour ?? OTHER }, title: `${data.byId.get(id)?.name ?? "Other"} ${by.get(id)}` }))));
-}
-
 function historyList(data, view, actions, zone) {
   const clock = clockIn(zone);
   const days = data.timeline.slice(0, view.historyDays);
   if (!days.length) return h("p", { class: "empty" }, "Nothing yet");
-  const most = Math.max(1, ...days.map((d) => d.tries));
   // The latest day is open unless closed; the others closed unless opened.
   const isOpen = (d, i) => (view.openDays ?? {})[d.day] ?? i === 0;
   return [
     days.map((d, i) => {
       const open = isOpen(d, i);
-      const habitsDone = d.rows.filter((r) => r.t === "habit").length;
-      const unlocked = d.rows.filter((r) => r.t === "unlock").reduce((a, r) => a + (r.ms ?? 0), 0);
       return h("div", { class: `hday${open ? " open" : ""}` },
         h("button", { type: "button", class: "hday-head", "aria-expanded": String(open), onclick: () => actions.toggleDay(d.day, !open) },
           icon(open ? "chevronDown" : "chevronRight", "chev"),
           h("b", {}, dayTitle(d.day, data.today)),
-          dayStrip(d, data, most),
-          h("span", { class: "hday-figs" },
-            h("span", { title: "Blocked tries" }, icon("blocked"), String(d.tries)),
-            habitsDone > 0 && h("span", { class: "habits", title: "Habits done" }, icon("task"), String(habitsDone)),
-            unlocked > 0 && h("span", { class: "unlocked", title: "Unlocked" }, icon("lockOpen"), duration(unlocked)))),
+          d.tries > 0 && h("span", { class: "hday-tries" }, d.tries === 1 ? "1 try" : `${d.tries} tries`)),
         open && h("div", { class: "hrows" }, d.rows.map((r) => h("div", { class: `hrow k-${r.t}` },
           h("span", { class: "htime" }, r.n > 1 ? `${clock.format(r.from)}–${clock.format(r.at)}` : clock.format(r.at)),
           h("span", { class: "hdev", title: r.dev === "phone" ? "Phone" : r.dev === "laptop" ? "Laptop" : "Both" }, deviceIcon(r.dev)),
-          h("span", { class: "hkind" }, icon(ROW_ICON[r.t] ?? "globe")),
           h("span", { class: "htext" }, rowText(r)),
-          h("span", { class: "hchips" }, r.blocks.length ? r.blocks.map((id) => chip(data.byId.get(id), actions.pickBlock)) : r.t === "blocked" ? chip(null) : null)))));
+          h("span", { class: "hblock" }, r.blocks.map((id) => data.byId.get(id)?.name).filter(Boolean).join(", "))))));
     }),
     data.timeline.length > view.historyDays && h("button", { type: "button", class: "btn more", onclick: actions.more }, "More"),
   ];
@@ -515,29 +482,29 @@ function historyList(data, view, actions, zone) {
 /**
  * The Insights page into [root]. [view]: {range, device, block, historyDays}; [actions]:
  * {setRange, setDevice, pickBlock (an id, or null to show every block), more, toggleDay (a day,
- * open or not)}; [siteIcon]: an
- * <img> for a host, where the page has them.
+ * open or not)}.
  */
-export function renderInsights(root, input, view, actions, siteIcon = null) {
+export function renderInsights(root, input, view, actions) {
   const data = compute(input, view);
   const picked = view.block && data.byId.get(view.block);
   const f = data.figures;
   root.replaceChildren(
     h("div", { class: "ins-controls" },
       seg([["today", "Today"], ["week", "7 days"], ["month", "30 days"]], view.range, actions.setRange),
-      seg([["all", "All"], ["phone", "Phone", "phone"], ["laptop", "Laptop", "laptop"]], view.device, actions.setDevice, "devices"),
-      picked && h("span", { class: "picked" }, chip(picked, null), h("button", { type: "button", class: "round small", title: "Every block", onclick: () => actions.pickBlock(null) }, icon("close")))),
+      seg([["all", "All"], ["phone", "Phone"], ["laptop", "Laptop"]], view.device, actions.setDevice, "devices"),
+      picked && h("span", { class: "picked" }, h("span", {}, picked.name),
+        h("button", { type: "button", class: "icon-btn small", title: "Every block", "aria-label": "Every block", onclick: () => actions.pickBlock(null) }, icon("close")))),
     h("div", { class: "stats" },
-      stat("blocked", "tries", String(f.tries), "Blocked tries"),
-      stat("lockOpen", "unlocked", duration(f.unlockedMs), "Unlocked"),
-      stat("moreTime", "bought", duration(f.boughtMs), "Bought"),
-      !picked && stat("coffee", "breaks", String(f.breaks), f.breaks === 1 ? "Break" : "Breaks"),
-      stat("task", "habits", String(f.habits), "Habits done")),
+      stat(String(f.tries), "Blocked tries"),
+      stat(duration(f.unlockedMs), "Unlocked"),
+      stat(duration(f.boughtMs), "Bought"),
+      !picked && stat(String(f.breaks), f.breaks === 1 ? "Break" : "Breaks"),
+      stat(String(f.habits), "Habits done")),
     h("div", { class: "ins-grid" },
-      h("section", { class: "card chart-card wide" }, h("h3", { class: "section" }, "Blocked tries"), barsChart(data)),
-      h("section", { class: "card heat-card" }, h("h3", { class: "section" }, "When"), heatmap(data)),
-      h("section", { class: "card top-card" }, h("h3", { class: "section" }, "Most tried"),
-        data.top.length ? topList(data, actions, siteIcon) : h("p", { class: "empty" }, "Nothing yet"))),
-    data.perBlock.length > 0 && h("div", { class: "bstats" }, data.perBlock.map((p) => blockStatCard(p, data, actions, view.range))),
+      h("section", { class: "card wide" }, h("h3", { class: "section" }, "Blocked tries"), barsChart(data)),
+      h("section", { class: "card" }, h("h3", { class: "section" }, "When"), heatmap(data)),
+      h("section", { class: "card" }, h("h3", { class: "section" }, "Most tried"),
+        data.top.length ? topList(data) : h("p", { class: "empty" }, "Nothing yet")),
+      data.perBlock.length > 0 && h("section", { class: "card wide" }, h("h3", { class: "section" }, "By block"), byBlock(data, actions, view))),
     h("section", { class: "card history" }, h("h3", { class: "section" }, "History"), historyList(data, view, actions, input.zone)));
 }
