@@ -61,6 +61,27 @@ fun eventsFromElsewhere(body: String, thisDevice: String): List<TelemetryEvent> 
 }
 
 /**
+ * The server's record of daily limit use (`GET /limits`: {"limits": {block: {device id: {day
+ * start ms: ms}}}}), as block -> device id -> day start -> ms. Anything malformed is left out,
+ * since this only adds to a screen.
+ */
+fun limitsFrom(body: String): Map<String, Map<String, Map<Long, Long>>> {
+    val root = runCatching { Json.parseToJsonElement(body) }.getOrNull() as? JsonObject
+    val limits = root?.get("limits") as? JsonObject ?: return emptyMap()
+    return limits.mapNotNull { (block, byDevice) ->
+        val devices = (byDevice as? JsonObject)?.mapNotNull { (device, days) ->
+            val kept = (days as? JsonObject)?.mapNotNull { (day, ms) ->
+                val start = day.toLongOrNull() ?: return@mapNotNull null
+                val used = (ms as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it >= 0 } ?: return@mapNotNull null
+                start to used
+            }?.toMap().orEmpty()
+            if (kept.isEmpty()) null else device to kept
+        }?.toMap().orEmpty()
+        if (devices.isEmpty()) null else block to devices
+    }.toMap()
+}
+
+/**
  * Append-only local event log behind the Insights history. One `;`-separated line per event (the
  * `.jsonl` name is historical). It stays on the phone (brainstorm §1) unless sync with the
  * user's own server is set up: then [SharedSync] also sends it there, for the weekly review.

@@ -49,7 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.hardcore.HardcoreGuard
 import com.xern.xrnrule.app.hardcore.PasswordTries
-import com.xern.xrnrule.app.ui.theme.LocalKinds
+import com.xern.xrnrule.app.ui.theme.DataColor
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEdits
 import com.xern.xrnrule.domain.EnforcementTier
@@ -125,7 +125,7 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: World
             title = request.title,
             detail = request.detail,
             chips = chips,
-            color = chips.firstOrNull()?.second ?: LocalKinds.current.strict.color,
+            color = DataColor,
             leftMs = leftMs,
             usePassword = usePassword,
             password = password,
@@ -149,8 +149,8 @@ fun LoosenGuardDialog(request: LoosenRequest, guard: HardcoreGuard, store: World
 
 /**
  * What the guard shows: the wait as a big ring counting down [LOOSEN_WAIT_MS] (in [color], the
- * block's), the change in one line ([title]; [detail] is for screen readers), the blocks it
- * touches as their chips, and one Cancel. Go ahead comes up only once the wait is over. A
+ * data orange), the change in one line ([title]; [detail] is for screen readers), the blocks it
+ * touches as their dots and names, and one Cancel. Go ahead comes up only once the wait is over. A
  * HARDCORE change asks for the password instead of the wait.
  */
 @Composable

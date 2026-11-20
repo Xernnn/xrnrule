@@ -89,4 +89,26 @@ class TelemetryLinesTest {
         ]}"""
         assertTrue(eventsFromElsewhere(odd, "phone").isEmpty())
     }
+
+    /** Insights sets a limit's use a day against the limit from the server's record of each day. */
+    @Test
+    fun theServersLimitRecordReadsBackByBlockDeviceAndDay() {
+        val body = """{"limits": {
+            "b1": {"phone-1a2b": {"1763470800000": 1200000, "1763557200000": 600000}, "laptop-9f8e": {"1763470800000": 300000}},
+            "b2": {"phone-1a2b": {"bad": 5, "1763470800000": -1, "1763557200000": "60000", "1763643600000": 60000.5}},
+            "b3": [],
+            "b4": {"phone-1a2b": []}
+        }}"""
+        assertEquals(
+            mapOf(
+                "b1" to mapOf(
+                    "phone-1a2b" to mapOf(1763470800000L to 1_200_000L, 1763557200000L to 600_000L),
+                    "laptop-9f8e" to mapOf(1763470800000L to 300_000L),
+                ),
+            ),
+            limitsFrom(body),
+        )
+        assertTrue(limitsFrom("not json").isEmpty())
+        assertTrue(limitsFrom("""{"limits": 3}""").isEmpty())
+    }
 }

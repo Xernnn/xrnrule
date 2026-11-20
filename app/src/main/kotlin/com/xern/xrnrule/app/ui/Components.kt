@@ -84,6 +84,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.ui.theme.ChartPalette
+import com.xern.xrnrule.app.ui.theme.Tones
+import com.xern.xrnrule.app.ui.theme.TonesDark
+import com.xern.xrnrule.app.ui.theme.TonesLight
 import com.xern.xrnrule.app.ui.theme.KindColors
 import com.xern.xrnrule.app.ui.theme.StatusPalette
 import com.xern.xrnrule.app.ui.theme.StatusStyle
@@ -143,6 +146,10 @@ fun statusStyleFor(state: BlockState): StatusStyle {
 @Composable
 fun chartSeriesColor(): Color =
     if (MaterialTheme.colorScheme.background.luminanceIsDark()) ChartPalette.seriesDark else ChartPalette.seriesLight
+
+/** The muted colours of small marks ([Tones]) for the theme in use. */
+@Composable
+fun tones(): Tones = if (MaterialTheme.colorScheme.background.luminanceIsDark()) TonesDark else TonesLight
 
 private fun Color.luminanceIsDark(): Boolean =
     (0.299 * red + 0.587 * green + 0.114 * blue) < 0.5
