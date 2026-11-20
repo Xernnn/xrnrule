@@ -79,11 +79,17 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Backup.** Export your blocks to a file and import them on a new install.
 - **Insights.** Both devices' history (the laptop's comes through the sync server), for today,
   7 or 30 days, all devices or one: blocked tries, time unlocked, minutes bought, breaks and
-  habits; tries per day and by hour of the week; a card per block (tries, unlocks, today's limit
-  on each device, clean days in a row); the top apps and sites; and a day-by-day timeline. On the
-  phone a block's colour is its place in the block list. A habit or an unlock both devices logged
-  counts once. The laptop's page and the server's status page show the same Insights in greys and
-  xrnrule's orange alone, a row per block, where a block goes by its name.
+  habits, each over the same figure for the stretch before (once the log reaches back to its
+  first day); tries per day (per hour on Today) stacked by block, each column's split shown on
+  hover or tap, and when in the week they come; the most tried apps and sites, and on which
+  device; a row per block (tries and their trend, unlocks and time open, minutes bought, a daily
+  limit's use a day against it, clean days in a row); on the phone, time per app and site; and a
+  day-by-day history. A block has a muted tone from its place in the block list, shown only small:
+  a dot before its name, its part of a bar or a day's strip, its sparkline, the marker on its
+  card. A habit or an unlock both devices logged counts once. On the laptop's page and the
+  server's status page each block's card also says its day so far ("4 tries · 12 min open") and
+  draws today's blocked hours as a strip with now marked; the status page says when each device
+  last checked in, the laptop's page when the phone did.
 - Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
   turns its autostart off, which Xiaomi phones do at every install.
 

@@ -595,6 +595,8 @@ class LocalServer(
         val today: UiDay,
         /** When the home server last answered, 304s and long polls included. */
         val lastContactWall: Long? = null,
+        /** When the phone last checked in with the home server, as the server last said; for the page's title. */
+        val phoneSeenWall: Long? = null,
         val extensionVersion: String?,
         val extensionNoIncognito: Boolean = false,
         val extensionLatest: String?,
@@ -633,6 +635,7 @@ class LocalServer(
             summary = BlockTexts.summary(engine, world, clock),
             today = today(world),
             lastContactWall = shared.lastContactWall,
+            phoneSeenWall = shared.phoneSeenWall,
             extensionVersion = foreground.extensionVersion,
             extensionNoIncognito = foreground.incognitoAllowed == false,
             extensionLatest = BUILT_WITH_EXTENSION?.takeIf { latest -> foreground.extensionVersion?.let { ExtensionApi.isOlder(it, latest) } == true },

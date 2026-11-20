@@ -139,6 +139,9 @@ class SharedSyncClient(
     /** How long the phone has been quiet, or null while it's fine or nobody can tell. */
     fun phoneQuietMs(nowWall: Long): Long? = phoneSeen?.let { (seen, asked) -> PhoneWatch.quietMs(seen, asked, nowWall) }
 
+    /** The phone's last check-in as the server last said (it's asked every [PhoneWatch.CHECK_MS]), or null. */
+    val phoneSeenWall: Long? get() = phoneSeen?.first
+
     @Serializable
     private data class Base(val etag: String, val state: SharedState)
 

@@ -10,7 +10,7 @@
 // that covers it. A habit done or an unlock is shared, so each device logs it; one of each is
 // kept. The rules are the phone's (app/.../ui/InsightsModel.kt), so both show the same figures.
 
-import { h, s, icon, deviceIcon, deviceOf, duration } from "./ui.js";
+import { h, s, icon, deviceIcon, deviceOf, duration, toneAt, toneDot, OTHER_TONE, limitTone, meter } from "./ui.js";
 
 export const RANGES = { today: 1, week: 7, month: 30 };
 const DAY = 86_400_000;
@@ -22,14 +22,15 @@ const RUN_MS = 30 * 60_000;
 // ---- blocks --------------------------------------------------------------------------------
 
 /**
- * The blocks as the insights need them, in list order, from either page's
- * shape: the laptop's /api/history ({id, name, apps, sites, except, dailyMs, perDevice}) or the
- * shared state's ({id, name, targetPackages, targetDesktopApps, targetSites, exceptSites, …}).
+ * The blocks as the insights need them, in list order with their tones (ui.js TONES), from either
+ * page's shape: the laptop's /api/history ({id, name, apps, sites, except, dailyMs, perDevice}) or
+ * the shared state's ({id, name, targetPackages, targetDesktopApps, targetSites, exceptSites, …}).
  */
 export function normalizeBlocks(list) {
-  return (list ?? []).map((b) => ({
+  return (list ?? []).map((b, i) => ({
     id: b.id,
     name: b.name || "Block",
+    tone: toneAt(i),
     apps: new Set(b.apps ?? [...(b.targetPackages ?? []), ...(b.targetDesktopApps ?? [])]),
     sites: (b.sites ?? b.targetSites ?? []).map((x) => String(x).split("/")[0].toLowerCase()),
     except: (b.except ?? b.exceptSites ?? []).map((x) => String(x).toLowerCase()),
@@ -95,6 +96,12 @@ export function dayStart(zone, day) {
 
 export const hourOf = (zone, ms) => parts(zone, ms).hour;
 export const weekdayOf = (zone, ms) => parts(zone, ms).iso;
+
+/** [ms] where the devices are: its ISO weekday and minute of the day. */
+export function clockAt(zone, ms) {
+  const p = parts(zone, ms);
+  return { iso: p.iso, minute: p.hour * 60 + p.minute };
+}
 
 // ---- events --------------------------------------------------------------------------------
 
@@ -169,7 +176,8 @@ const eventBlocks = (e, blocks) => {
  * "phone", "laptop"), of one block or all ([block]: an id or null).
  *
  * input: {events (merged, mergeShared), blocks (normalizeBlocks), limits ({block: {device id:
- * {day start ms: ms}}}), now, zone}
+ * {day start ms: ms}}}), now, zone, usedToday? ({block: ms}, today's limit use as the shared state
+ * has it: what a limit shows, as today's, when the server has kept no day of it)}
  */
 export function compute(input, { range = "week", device = "all", block = null } = {}) {
   const { events = [], blocks = [], limits = {}, now, zone } = input;
@@ -184,13 +192,19 @@ export function compute(input, { range = "week", device = "all", block = null } 
   const inRange = shown.filter((e) => e.at >= from && e.at <= now);
   const tries = inRange.filter((e) => e.t === "blocked");
 
-  const figures = {
-    tries: tries.length,
-    unlockedMs: inRange.filter((e) => e.t === "unlock").reduce((a, e) => a + (e.ms ?? 0), 0),
-    boughtMs: inRange.filter((e) => e.t === "bought").reduce((a, e) => a + (e.ms ?? 0), 0),
-    breaks: block ? 0 : inRange.filter((e) => e.t === "break").length,
-    habits: inRange.filter((e) => e.t === "habit").length,
-  };
+  const figuresOf = (list) => ({
+    tries: list.filter((e) => e.t === "blocked").length,
+    unlockedMs: list.filter((e) => e.t === "unlock").reduce((a, e) => a + (e.ms ?? 0), 0),
+    boughtMs: list.filter((e) => e.t === "bought").reduce((a, e) => a + (e.ms ?? 0), 0),
+    breaks: block ? 0 : list.filter((e) => e.t === "break").length,
+    habits: list.filter((e) => e.t === "habit").length,
+  });
+  const figures = figuresOf(inRange);
+  // The period before, as long as this one (yesterday, the 7 or the 30 days before), once the log
+  // reaches back to its first day: a log begun since would say "0 before" about days it never saw.
+  const logStart = events.reduce((a, e) => Math.min(a, e.at), Infinity);
+  const beforeFrom = dayStart(zone, first - n);
+  const before = logStart < dayStart(zone, first - n + 1) ? figuresOf(shown.filter((e) => e.at >= beforeFrom && e.at < from)) : null;
 
   // Blocked tries over time, and each block's part of them: by hour for today, else by day.
   const order = [...blocks.map((b) => b.id), null];
@@ -211,15 +225,30 @@ export function compute(input, { range = "week", device = "all", block = null } 
     bar.parts.set(id, (bar.parts.get(id) ?? 0) + 1);
   }
   const barList = bars.map((b) => ({ ...b, parts: order.filter((id) => b.parts.has(id)).map((id) => ({ block: id, n: b.parts.get(id) })) }));
+  // Today's hours still to come draw nothing, and a block's sparkline stops at now.
+  const nowHour = hourOf(zone, now);
+  const sparkLength = range === "today" ? nowHour + 1 : size;
 
-  // Weekday × hour.
+  // Weekday × hour, and its busiest hour (the first, Monday 00:00 onwards, as the phone has it).
   const heat = Array.from({ length: 7 }, () => new Array(24).fill(0));
   for (const e of tries) heat[weekdayOf(zone, e.at) - 1][hourOf(zone, e.at)]++;
   const heatMax = Math.max(0, ...heat.flat());
+  let peak = null;
+  heat.forEach((row, day) => row.forEach((count, hour) => {
+    if (count === heatMax && heatMax > 0 && !peak) peak = { day, hour, n: count };
+  }));
 
   // Only days the log covers count: an empty log has no clean days to show.
   const firstDay = shown.length ? dayOf(zone, Math.min(...shown.map((e) => e.at))) : today + 1;
   const DIRTY = new Set(["blocked", "bought", "emergency"]);
+
+  // A limit's use a day, from the server's record (GET /limits); with no day of it there (a
+  // server from before /limits, or nothing kept yet), today's as the shared state has it.
+  const limitOf = (b) => {
+    const use = limitUse(limits[b.id], b, { zone, first, today, device });
+    const used = input.usedToday?.[b.id];
+    return !use.tracked && device === "all" && Number.isFinite(used) ? { ...use, today: used } : use;
+  };
 
   const perBlock = blocks.filter((b) => !block || b.id === block).map((b) => {
     const mine = inRange.filter((e) => eventBlocks(e, blocks).includes(b.id));
@@ -230,12 +259,13 @@ export function compute(input, { range = "week", device = "all", block = null } 
     let streak = 0;
     for (let d = today; d >= firstDay && !dirtyOn.has(d); d--) streak++;
     return {
-      id: b.id, name: b.name,
+      id: b.id, name: b.name, tone: b.tone,
       tries: mine.filter((e) => e.t === "blocked").length,
+      spark: bars.slice(0, sparkLength).map((x) => x.parts.get(b.id) ?? 0),
       unlocks: unlocks.length,
       unlockedMs: unlocks.reduce((a, e) => a + (e.ms ?? 0), 0),
       boughtMs: mine.filter((e) => e.t === "bought").reduce((a, e) => a + (e.ms ?? 0), 0),
-      limit: b.dailyMs > 0 ? limitUse(limits[b.id], b, { zone, first, today, device }) : null,
+      limit: b.dailyMs > 0 ? limitOf(b) : null,
       streak,
     };
   });
@@ -252,7 +282,7 @@ export function compute(input, { range = "week", device = "all", block = null } 
   }
   const top = [...tops.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)).slice(0, 8);
 
-  return { today, first, days: n, range, figures, bars: barList, heat, heatMax, perBlock, top, timeline: timeline(inRange, blocks, zone), byId };
+  return { today, first, days: n, range, nowHour, figures, before, bars: barList, heat, heatMax, peak, perBlock, top, timeline: timeline(inRange, blocks, zone), byId };
 }
 
 /**
@@ -302,18 +332,60 @@ export function timeline(events, blocks, zone) {
   for (const r of rows) {
     const day = dayOf(zone, r.at);
     let d = days[days.length - 1];
-    if (!d || d.day !== day) days.push((d = { day, rows: [], tries: 0 }));
+    if (!d || d.day !== day) days.push((d = { day, rows: [], tries: 0, unlocks: 0, unlockedMs: 0, boughtMs: 0, parts: new Map() }));
     d.rows.push(r);
-    if (r.t === "blocked") d.tries += r.n;
+    if (r.t === "blocked") {
+      d.tries += r.n;
+      const id = r.blocks[0] ?? null;
+      d.parts.set(id, (d.parts.get(id) ?? 0) + r.n);
+    } else if (r.t === "unlock") {
+      d.unlocks++;
+      d.unlockedMs += r.ms ?? 0;
+    } else if (r.t === "bought") {
+      d.boughtMs += r.ms ?? 0;
+    }
   }
   return days;
+}
+
+/**
+ * Each block's day so far ({tries, unlocks, unlockedMs, boughtMs} by id), for the Blocks tab's
+ * cards: the same counting as compute's, without the rest.
+ */
+export function dayByBlock({ events = [], blocks = [], now, zone }) {
+  const from = dayStart(zone, dayOf(zone, now));
+  const out = new Map(blocks.map((b) => [b.id, { tries: 0, unlocks: 0, unlockedMs: 0, boughtMs: 0 }]));
+  for (const e of events) {
+    if (e.at < from || e.at > now) continue;
+    const day = out.get(blockFor(e, blocks));
+    if (!day) continue;
+    if (e.t === "blocked") day.tries++;
+    else if (e.t === "unlock") {
+      day.unlocks++;
+      day.unlockedMs += e.ms ?? 0;
+    } else if (e.t === "bought") day.boughtMs += e.ms ?? 0;
+  }
+  return out;
+}
+
+/** "4 tries · 12 min open · 5 min bought": a block's day in one line, nothing that is nought but its tries. */
+export function dayLine(day) {
+  if (!day) return "";
+  return [
+    `${day.tries} ${day.tries === 1 ? "try" : "tries"}`,
+    day.unlockedMs > 0 && `${duration(day.unlockedMs)} open`,
+    day.boughtMs > 0 && `${duration(day.boughtMs)} bought`,
+  ].filter(Boolean).join(" · ");
 }
 
 // ---- the view ------------------------------------------------------------------------------
 
 const WEEKDAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
-const shortDay = new Intl.DateTimeFormat(undefined, { day: "numeric", timeZone: "UTC" });
+const tickFmt = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
+/** 0 for a Monday: 1970-01-01, day 0, was a Thursday. */
+const weekdayIndex = (day) => (((day + 3) % 7) + 7) % 7;
+const hh = (hour) => `${String(hour).padStart(2, "0")}:00`;
 
 /** "Today", "Yesterday", "Mon 16 Nov". */
 function dayTitle(day, today) {
@@ -336,9 +408,17 @@ function seg(options, value, onPick, cls = "") {
     h("button", { type: "button", class: v === value ? "on" : "", "aria-pressed": String(v === value), onclick: () => onPick(v) }, label)));
 }
 
-/** A figure and what it counts: the label first, as the hub's tiles have it. */
-function stat(value, label) {
-  return h("div", { class: "stat" }, h("span", { class: "label" }, label), h("b", {}, value));
+/** A block's tone and name by its id; what no block covers is grey "Other". */
+const toneOf = (data, id) => data.byId.get(id)?.tone ?? OTHER_TONE;
+const nameOf = (data, id) => data.byId.get(id)?.name ?? "Other";
+
+/** A block's dot and its name, side by side wherever its tone shows. */
+const named = (data, id) => [toneDot(toneOf(data, id)), h("span", { class: "bname" }, nameOf(data, id))];
+
+/** A figure and what it counts, the label first as the hub's tiles have it; the period before's under it, small. */
+function stat(value, label, before) {
+  return h("div", { class: "stat" }, h("span", { class: "label" }, label), h("b", {}, value),
+    before != null && h("span", { class: "before" }, `${before} before`));
 }
 
 /** A round top for the chart, a little above its busiest column. */
@@ -349,27 +429,82 @@ function niceMax(max) {
   return 10 * p;
 }
 
+/** A card's heading, with a figure at its right. */
+const cardHead = (title, figure = null) => h("div", { class: "card-head" }, h("h3", { class: "section" }, title), figure && h("span", { class: "head-fig" }, figure));
+
 /**
- * Blocked tries over time: a column per hour or day, in the one data colour. A block is told by
- * its name, not a colour, so each block's part is in the column's title, not drawn.
+ * Blocked tries over time: a column per hour or day, stacked by block in their tones, the first
+ * block at the bottom. Hovering, focusing or tapping a column shows its total and each block's
+ * part beside it. Today's column is marked; today's hours still to come stay empty.
  */
 function barsChart(data) {
   const bars = data.bars;
+  const hourly = data.range === "today";
   const max = niceMax(Math.max(1, ...bars.map((b) => b.total)));
-  const labelEvery = bars.length > 14 ? 5 : bars.length > 7 ? 2 : 1;
-  const label = (b, i) => b.hour != null ? (b.hour % 6 === 0 ? String(b.hour).padStart(2, "0") : "")
-    : (bars.length - 1 - i) % labelEvery === 0 ? (bars.length <= 7 ? WEEKDAY[(((b.day + 3) % 7) + 7) % 7] : shortDay.format(new Date(b.day * DAY))) : "";
-  const when = (b) => b.hour != null ? `${String(b.hour).padStart(2, "0")}:00` : dayTitle(b.day, data.today);
-  const today = (b) => b.hour == null && b.day === data.today;
-  const title = (b) => [`${when(b)} · ${b.total}`, ...b.parts.map((p) => `${data.byId.get(p.block)?.name ?? "Other"} ${p.n}`)].join("\n");
-  return h("div", { class: "bars", role: "img", "aria-label": "Blocked tries" },
+  /** [text, class] under a column, or null: 7 days by weekday, 30 by date every fifth, hours every third. */
+  const tick = (b, i) => {
+    if (hourly) return b.hour % 3 ? null : [String(b.hour).padStart(2, "0"), b.hour % 6 ? "minor" : ""];
+    if (bars.length <= 7) return [WEEKDAY[weekdayIndex(b.day)], ""];
+    const back = bars.length - 1 - i;
+    return back % 5 ? null : [tickFmt.format(new Date(b.day * DAY)), back % 10 ? "minor" : ""];
+  };
+  const isNow = (b) => (hourly ? b.hour === data.nowHour : b.day === data.today);
+  const later = (b) => hourly && b.hour > data.nowHour;
+  const when = (b) => (hourly ? `${hh(b.hour)}–${hh((b.hour + 1) % 24)}` : dayTitle(b.day, data.today));
+
+  const plot = h("div", { class: "bplot" }, h("i", { class: "gl", style: { top: "0" } }), h("i", { class: "gl", style: { top: "50%" } }));
+  const tip = h("div", { class: "btip", hidden: true, "aria-hidden": "true" });
+  let on = null;
+  const hide = () => {
+    tip.hidden = true;
+    on?.classList.remove("on");
+    on = null;
+  };
+  const show = (b, col) => {
+    on?.classList.remove("on");
+    on = col;
+    col.classList.add("on");
+    tip.replaceChildren(
+      h("div", { class: "btip-head" }, h("span", {}, when(b)), h("b", {}, String(b.total))),
+      ...b.parts.map((p) => h("div", { class: "btip-row" }, named(data, p.block), h("b", {}, String(p.n)))));
+    tip.hidden = false;
+    // Above its column, or beside it where a tall column leaves no room.
+    const width = plot.clientWidth;
+    const w = tip.offsetWidth;
+    const x = col.offsetLeft + col.offsetWidth / 2;
+    let left = Math.min(Math.max(0, x - w / 2), width - w);
+    let top = plot.clientHeight * (1 - b.total / max) - tip.offsetHeight - 8;
+    if (top < 0) {
+      top = 0;
+      left = x + col.offsetWidth / 2 + 6;
+      if (left + w > width) left = Math.max(0, x - col.offsetWidth / 2 - 6 - w);
+    }
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+  };
+  for (const b of bars) {
+    const label = [`${when(b)} · ${b.total}`, ...b.parts.map((p) => `${nameOf(data, p.block)} ${p.n}`)].join(", ");
+    const col = h("div", { class: `bcol${isNow(b) ? " now" : ""}${later(b) ? " later" : ""}`, tabindex: later(b) ? null : "0", "aria-label": label },
+      b.total > 0 && h("div", { class: "bstack", style: { height: `${(b.total / max) * 100}%` } },
+        b.parts.map((p) => h("i", { style: { flex: `${p.n} 0 0px`, "--tone": toneOf(data, p.block) } }))));
+    if (!later(b)) {
+      col.addEventListener("pointerenter", () => show(b, col));
+      col.addEventListener("click", () => show(b, col));
+      col.addEventListener("focus", () => show(b, col));
+      col.addEventListener("blur", () => on === col && hide());
+    }
+    plot.append(col);
+  }
+  plot.append(tip);
+  plot.addEventListener("pointerleave", (e) => e.pointerType === "mouse" && hide());
+  return h("div", { class: "bars", role: "group", "aria-label": "Blocked tries" },
     h("div", { class: "baxis" }, [max, max / 2, 0].map((v, i) => h("span", { style: { top: `${i * 50}%` } }, String(Math.round(v))))),
-    h("div", { class: "bplot" },
-      h("i", { class: "gl", style: { top: "0" } }), h("i", { class: "gl", style: { top: "50%" } }),
-      bars.map((b) => h("div", { class: `bcol${today(b) ? " now" : ""}`, title: title(b) },
-        b.total > 0 && h("i", { class: "bfill", style: { height: `${(b.total / max) * 100}%` } })))),
+    plot,
     h("span"),
-    h("div", { class: "blabels" }, bars.map((b, i) => h("span", { class: today(b) ? "now" : "" }, label(b, i)))));
+    h("div", { class: "blabels" }, bars.map((b, i) => {
+      const [text, cls] = tick(b, i) ?? ["", ""];
+      return h("span", { class: `${cls}${isNow(b) ? " now" : ""}`.trim() }, text);
+    })));
 }
 
 function heatmap(data) {
@@ -380,65 +515,77 @@ function heatmap(data) {
     cells.push(h("span", { class: "hm-day" }, WEEKDAY[d]));
     row.forEach((n, hr) => {
       const level = n === 0 || data.heatMax === 0 ? 0 : Math.min(5, Math.ceil((n / data.heatMax) * 5));
-      cells.push(h("span", { class: `hm-cell l${level}`, title: `${WEEKDAY[d]} ${String(hr).padStart(2, "0")}:00 · ${n}` }));
+      cells.push(h("span", { class: `hm-cell l${level}`, title: `${WEEKDAY[d]} ${hh(hr)} · ${n}` }));
     });
   });
   return h("div", { class: "heatmap", role: "img", "aria-label": "Blocked tries by weekday and hour" }, cells);
 }
 
-/** A limit's use day by day, against the limit (the dashed line); a day over it is drawn full. */
-function limitBars(limit) {
-  const days = limit.days;
-  const W = 160, H = 22;
-  const max = Math.max(limit.daily, ...days.map((d) => d.used ?? 0)) || 1;
-  const step = W / days.length;
-  const bw = Math.max(2, step * 0.7);
-  const line = H - (limit.daily / max) * H;
+/** A block's tries day by day over the range, small, in its tone (not on Today: one day has no line). */
+function spark(values, tone) {
+  if (!values.some((v) => v > 0)) return null; // none: its faint 0 says so
+  const W = 72, H = 20;
+  const max = Math.max(1, ...values);
+  const x = (i) => (values.length === 1 ? W / 2 : (i * W) / (values.length - 1));
+  const y = (v) => H - 1.5 - (v / max) * (H - 3);
+  const points = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
   return s("svg", { viewBox: `0 0 ${W} ${H}`, className: "spark", preserveAspectRatio: "none", "aria-hidden": "true" },
-    days.map((d, i) => d.used == null ? null : s("rect", {
-      x: i * step + (step - bw) / 2, y: H - (d.used / max) * H, width: bw, height: Math.max(1, (d.used / max) * H), rx: 1.5,
-      className: d.used >= limit.daily ? "over" : "under",
-    })),
-    s("line", { x1: 0, x2: W, y1: line, y2: line, className: "allow" }));
+    s("path", { d: `M0,${H} L${points.join(" L")} L${W},${H} Z`, className: "area", fill: tone }),
+    s("polyline", { points: points.join(" "), className: "line", stroke: tone }));
 }
 
-/** A figure in the By block list: its column says what it is, or, too narrow for columns, its own label. */
-const fig = (value, label, title = null) => h("span", { class: "bb-fig", title }, h("b", {}, value), h("small", {}, label));
+/** A figure in the By block list: its column says what it is, or, too narrow for columns, its own label. Nought is faint. */
+const fig = (cls, value, label, zero = false) => h("span", { class: `bb-fig ${cls}${zero ? " zero" : ""}` }, h("b", {}, value), h("small", {}, label));
 
 /**
- * Each block in a row: its tries, its time open (unlocked and bought), its clean days in a row,
- * and, for a block with a daily limit, its use a day against the limit. A name shows that block alone.
+ * Each block in a row: its dot and name; its tries, with how they went over the range; its unlocks
+ * and their time; the minutes bought past it; for a block with a daily limit, its use a day
+ * against the limit; and its clean days in a row. A name shows that block alone.
  */
 function byBlock(data, actions, view) {
   const withLimit = data.perBlock.some((p) => p.limit);
   const cls = `bb-row${withLimit ? " with-limit" : ""}`;
+  const limitWord = view.range === "today" ? "today" : "a day";
   return h("div", { class: "bb" },
-    h("div", { class: `${cls} bb-head`, "aria-hidden": "true" }, h("span"), h("span", {}, "Tries"), h("span", {}, "Open"), h("span", {}, "Clean days"), withLimit && h("span", {}, "A day")),
+    h("div", { class: `${cls} bb-head`, "aria-hidden": "true" },
+      h("span"), h("span", {}, "Tries"), h("span", {}, "Unlocks"), h("span", {}, "Open"), h("span", {}, "Bought"),
+      withLimit && h("span", {}, view.range === "today" ? "Limit today" : "Limit a day"), h("span", {}, "Clean days")),
     data.perBlock.map((p) => {
       const limit = p.limit;
-      const perDay = limit?.tracked ? limit.used / (view.range === "today" ? 1 : limit.tracked) : null;
-      return h("div", { class: cls },
-        view.block ? h("span", { class: "bb-name" }, p.name)
-          : h("button", { type: "button", class: "bb-name", title: p.name, onclick: () => actions.pickBlock(p.id) }, p.name),
-        fig(String(p.tries), p.tries === 1 ? "try" : "tries"),
-        fig(duration(p.unlockedMs + p.boughtMs), "open", `Unlocked ${duration(p.unlockedMs)} · bought ${duration(p.boughtMs)}`),
-        fig(String(p.streak), p.streak === 1 ? "clean day" : "clean days"),
+      const onlyToday = !!limit && !limit.tracked && limit.today != null;
+      const perDay = limit?.tracked ? limit.used / (view.range === "today" ? 1 : limit.tracked) : onlyToday ? limit.today : null;
+      const share = perDay == null ? 0 : perDay / limit.daily;
+      const name = [toneDot(p.tone), h("span", { class: "bname" }, p.name)];
+      return h("div", { class: `${cls}${limit ? " has-limit" : ""}` },
+        view.block ? h("span", { class: "bb-name" }, name)
+          : h("button", { type: "button", class: "bb-name", title: p.name, onclick: () => actions.pickBlock(p.id) }, name),
+        h("span", { class: "bb-tries" }, view.range !== "today" && spark(p.spark, p.tone), fig("f-tries", String(p.tries), p.tries === 1 ? "try" : "tries", p.tries === 0)),
+        fig("f-unlocks", String(p.unlocks), p.unlocks === 1 ? "unlock" : "unlocks", p.unlocks === 0),
+        fig("f-open", duration(p.unlockedMs), "open", p.unlockedMs < 60_000),
+        fig("f-bought", duration(p.boughtMs), "bought", p.boughtMs < 60_000),
         withLimit && h("span", { class: "bb-limit" }, limit && [
-          h("span", { class: "value" }, `${perDay == null ? "–" : duration(perDay)} / ${duration(limit.daily)}`),
-          view.range === "today"
-            ? h("div", { class: "meter thin" }, h("i", { style: { width: `${Math.min(1, limit.used / Math.max(1, limit.allowance)) * 100}%` } }))
-            : limitBars(limit)]));
+          h("span", { class: "value" }, `${perDay == null ? "–" : duration(perDay)} / ${duration(limit.daily)}`,
+            h("small", { class: onlyToday ? "always" : "" }, ` ${onlyToday ? "today" : limitWord}`)),
+          meter(share, perDay == null ? "" : limitTone(share), "thin")]),
+        fig("f-clean", String(p.streak), p.streak === 1 ? "clean day" : "clean days", p.streak === 0));
     }));
 }
 
-/** What was tried most, as the hub ranks things: a name, a bar, a count; its block and devices in its title. */
-function topList(data) {
+/**
+ * What was tried most: its block's dot, its name, a bar in its block's tone, each device's part
+ * (on every device's view) and the count.
+ */
+function topList(data, view) {
   const max = Math.max(1, ...data.top.map((t) => t.n));
-  return h("div", { class: "ranked" }, data.top.map((t) => {
-    const title = [data.byId.get(t.block)?.name, t.phone > 0 && `Phone ${t.phone}`, t.laptop > 0 && `Laptop ${t.laptop}`].filter(Boolean).join(" · ");
-    return h("div", { class: "rank", title },
-      h("span", { class: "rank-name" }, t.name),
-      h("span", { class: "rank-bar" }, h("i", { style: { width: `${(t.n / max) * 100}%` } })),
+  const split = view.device === "all";
+  return h("div", { class: `ranked${split ? " split" : ""}` }, data.top.map((t) => {
+    const tone = toneOf(data, t.block);
+    return h("div", { class: "rank", title: data.byId.get(t.block)?.name ?? null },
+      h("span", { class: "rank-name" }, toneDot(tone), h("span", {}, t.name)),
+      h("span", { class: "rank-bar" }, h("i", { style: { width: `${(t.n / max) * 100}%`, "--tone": tone } })),
+      split && h("span", { class: "rank-devs" },
+        t.phone > 0 && h("span", { title: "Phone" }, deviceIcon("phone"), String(t.phone)),
+        t.laptop > 0 && h("span", { title: "Laptop" }, deviceIcon("laptop"), String(t.laptop))),
       h("b", {}, String(t.n)));
   }));
 }
@@ -455,10 +602,37 @@ function rowText(r) {
   }
 }
 
+/** Each kind of event's icon, in a muted colour of what it means, at icon size only. */
+const KIND = {
+  blocked: ["blocked", "k-red"],
+  unlock: ["lockOpen", "k-green"],
+  habit: ["task", "k-green"],
+  bought: ["moreTime", "k-amber"],
+  break: ["coffee", "k-blue"],
+  emergency: ["warning", "k-amber"],
+};
+
+/** A day's tries as one thin strip, each block its share, as long as the day is busy against the busiest. */
+function triesStrip(d, data, most) {
+  const order = [...data.byId.keys(), null].filter((id) => d.parts.has(id));
+  return h("span", { class: "hstrip", "aria-hidden": "true" },
+    d.tries > 0 && h("span", { class: "hstrip-fill", style: { width: `${(d.tries / most) * 100}%` } },
+      order.map((id) => h("i", { style: { flex: `${d.parts.get(id)} 0 0px`, "--tone": toneOf(data, id) } }))));
+}
+
+/** "26 tries · 2 unlocks · 18 min open": a day's head, leaving out what didn't happen. */
+const dayFigures = (d) => [
+  `${d.tries} ${d.tries === 1 ? "try" : "tries"}`,
+  d.unlocks > 0 && `${d.unlocks} ${d.unlocks === 1 ? "unlock" : "unlocks"}`,
+  d.unlockedMs >= 60_000 && `${duration(d.unlockedMs)} open`,
+  d.boughtMs >= 60_000 && `${duration(d.boughtMs)} bought`,
+].filter(Boolean).join(" · ");
+
 function historyList(data, view, actions, zone) {
   const clock = clockIn(zone);
   const days = data.timeline.slice(0, view.historyDays);
   if (!days.length) return h("p", { class: "empty" }, "Nothing yet");
+  const most = Math.max(1, ...days.map((d) => d.tries));
   // The latest day is open unless closed; the others closed unless opened.
   const isOpen = (d, i) => (view.openDays ?? {})[d.day] ?? i === 0;
   return [
@@ -468,12 +642,17 @@ function historyList(data, view, actions, zone) {
         h("button", { type: "button", class: "hday-head", "aria-expanded": String(open), onclick: () => actions.toggleDay(d.day, !open) },
           icon(open ? "chevronDown" : "chevronRight", "chev"),
           h("b", {}, dayTitle(d.day, data.today)),
-          d.tries > 0 && h("span", { class: "hday-tries" }, d.tries === 1 ? "1 try" : `${d.tries} tries`)),
-        open && h("div", { class: "hrows" }, d.rows.map((r) => h("div", { class: `hrow k-${r.t}` },
-          h("span", { class: "htime" }, r.n > 1 ? `${clock.format(r.from)}–${clock.format(r.at)}` : clock.format(r.at)),
-          h("span", { class: "hdev", title: r.dev === "phone" ? "Phone" : r.dev === "laptop" ? "Laptop" : "Both" }, deviceIcon(r.dev)),
-          h("span", { class: "htext" }, rowText(r)),
-          h("span", { class: "hblock" }, r.blocks.map((id) => data.byId.get(id)?.name).filter(Boolean).join(", "))))));
+          triesStrip(d, data, most),
+          h("span", { class: "hday-figs" }, dayFigures(d))),
+        open && h("div", { class: "hrows" }, d.rows.map((r) => {
+          const [kindIcon, kindTone] = KIND[r.t] ?? ["globe", ""];
+          return h("div", { class: `hrow k-${r.t}` },
+            h("span", { class: "htime" }, r.n > 1 ? `${clock.format(r.from)}–${clock.format(r.at)}` : clock.format(r.at)),
+            h("span", { class: "hdev", title: r.dev === "phone" ? "Phone" : r.dev === "laptop" ? "Laptop" : "Both" }, deviceIcon(r.dev)),
+            h("span", { class: `hkind ${kindTone}`.trim() }, icon(kindIcon)),
+            h("span", { class: "htext" }, rowText(r)),
+            h("span", { class: "hblock" }, r.blocks.filter((id) => data.byId.has(id)).slice(0, 1).map((id) => named(data, id))));
+        })));
     }),
     data.timeline.length > view.historyDays && h("button", { type: "button", class: "btn more", onclick: actions.more }, "More"),
   ];
@@ -488,23 +667,27 @@ export function renderInsights(root, input, view, actions) {
   const data = compute(input, view);
   const picked = view.block && data.byId.get(view.block);
   const f = data.figures;
+  const b = data.before;
+  const peak = data.peak;
   root.replaceChildren(
     h("div", { class: "ins-controls" },
       seg([["today", "Today"], ["week", "7 days"], ["month", "30 days"]], view.range, actions.setRange),
       seg([["all", "All"], ["phone", "Phone"], ["laptop", "Laptop"]], view.device, actions.setDevice, "devices"),
-      picked && h("span", { class: "picked" }, h("span", {}, picked.name),
+      picked && h("span", { class: "picked" }, toneDot(picked.tone), h("span", {}, picked.name),
         h("button", { type: "button", class: "icon-btn small", title: "Every block", "aria-label": "Every block", onclick: () => actions.pickBlock(null) }, icon("close")))),
     h("div", { class: "stats" },
-      stat(String(f.tries), "Blocked tries"),
-      stat(duration(f.unlockedMs), "Unlocked"),
-      stat(duration(f.boughtMs), "Bought"),
-      !picked && stat(String(f.breaks), f.breaks === 1 ? "Break" : "Breaks"),
-      stat(String(f.habits), "Habits done")),
+      stat(String(f.tries), "Blocked tries", b && String(b.tries)),
+      stat(duration(f.unlockedMs), "Unlocked", b && duration(b.unlockedMs)),
+      stat(duration(f.boughtMs), "Bought", b && duration(b.boughtMs)),
+      !picked && stat(String(f.breaks), f.breaks === 1 ? "Break" : "Breaks", b && String(b.breaks)),
+      stat(String(f.habits), "Habits done", b && String(b.habits))),
     h("div", { class: "ins-grid" },
-      h("section", { class: "card wide" }, h("h3", { class: "section" }, "Blocked tries"), barsChart(data)),
-      h("section", { class: "card" }, h("h3", { class: "section" }, "When"), heatmap(data)),
-      h("section", { class: "card" }, h("h3", { class: "section" }, "Most tried"),
-        data.top.length ? topList(data) : h("p", { class: "empty" }, "Nothing yet")),
-      data.perBlock.length > 0 && h("section", { class: "card wide" }, h("h3", { class: "section" }, "By block"), byBlock(data, actions, view))),
-    h("section", { class: "card history" }, h("h3", { class: "section" }, "History"), historyList(data, view, actions, input.zone)));
+      h("section", { class: "card wide" }, cardHead("Blocked tries"), barsChart(data)),
+      h("section", { class: "card" },
+        cardHead("When", peak && [`${WEEKDAY[peak.day]} ${hh(peak.hour)} · `, h("b", {}, String(peak.n))]),
+        heatmap(data)),
+      h("section", { class: "card" }, cardHead("Most tried"),
+        data.top.length ? topList(data, view) : h("p", { class: "empty" }, "Nothing yet")),
+      data.perBlock.length > 0 && h("section", { class: "card wide" }, cardHead("By block"), byBlock(data, actions, view))),
+    h("section", { class: "card history" }, cardHead("History"), historyList(data, view, actions, input.zone)));
 }

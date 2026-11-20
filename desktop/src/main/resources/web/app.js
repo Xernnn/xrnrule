@@ -7,8 +7,8 @@
 // The page redraws every second, but only what has no text field in it: the block form and the
 // settings you edit are built once and kept, so typing never loses its place.
 
-import { h, s, icon, duration, coverText, savedTheme, saveTheme, applyTheme } from "./ui.js";
-import { normalizeBlocks, mergeShared, renderInsights } from "./insights.js";
+import { h, s, icon, duration, coverLine, checkIn, daySpans, dayStrip, limitTone, meter, toneAt, savedTheme, saveTheme, applyTheme } from "./ui.js";
+import { normalizeBlocks, mergeShared, renderInsights, dayByBlock, dayLine, clockAt } from "./insights.js";
 
 const params = new URLSearchParams(location.search);
 const onBlockPage = location.pathname === "/block";
@@ -339,19 +339,32 @@ window.addEventListener("pagehide", () => clearTimeout(leaving));
 const ruleLine = (b) => h("p", { class: "rule" }, h("b", {}, b.name), `: ${how(b) ?? b.hoursText ?? b.headline.text}`);
 
 /**
- * One thing a block asks for or holds to (the phone's HabitRow): its words, its figure, a meter
- * for what it has used, and what you can do about it. No icon or colour of its own: only a habit
- * linked to xrnloops carries xrnloops' tile, and a meter the one data colour.
+ * One thing a block asks for or holds to (the phone's HabitRow): a grey icon for its kind (or
+ * xrnloops' tile for a linked habit), its words, its figure, a meter for what it has used (a
+ * limit's turns amber from 80 % and red once used up), today's 24 hours for blocked hours, and
+ * what you can do about it.
  */
-function rrow({ label, value, fraction, note, dim, action, loop }) {
+function rrow({ ic, label, value, fraction, limit, note, dim, action, loop, strip }) {
   return h("div", { class: `rrow${dim ? " dim" : ""}` },
+    h("span", { class: "ricon" }, loop ? h("img", { src: "/xrnloops.svg", alt: "xrnloops" }) : icon(ic ?? "task")),
     h("div", { class: "main" },
-      h("div", { class: "top" },
-        loop && h("img", { class: "loop", src: "/xrnloops.svg", alt: "xrnloops" }),
-        h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
-      fraction != null && h("div", { class: "meter" }, h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } })),
-      note && h("span", { class: "note" }, note)),
+      h("div", { class: "top" }, h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
+      fraction != null && meter(fraction, limit ? limitTone(fraction) : ""),
+      note && h("span", { class: "note" }, note),
+      strip),
     h("div", { class: "acts" }, action));
+}
+
+/** The daemon's windows ({days, startMin, endMin}) as the shared state writes a schedule, for daySpans. */
+const windowOf = (start, end) => (start == null ? null : { startMinuteOfDay: start, endMinuteOfDay: end });
+const moreOf = (list) => (list ?? []).map((w) => ({ days: w.days, window: windowOf(w.startMin, w.endMin) }));
+const scheduleOf = (b) => ({ activeDays: b.scheduleDays, activeWindow: windowOf(b.scheduleStart, b.scheduleEnd), moreWindows: moreOf(b.moreWindows) });
+const hoursOf = (b) => (b.hoursDays == null ? null : { activeDays: b.hoursDays, activeWindow: windowOf(b.hoursStart, b.hoursEnd), moreWindows: moreOf(b.hoursMore) });
+
+/** Today's 24 hours under a schedule, with now marked, where the devices are (I54). */
+function hoursStrip(schedule, blockedNow) {
+  const at = clockAt(historyData?.zone, Date.now() + clockOffset);
+  return dayStrip(daySpans(schedule, at.iso), at.minute, blockedNow);
 }
 
 /** A round tick, the phone's row action. */
@@ -367,19 +380,21 @@ function ruleRows(b) {
   const rows = [];
   if (b.hasLimit) {
     if (b.allowanceMs > 0) {
-      rows.push(rrow({ label: b.perDevice ? "Daily limit, this laptop" : "Daily limit", value: `${min(b.allowanceUsedMs)} / ${min(b.allowanceMs)} min`, fraction: b.allowanceUsedMs / b.allowanceMs }));
+      rows.push(rrow({ ic: "hourglass", label: b.perDevice ? "Daily limit, this laptop" : "Daily limit", value: `${min(b.allowanceUsedMs)} / ${min(b.allowanceMs)} min`, fraction: b.allowanceUsedMs / b.allowanceMs, limit: true }));
     }
     if (b.rowMs > 0) {
       rows.push(rrow({
-        label: "Time in a row", value: `${min(b.rowUsedMs)} / ${min(b.rowMs)} min`, fraction: b.rowUsedMs / b.rowMs,
+        ic: "timer", label: "Time in a row", value: `${min(b.rowUsedMs)} / ${min(b.rowMs)} min`, fraction: b.rowUsedMs / b.rowMs, limit: true,
         note: b.rowBreakRemainingMs > 0 ? `Break · ${clock(b.rowBreakRemainingMs)}` : null,
       }));
     }
     if (b.opensPerDay > 0) {
-      rows.push(rrow({ label: b.perDevice ? "Opens today, this laptop" : "Opens today", value: `${b.opensUsed} / ${b.opensPerDay}`, fraction: b.opensUsed / b.opensPerDay }));
+      rows.push(rrow({ ic: "lockOpen", label: b.perDevice ? "Opens today, this laptop" : "Opens today", value: `${b.opensUsed} / ${b.opensPerDay}`, fraction: b.opensUsed / b.opensPerDay, limit: true }));
     }
   }
-  if (b.mode !== "SCHEDULE" && b.hoursText) rows.push(rrow({ label: "Blocked hours", note: b.hoursText, dim: b.reason !== "HOURS" }));
+  if (b.mode !== "SCHEDULE" && b.hoursText) {
+    rows.push(rrow({ ic: "calendar", label: "Blocked hours", note: b.hoursText, dim: b.reason !== "HOURS", strip: hoursStrip(hoursOf(b), b.reason === "HOURS") }));
+  }
   return rows;
 }
 
@@ -427,15 +442,15 @@ function habitBody(b) {
     // An NFC tag (I43): only the phone ticks it, by reading the tag; unticking is always fine.
     if (i.tag) {
       return rrow({
-        label: i.text, dim: i.done, value: i.done ? "Scanned" : "On the phone",
+        ic: "nfc", label: i.text, dim: i.done, value: i.done ? "Scanned" : "On the phone",
         action: tick(`item:${i.id}`, i.done, !(armed && i.done), (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })),
       });
     }
-    return rrow({ label: i.text, dim: i.done, action: tick(`item:${i.id}`, i.done, !armed, (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })) });
+    return rrow({ ic: "task", label: i.text, dim: i.done, action: tick(`item:${i.id}`, i.done, !armed, (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })) });
   });
   if (b.trigger === "TIMER" || b.trigger === "COMBINED") {
     rows.push(rrow({
-      label: "Timer", value: `${clock(Math.min(b.timerMs, b.requiredMs))} / ${clock(b.requiredMs)}`,
+      ic: "timer", label: "Timer", value: `${clock(Math.min(b.timerMs, b.requiredMs))} / ${clock(b.requiredMs)}`,
       fraction: b.timerMs / Math.max(1, b.requiredMs),
       action: armed && b.timerMs < b.requiredMs && ract(`timer:${b.id}`, b.timerRunning ? "pause" : "play", b.timerRunning ? "Pause" : "Start", () => act({ type: "timer", blockId: b.id, running: !b.timerRunning })),
     }));
@@ -450,10 +465,12 @@ function habitBody(b) {
 /** Daily limit, schedule, lockdown: no habit to do, so the card says where the rule stands. */
 function strictBody(b) {
   if (b.mode === "ALLOWANCE") return ruleRows(b);
-  if (b.mode === "SCHEDULE") return b.scheduleText ? [rrow({ label: "Blocked hours", note: b.scheduleText, dim: !b.blocking })] : [];
+  if (b.mode === "SCHEDULE") {
+    return b.scheduleText ? [rrow({ ic: "calendar", label: "Blocked hours", note: b.scheduleText, dim: !b.blocking, strip: hoursStrip(scheduleOf(b), b.blocking) })] : [];
+  }
   if (b.mode === "LOCKDOWN") {
     if (b.lockdownRemainingMs > 0) {
-      return [rrow({ label: "Locked down", value: `${clock(b.lockdownRemainingMs)} left`, fraction: 1 - b.lockdownRemainingMs / Math.max(1, b.lockdownMs) })];
+      return [rrow({ ic: "lock", label: "Locked down", value: `${clock(b.lockdownRemainingMs)} left`, fraction: 1 - b.lockdownRemainingMs / Math.max(1, b.lockdownMs) })];
     }
     // The headline says it is over: only the way to start it again.
     return [
@@ -465,8 +482,19 @@ function strictBody(b) {
 
 /** What a block covers, in one quiet line; the block page is about the laptop, so no phone apps there. */
 function targets(b) {
-  const text = coverText([...b.shownSites, ...b.desktopApps.map(appName)], onBlockPage ? 0 : b.phoneApps, b.exceptSites);
-  return text ? h("p", { class: "targets" }, text) : null;
+  return coverLine({ sites: b.shownSites, phoneApps: onBlockPage ? 0 : b.phoneApps, laptopApps: b.desktopApps.map(appName), except: b.exceptSites });
+}
+
+/** Each block's day so far, from the history Insights reads (both devices'), by block id; null until it's in. */
+let daysFrom = null; // { data, minute, days }
+function blockDays() {
+  if (!historyData) return null;
+  const now = Date.now() + clockOffset;
+  const minute = Math.floor(now / 60_000);
+  if (daysFrom?.data !== historyData || daysFrom.minute !== minute) {
+    daysFrom = { data: historyData, minute, days: dayByBlock({ events: historyData.events, blocks: historyData.blocks, now, zone: historyData.zone }) };
+  }
+  return daysFrom.days;
 }
 
 function blockCard(b) {
@@ -479,10 +507,14 @@ function blockCard(b) {
     b.hardcore && "Hardcore",
   ].filter(Boolean);
   const body = !b.enabled ? [] : b.mode === "HABIT" ? [...ruleRows(b), ...habitBody(b)] : strictBody(b);
-  const head = [h("div", { class: "name" }, h("h3", {}, b.name), h("div", { class: `headline ${cls}` }, b.headline.text), sub.length > 0 && h("div", { class: "sub" }, sub.join(" · ")))];
-  return h("section", { class: `card bcard${b.enabled ? "" : " off"}`, "data-block": b.id },
+  const head = [h("div", { class: "name" }, h("h3", {}, h("span", {}, b.name)), h("div", { class: `headline ${cls}` }, b.headline.text), sub.length > 0 && h("div", { class: "sub" }, sub.join(" · ")))];
+  // A block's tone is its place in the whole list, as on the phone and in Insights.
+  const index = state.blocks.findIndex((x) => x.id === b.id);
+  const day = !onBlockPage && blockDays()?.get(b.id);
+  return h("section", { class: `card bcard${b.enabled ? "" : " off"}`, "data-block": b.id, style: { "--tone": toneAt(Math.max(0, index)) } },
     h("div", { class: "head" },
       editable ? h("button", { class: "open", type: "button", "data-key": `open:${b.id}`, title: "Edit", onclick: () => openForm(b) }, head) : h("div", { class: "open" }, head),
+      day && h("span", { class: "bday" }, dayLine(day)),
       editable && h("button", { class: "icon-btn", type: "button", "data-key": `edit:${b.id}`, title: "Edit", "aria-label": `Edit ${b.name}`, onclick: () => openForm(b) }, icon("edit"))),
     body.length > 0 && h("div", { class: "rows" }, body),
     targets(b));
@@ -878,7 +910,8 @@ async function loadHistory() {
     historyAt = Date.now();
     historyLoading = false;
   }
-  drawInsights(false);
+  // The Blocks tab asks for it too (each block's day): it draws its own on the next second.
+  if (tab === "insights") drawInsights(false);
 }
 
 function drawInsights(force) {
@@ -1034,12 +1067,17 @@ function blocksView() {
     class: "round", type: "button", "data-key": "break", disabled: !state.canPause || !!guard,
     title: state.canPause ? "Take a 15-min break" : "Break used today", "aria-label": "Take a 15-min break", onclick: () => act({ type: "pause" }),
   }, icon("coffee"));
+  // Each block's day so far comes from the history Insights reads, asked again once a minute.
+  if (!historyLoading && Date.now() - historyAt > 60_000) loadHistory();
+  // When the phone last reached the home server (as last asked): green while fresh, amber after half an hour.
+  const phoneSeen = state.syncConfigured && state.phoneSeenWall ? state.nowWall - state.phoneSeenWall : null;
   return h("div", { class: "blocks-page" },
     alertsView(),
     noticeView(),
     h("div", { class: "page-title" },
       h("h2", {}, "Blocks"),
       state.summary && h("span", { class: "summary" }, state.summary),
+      phoneSeen != null && h("span", { class: "checkins" }, checkIn("Phone", phoneSeen)),
       h("span", { class: "spacer" }),
       h("div", { class: "today" },
         h("div", { class: "figure" }, h("b", {}, `${min(state.unlockUsedMs)} / ${min(state.dailyCapMs)} min`), h("span", {}, "Unlocked today")),

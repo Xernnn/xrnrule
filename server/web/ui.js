@@ -79,6 +79,81 @@ export function icon(name, cls = "") {
   return s("svg", { viewBox: "0 0 24 24", "aria-hidden": "true", className: `icon ${cls}`.trim(), focusable: "false" }, s("path", { d: PATHS[name] ?? PATHS.globe }));
 }
 
+/**
+ * A block's tone: by its place in the block list, round again past the eighth, the same on the
+ * phone (BlockColors.kt), in both themes. Muted, and only ever small: a dot before its name, its
+ * part of a stacked chart or a day's strip, the bar of something it covers, its sparkline, the
+ * marker on its card. Never a card's tint, a chip, a letter tile or the colour of words.
+ */
+export const TONES = ["#D27A4A", "#5B8FD6", "#4E9E68", "#8F7AD8", "#CE6488", "#3E9E92", "#AE8834", "#4C98C4"];
+/** What no block covers any more (a block deleted, a target taken off). */
+export const OTHER_TONE = "#8A8A93";
+
+export const toneAt = (index) => TONES[((index % TONES.length) + TONES.length) % TONES.length];
+
+/** A block's dot, before its name. */
+export function toneDot(tone, cls = "") {
+  return h("i", { class: `tdot ${cls}`.trim(), style: { "--tone": tone ?? OTHER_TONE }, "aria-hidden": "true" });
+}
+
+/**
+ * How a limit's meter is coloured (its share used, 0..1+): the data colour, then amber from 80 %,
+ * red once used up.
+ */
+export function limitTone(fraction) {
+  return fraction >= 1 ? "over" : fraction >= 0.8 ? "warn" : "";
+}
+
+/** A thin meter; [tone] "warn" or "over" for a limit near or at its end. */
+export function meter(fraction, tone = "", cls = "") {
+  return h("div", { class: `meter ${tone} ${cls}`.replace(/\s+/g, " ").trim() },
+    h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } }));
+}
+
+/**
+ * The stretches of [day] (ISO weekday, 1 = Monday) a schedule blocks, as [from, to] minutes of
+ * that day, merged: each window on its days, one past midnight running into the next day
+ * (BlockEngine.scheduleActive, I20, I30). A window of no times is its days whole.
+ * [schedule]: {activeDays, activeWindow: {startMinuteOfDay, endMinuteOfDay}?, moreWindows: [{days, window}]}.
+ */
+export function daySpans(schedule, day) {
+  if (!schedule) return [];
+  const before = day === 1 ? 7 : day - 1;
+  const spans = [];
+  const add = (days, w) => {
+    if (!w) {
+      if (days.includes(day)) spans.push([0, 1440]);
+      return;
+    }
+    const { startMinuteOfDay: from, endMinuteOfDay: to } = w;
+    if (from < to) {
+      if (days.includes(day)) spans.push([from, to]);
+    } else if (from > to) {
+      if (days.includes(day)) spans.push([from, 1440]);
+      if (days.includes(before) && to > 0) spans.push([0, to]);
+    }
+  };
+  add(schedule.activeDays ?? [1, 2, 3, 4, 5, 6, 7], schedule.activeWindow);
+  for (const m of schedule.moreWindows ?? []) add(m.days ?? [], m.window);
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const [a, b] of spans) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  return merged;
+}
+
+/** Today's 24 hours as a strip: the blocked stretches shaded, a mark at [nowMinute]. */
+export function dayStrip(spans, nowMinute, blockedNow = false) {
+  const pct = (m) => `${(m / 1440) * 100}%`;
+  return h("div", { class: `daystrip${blockedNow ? " now-blocked" : ""}`, "aria-hidden": "true" },
+    [360, 720, 1080].map((m) => h("i", { class: "dtick", style: { left: pct(m) } })),
+    spans.map(([a, b]) => h("i", { class: "span", style: { left: pct(a), width: pct(b - a) } })),
+    nowMinute != null && h("i", { class: "nowmark", style: { left: pct(nowMinute) } }));
+}
+
 /** The device an event or a device id is from: "phone", "laptop" or "" (another, or none). */
 export function deviceOf(d) {
   const x = String(d ?? "").toLowerCase();
@@ -91,12 +166,42 @@ export function deviceIcon(device, cls = "") {
 }
 
 /**
- * What a block covers, as one quiet line: [names] (its sites and laptop apps), how many phone
- * apps (the pages know their count, not their names), and what it leaves alone.
+ * What a block covers, a part per kind, each to go after its glyph: its sites, how many phone apps
+ * (the pages know their count, not their names), its laptop apps, and what it leaves alone.
  */
-export function coverText(names, phoneApps = 0, except = []) {
-  const covers = [...names, phoneApps > 0 && `${phoneApps} phone app${phoneApps === 1 ? "" : "s"}`].filter(Boolean).join(", ");
-  return [covers, except.length ? `except ${except.join(", ")}` : ""].filter(Boolean).join(" · ");
+export function coverParts({ sites = [], phoneApps = 0, laptopApps = [], except = [] }) {
+  return [
+    sites.length > 0 && { kind: "site", text: sites.join(", ") },
+    phoneApps > 0 && { kind: "phone", text: `${phoneApps} app${phoneApps === 1 ? "" : "s"}` },
+    laptopApps.length > 0 && { kind: "laptop", text: laptopApps.join(", ") },
+    except.length > 0 && { kind: "except", text: `except ${except.join(", ")}` },
+  ].filter(Boolean);
+}
+
+const COVER_GLYPH = { site: "globe", phone: "phone", laptop: "laptop" };
+
+/** What a block covers, as one quiet line: a small grey glyph before each kind, what it leaves alone fainter. */
+export function coverLine(what) {
+  const parts = coverParts(what);
+  if (!parts.length) return null;
+  return h("p", { class: "targets" }, parts.map((p, i) => [
+    i > 0 && h("span", { class: "sep" }, " · "),
+    h("span", { class: `cover ${p.kind}` }, COVER_GLYPH[p.kind] && icon(COVER_GLYPH[p.kind], "glyph"), p.text),
+  ]));
+}
+
+/** "now", "16 min", "3 h", "4 d": how long ago, short. */
+export function ago(ms) {
+  const m = Math.floor(Math.max(0, ms) / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m} min`;
+  if (m < 48 * 60) return `${Math.floor(m / 60)} h`;
+  return `${Math.floor(m / 1440)} d`;
+}
+
+/** A device's last check-in, "● Phone 2 min": the dot green while fresh, amber after half an hour. */
+export function checkIn(label, agoMs) {
+  return h("span", { class: `checkin${agoMs > 30 * 60_000 ? " stale" : ""}` }, label, " ", h("b", {}, ago(agoMs)));
 }
 
 /** "1 h 05", "25 min", "0 min": a duration in whole minutes. */

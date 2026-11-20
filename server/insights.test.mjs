@@ -1,6 +1,7 @@
 // The Insights page's reading of both devices' event log (server/web/insights.js): the blocks it
-// reads, which block a try counts for, one of each shared event, ranges and days where the devices are
-// (I54), clean-day streaks and a limit's use day by day.
+// reads and their tones, which block a try counts for, one of each shared event, ranges and days
+// where the devices are (I54), the period before, the busiest hour, each block's tries over the
+// range and its day so far, clean-day streaks, a limit's use day by day and a history day's figures.
 //
 //     node --test server        (from the repo root)
 import { test } from "node:test";
@@ -8,7 +9,7 @@ import assert from "node:assert/strict";
 
 // Viewed from a browser in another zone than the devices': their days are the ones counted.
 process.env.TZ = "America/Los_Angeles";
-const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline } = await import("./web/insights.js");
+const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline, dayByBlock, dayLine } = await import("./web/insights.js");
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -27,9 +28,9 @@ const blocks = normalizeBlocks([
 ]);
 const tried = (d, target, at, name = target) => ({ d, t: "blocked", target, name, at });
 
-test("blocks keep their list order and carry no colour: a block is told by its name", () => {
+test("blocks keep their list order, and take their tone by it, round again past the eighth", () => {
   assert.deepEqual(blocks.map((b) => b.id), ["social", "yt", "games", "a", "b", "c", "d", "e", "f"]);
-  assert.ok(blocks.every((b) => !("colour" in b)));
+  assert.deepEqual(blocks.map((b) => b.tone), ["#D27A4A", "#5B8FD6", "#4E9E68", "#8F7AD8", "#CE6488", "#3E9E92", "#AE8834", "#4C98C4", "#D27A4A"]);
   // The laptop's /api/history shape reads the same.
   const laptop = normalizeBlocks([{ id: "x", name: "X", apps: ["steam"], sites: ["youtube.com/shorts"], except: [], dailyMs: 5, perDevice: true }]);
   assert.deepEqual([...laptop[0].apps], ["steam"]);
@@ -162,6 +163,14 @@ test("a limit's use day by day: devices add up, or the one that used most when e
   assert.equal(laptop.used, 5 * MIN);
 });
 
+test("a limit the server has kept no day of shows today's use, as the shared state has it", () => {
+  const input = { events: [], blocks, now: NOW, zone: ZONE, usedToday: { yt: 12 * MIN } };
+  const yt = (limits, device = "all") => compute({ ...input, limits }, { range: "week", device }).perBlock.find((p) => p.id === "yt").limit;
+  assert.equal(yt({}).today, 12 * MIN);
+  assert.equal(yt({ yt: { "phone-1": { [TODAY]: 20 * MIN } } }).today, undefined, "the server's record when it has one");
+  assert.equal(yt({}, "phone").today, undefined, "the state's figure is every device's");
+});
+
 test("the history runs newest first, a run of tries at one thing on one device as one row", () => {
   const events = mergeShared([
     tried("phone", "reddit.com", TODAY + HOUR),
@@ -183,4 +192,88 @@ test("a day starts at midnight where the devices are, across a change of the clo
   // Europe/Berlin went to summer time on 29 Mar 2026: that day had 23 hours.
   const day = dayOf("Europe/Berlin", Date.UTC(2026, 2, 29, 12));
   assert.equal(dayStart("Europe/Berlin", day + 1) - dayStart("Europe/Berlin", day), 23 * HOUR);
+});
+
+test("each figure has the period before's: yesterday, or the 7 or 30 days before, once the log reaches back", () => {
+  const events = mergeShared([
+    tried("phone", "reddit.com", TODAY + HOUR),
+    tried("phone", "reddit.com", TODAY - HOUR), // yesterday
+    tried("phone", "reddit.com", TODAY - 2 * HOUR),
+    { d: "laptop", t: "unlock", block: "social", ms: 10 * MIN, start: TODAY - 3 * HOUR, at: TODAY - 3 * HOUR },
+    tried("laptop", "steam", TODAY - 8 * DAY), // the 7 days before this week
+    tried("laptop", "steam", TODAY - 13 * DAY + HOUR), // their first
+    tried("laptop", "steam", TODAY - 14 * DAY + HOUR), // the log's first day, before them
+  ]);
+  const input = { events, blocks, limits: {}, now: NOW, zone: ZONE };
+  const today = compute(input, { range: "today" });
+  assert.deepEqual([today.figures.tries, today.before.tries, today.before.unlockedMs], [1, 2, 10 * MIN]);
+  const week = compute(input, { range: "week" });
+  assert.deepEqual([week.figures.tries, week.before.tries], [3, 2]);
+  assert.equal(compute(input, { range: "week", device: "phone" }).before.tries, 0, "the device filter holds for it too");
+  // The log begins within these 30 days: "0 before" would be about days it never saw.
+  assert.equal(compute(input, { range: "month" }).before, null);
+  assert.equal(compute({ ...input, events: [] }, { range: "today" }).before, null, "nothing logged at all");
+  // Begun in the middle of the 7 days before: not all of them seen, so nothing to set beside.
+  const late = mergeShared([tried("phone", "reddit.com", TODAY - 10 * DAY), tried("phone", "reddit.com", TODAY + HOUR)]);
+  assert.equal(compute({ ...input, events: late }, { range: "week" }).before, null);
+});
+
+test("the busiest hour of the week is the first of the busiest, Monday 00:00 onwards, as the phone has it", () => {
+  // Wednesday 18 Nov in Tokyo: two at 05:00 and two at 09:00; Tuesday: one at 23:00.
+  const events = mergeShared([
+    tried("phone", "reddit.com", TODAY + 9 * HOUR + MIN), tried("phone", "x.com", TODAY + 9 * HOUR + 2 * MIN),
+    tried("phone", "reddit.com", TODAY + 5 * HOUR), tried("laptop", "steam", TODAY + 5 * HOUR + MIN),
+    tried("phone", "reddit.com", TODAY - HOUR),
+  ]);
+  const data = compute({ events, blocks, limits: {}, now: NOW, zone: ZONE }, { range: "week" });
+  assert.deepEqual(data.peak, { day: 2, hour: 5, n: 2 });
+  assert.equal(compute({ events: [], blocks, limits: {}, now: NOW, zone: ZONE }, { range: "week" }).peak, null);
+});
+
+test("each block's tries over the range, by day, or by hour today up to now", () => {
+  const events = mergeShared([
+    tried("phone", "reddit.com", TODAY + HOUR),
+    tried("phone", "reddit.com", TODAY + 2 * HOUR),
+    tried("laptop", "steam", TODAY - 2 * DAY + HOUR),
+  ]);
+  const input = { events, blocks, limits: {}, now: NOW, zone: ZONE };
+  const week = Object.fromEntries(compute(input, { range: "week" }).perBlock.map((p) => [p.id, p.spark]));
+  assert.deepEqual(week.social, [0, 0, 0, 0, 0, 0, 2]);
+  assert.deepEqual(week.games, [0, 0, 0, 0, 1, 0, 0]);
+  const today = compute(input, { range: "today" });
+  assert.equal(today.nowHour, 12);
+  const social = today.perBlock.find((p) => p.id === "social").spark;
+  assert.equal(social.length, 13, "00:00 to 12:00, nothing drawn for hours still to come");
+  assert.deepEqual([social[1], social[2]], [1, 1]);
+});
+
+test("a block's day so far, for its card: its tries, unlocks and their time, minutes bought", () => {
+  const events = mergeShared([
+    tried("phone", "reddit.com", TODAY + HOUR),
+    tried("laptop", "com.instagram.android", TODAY + 2 * HOUR, "Instagram"),
+    tried("phone", "reddit.com", TODAY - HOUR), // yesterday
+    { d: "laptop", t: "unlock", block: "social", ms: 12 * MIN, start: TODAY + 3 * HOUR, at: TODAY + 3 * HOUR },
+    { d: "phone", t: "unlock", block: "social", ms: 12 * MIN, start: TODAY + 3 * HOUR, at: TODAY + 3 * HOUR + MIN }, // the same one
+    { d: "phone", t: "bought", block: "yt", ms: 5 * MIN, at: TODAY + 4 * HOUR },
+  ]);
+  const days = dayByBlock({ events, blocks, now: NOW, zone: ZONE });
+  assert.deepEqual(days.get("social"), { tries: 2, unlocks: 1, unlockedMs: 12 * MIN, boughtMs: 0 });
+  assert.deepEqual(days.get("yt"), { tries: 0, unlocks: 0, unlockedMs: 0, boughtMs: 5 * MIN });
+  assert.equal(dayLine(days.get("social")), "2 tries · 12 min open");
+  assert.equal(dayLine(days.get("yt")), "0 tries · 5 min bought");
+  assert.equal(dayLine({ tries: 1, unlocks: 0, unlockedMs: 0, boughtMs: 0 }), "1 try");
+});
+
+test("a history day's head: its tries by block, unlocks and their time, minutes bought", () => {
+  const events = mergeShared([
+    tried("phone", "reddit.com", TODAY + HOUR),
+    tried("phone", "reddit.com", TODAY + HOUR + MIN),
+    tried("laptop", "steam", TODAY + 2 * HOUR),
+    tried("phone", "unknown.example", TODAY + 2 * HOUR),
+    { d: "laptop", t: "unlock", block: "social", ms: 10 * MIN, start: TODAY + 3 * HOUR, at: TODAY + 3 * HOUR },
+    { d: "phone", t: "bought", block: "yt", ms: 5 * MIN, at: TODAY + 4 * HOUR },
+  ]);
+  const [day] = timeline(events, blocks, ZONE);
+  assert.deepEqual([day.tries, day.unlocks, day.unlockedMs, day.boughtMs], [4, 1, 10 * MIN, 5 * MIN]);
+  assert.deepEqual(day.parts, new Map([["social", 2], ["games", 1], [null, 1]]), "what no block covers too");
 });
