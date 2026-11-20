@@ -93,6 +93,19 @@ class Http(user: String, password: String, private val onServerTime: (dateMs: Lo
         return response.statusCode() to bytes.decodeToString()
     }
 
+    /** A request whose body and answer are bytes, an icon's: the status and the answer. */
+    fun bytes(url: String, method: String = "GET", body: ByteArray? = null, timeoutS: Long = 20): Pair<Int, ByteArray> {
+        val builder = HttpRequest.newBuilder(URI(url))
+            .timeout(Duration.ofSeconds(timeoutS))
+            .header("Authorization", auth)
+            .header("X-Device", "laptop")
+        val publisher = if (body == null) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofByteArray(body)
+        if (body != null) builder.header("Content-Type", "application/octet-stream")
+        val response = client.send(builder.method(method, publisher).build(), HttpResponse.BodyHandlers.ofByteArray())
+        if (response.statusCode() == 401) throw AuthException()
+        return response.statusCode() to response.body()
+    }
+
     companion object {
         /**
          * The time an answer says it was sent, when it came over HTTPS from another machine: a

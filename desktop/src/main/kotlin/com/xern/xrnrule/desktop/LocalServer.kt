@@ -15,9 +15,11 @@ import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.HabitEntry
+import com.xern.xrnrule.domain.Icons
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.Settings
+import com.xern.xrnrule.domain.SiteIcons
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
@@ -68,6 +70,10 @@ class LocalServer(
     private val telemetry: FileTelemetry,
     /** Both devices' history on the server, with sync on (the Insights page). */
     remote: RemoteHistory? = shared.takeIf { config.syncConfigured },
+    /** Laptop apps' own icons ([LaptopAppIcons]). */
+    private val laptopIcons: LaptopAppIcons = LaptopAppIcons(),
+    /** The server's copies of every device's logos, with sync on ([ServerIcons]). */
+    private val serverIcons: ServerIcons? = null,
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
     private val history = History(telemetry, remote, store.clock)
@@ -111,6 +117,7 @@ class LocalServer(
             ex.requestMethod == "GET" && path == "/api/history" ->
                 send(ex, 200, history.json(store.world.value, query["days"]?.toIntOrNull() ?: History.KEEP_DAYS))
             ex.requestMethod == "GET" && path == "/api/site-icon" -> siteIcon(ex, query["host"].orEmpty())
+            ex.requestMethod == "GET" && path == "/api/icon" -> icon(ex, query["key"].orEmpty())
             ex.requestMethod == "POST" && path == "/api/block" -> send(ex, 200, saveBlock(body(ex)))
             ex.requestMethod == "POST" && path == "/api/block/delete" -> send(ex, 200, deleteBlock(json.parseToJsonElement(body(ex)).jsonObject))
             ex.requestMethod == "POST" && path == "/api/item" -> send(ex, 200, item(json.parseToJsonElement(body(ex)).jsonObject))
@@ -820,8 +827,32 @@ class LocalServer(
      * for each. [secure] keeps such a page from telling by the answer which sites are blocked.
      */
     private fun siteIcon(ex: HttpExchange, host: String) {
-        val named = store.world.value.blocks.any { b -> (b.targetSites + b.exceptSites).any { Sites.matches(host, Sites.hostOf(it)) } }
-        val icon = (if (named) siteIcons.icon(host) else null) ?: return send(ex, 404, "no icon yet")
+        val icon = (if (named(host)) siteIcons.icon(host) else null) ?: return send(ex, 404, "no icon yet")
+        sendIcon(ex, icon)
+    }
+
+    /** Whether a block names [host], or a site [host] is under. */
+    private fun named(host: String): Boolean =
+        store.world.value.blocks.any { b -> (b.targetSites + b.exceptSites).any { Sites.matches(host, Sites.hostOf(it)) } }
+
+    /**
+     * The logo of what an [Icons] key names, for the pages' rows and tiles; 404 when there's none:
+     * a site's from the laptop's own [siteIcons] (under the same rule as [siteIcon]), a laptop
+     * app's own ([laptopIcons]), else the copy kept of the server's, which is how the phone's apps
+     * get here ([serverIcons]).
+     */
+    private fun icon(ex: HttpExchange, key: String) {
+        if (!Icons.valid(key)) return send(ex, 404, "no icon")
+        val own = when {
+            key.startsWith("site:") -> key.removePrefix("site:").takeIf(::named)?.let(siteIcons::icon)
+            key.startsWith("desk:") -> laptopIcons.icon(key.removePrefix("desk:"))
+            else -> null
+        }
+        val icon = own ?: serverIcons?.icon(key) ?: return send(ex, 404, "no icon")
+        sendIcon(ex, icon)
+    }
+
+    private fun sendIcon(ex: HttpExchange, icon: SiteIcons.Icon) {
         ex.responseHeaders.add("Content-Type", icon.type) // a raster type, from the bytes themselves
         ex.responseHeaders.add("Cache-Control", "private, max-age=86400")
         secure(ex)

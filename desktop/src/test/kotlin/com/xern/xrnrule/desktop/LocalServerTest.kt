@@ -66,6 +66,8 @@ class LocalServerTest {
         checklist: Map<String, List<ChecklistItem>> = emptyMap(),
         known: String? = null,
         fetcher: (String, Int) -> SiteIcons.Fetched? = { _, _ -> null },
+        laptopIcons: LaptopAppIcons = LaptopAppIcons({ null }, emptyList(), rsvg = null, homeIcons = null),
+        serverIcons: ServerIcons? = null,
     ) {
         val clock = TestClock()
         val port = ServerSocket(0).use { it.localPort }
@@ -92,7 +94,19 @@ class LocalServerTest {
             }
             val enforcer = Enforcer(store, quiet, config).also { it.foreground = foreground }
             val shared = SharedSyncClient(config, store, telemetry, scope)
-            LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), SiteIconCache(icons, scope, fetcher), telemetry).start()
+            LocalServer(
+                config, store, foreground, enforcer, shared, HabitClient(config, store, scope), SiteIconCache(icons, scope, fetcher), telemetry,
+                laptopIcons = laptopIcons, serverIcons = serverIcons,
+            ).start()
+        }
+
+        /** A GET as a page's <img> makes it: (status, body, headers). */
+        fun image(path: String): Triple<Int, ByteArray, Map<String, List<String>>> {
+            val conn = URI("http://127.0.0.1:$port$path").toURL().openConnection() as HttpURLConnection
+            val code = conn.responseCode
+            val body = (if (code < 400) conn.inputStream else conn.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+            val headers = java.util.TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER).apply { putAll(conn.headerFields.filterKeys { it != null }) }
+            return Triple(code, body, headers)
         }
 
         /** The answer's status code. [xrnrule]: with the header that only our pages and the extension can send. */
@@ -186,6 +200,51 @@ class LocalServerTest {
         Thread.sleep(300) // a fetch started before those would have come by now
         assertFalse(looked.toString(), "tracker.example" in looked)
         assertFalse("nothing kept for it", File(d.icons, "tracker.example.miss").exists())
+    }
+
+    @Test
+    fun anIconIsTheLaptopsOwnElseTheServersCopyOfAnyDevicesAndNoneIsNotFound() {
+        val block = Block(
+            "yt", "YouTube", targetSites = setOf("youtube.com"), targetDesktopApps = setOf("steam"),
+            trigger = Trigger(TriggerType.TIMER, 0, TriggerUnit.MS), mode = BlockMode.SCHEDULE,
+        )
+        val share = File(dir, "share").apply { File(this, "icons/hicolor/128x128/apps").mkdirs() }
+        val steam = testPng(128, tint = 1).also { File(share, "icons/hicolor/128x128/apps/steam.png").writeBytes(it) }
+        val site = testPng(180, tint = 2)
+        val looked = ConcurrentHashMap.newKeySet<String>()
+        val server = ServerIcons(File(dir, "server-icons"), "", null, kotlinx.coroutines.flow.MutableStateFlow(World()), { emptyMap() }, CoroutineScope(Dispatchers.Unconfined))
+        val phonesApp = testPng(96, tint = 3).also { server.keep("app:com.example.chat", it) }
+        val elsewhere = testPng(32, tint = 4).also { server.keep("site:elsewhere.example", it) }
+        val d = Daemon(
+            listOf(block),
+            fetcher = { url, _ -> looked += URI(url).host; if (url == "https://youtube.com/apple-touch-icon.png") SiteIcons.Fetched(url, site) else null },
+            laptopIcons = LaptopAppIcons({ if (it == "steam") "steam" else null }, listOf(share), rsvg = null, homeIcons = null),
+            serverIcons = server,
+        )
+
+        // The phone's app, from the copy of the server's; asked as an <img> asks, with no X-Xrnrule.
+        val (code, bytes, headers) = d.image("/api/icon?key=app%3Acom.example.chat")
+        assertEquals(200, code)
+        assertTrue(phonesApp.contentEquals(bytes))
+        assertEquals(listOf("image/png"), headers["Content-Type"])
+        assertEquals(listOf("same-origin"), headers["Cross-Origin-Resource-Policy"])
+        assertEquals(listOf("nosniff"), headers["X-Content-Type-Options"])
+        assertEquals(listOf("private, max-age=86400"), headers["Cache-Control"])
+        // A laptop app's own.
+        assertTrue(steam.contentEquals(d.image("/api/icon?key=desk%3Asteam").second))
+        // A site a block names: its own, once fetched.
+        assertEquals(404, d.image("/api/icon?key=site%3Ayoutube.com").first)
+        await("the site's icon") { d.image("/api/icon?key=site%3Ayoutube.com").first == 200 }
+        assertTrue(site.contentEquals(d.image("/api/icon?key=site%3Ayoutube.com").second))
+        // A site no block names is never fetched here, but the server's copy (the phone's) is shown.
+        assertTrue(elsewhere.contentEquals(d.image("/api/icon?key=site%3Aelsewhere.example").second))
+        assertFalse(looked.toString(), "elsewhere.example" in looked)
+        // What no one has, and what is no key.
+        for (key in listOf("desk%3Amissing", "app%3Acom.example.none", "site%3Anowhere.example", "..%2F..%2Fworld.json", "site%3AYouTube.com", "steam", "")) {
+            assertEquals(key, 404, d.image("/api/icon?key=$key").first)
+        }
+        assertEquals(404, d.image("/api/icon").first)
+        assertFalse(looked.toString(), "nowhere.example" in looked)
     }
 
     @Test

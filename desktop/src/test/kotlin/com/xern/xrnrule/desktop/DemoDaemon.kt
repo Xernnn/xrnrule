@@ -48,7 +48,11 @@ import kotlin.random.Random
  *
  *     ./gradlew --no-daemon -q :desktop:demo --args="47390 /tmp/some-empty-dir"     (or "… empty")
  *
- * Never point it at the real data dir: it writes its own world there.
+ * With `XRNRULE_DEMO_ICONS=<a test sync server's /xrnrule URL>` and `XRNRULE_DEMO_LOGIN=user:password`
+ * it trades logos with that server ([ServerIcons]), and that alone: the blocks' laptop apps' icons
+ * and sites' (drawn here) go up, the other devices' come down for the page.
+ *
+ * Never point it at the real data dir, nor at the real server: it writes its own world there.
  */
 fun main(args: Array<String>) {
     val port = args.getOrNull(0)?.toIntOrNull() ?: 47390
@@ -82,7 +86,14 @@ fun main(args: Array<String>) {
     val shared = SharedSyncClient(config, store, telemetry, scope)
     val icons = SiteIconCache(File(dir, "site-icons"), scope, Demo::fetchIcon)
     val remote = if (empty) null else Demo.Remote(dir, clock.nowWallMs(), clock.zone(), clock.startOfLocalDayMs(), telemetry)
-    LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), icons, telemetry, remote).start()
+    val laptopIcons = LaptopAppIcons()
+    val iconServer = System.getenv("XRNRULE_DEMO_ICONS")?.trimEnd('/')
+    val login = System.getenv("XRNRULE_DEMO_LOGIN").orEmpty().split(":", limit = 2)
+    val serverIcons = iconServer?.let { url ->
+        ServerIcons(File(dir, "server-icons"), url, Http(login[0], login.getOrElse(1) { "" }), store.world, { ServerIcons.owned(it, icons, laptopIcons) }, scope)
+            .also { it.start(kotlinx.coroutines.flow.MutableStateFlow(null)) }
+    }
+    LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), icons, telemetry, remote, laptopIcons, serverIcons).start()
     println("demo on http://127.0.0.1:$port/ (data in $dir)")
     // Keep the extension "seen" and the clock ticking, as the real loop does.
     while (true) {
