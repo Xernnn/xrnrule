@@ -10,6 +10,7 @@ import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.EnforcementTier
+import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.PersistPort
 import com.xern.xrnrule.domain.SiteIcons
 import com.xern.xrnrule.domain.Trigger
@@ -21,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -64,6 +67,7 @@ class LocalServerTest {
     private inner class Daemon(
         blocks: List<Block> = emptyList(),
         checklist: Map<String, List<ChecklistItem>> = emptyMap(),
+        habits: List<Habit> = emptyList(),
         known: String? = null,
         fetcher: (String, Int) -> SiteIcons.Fetched? = { _, _ -> null },
         laptopIcons: LaptopAppIcons = LaptopAppIcons({ null }, emptyList(), rsvg = null, homeIcons = null),
@@ -73,7 +77,7 @@ class LocalServerTest {
         val port = ServerSocket(0).use { it.localPort }
         private val config = Config(server = "", user = "", password = "", port = port, dataDir = dir)
         private val scope = CoroutineScope(Dispatchers.Unconfined)
-        private val world = World(blocks = blocks, checklist = checklist, deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
+        private val world = World(blocks = blocks, checklist = checklist, habits = habits, deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
         val store = Store(
             BlockEngine(),
             object : PersistPort {
@@ -111,6 +115,13 @@ class LocalServerTest {
 
         /** The answer's status code. [xrnrule]: with the header that only our pages and the extension can send. */
         fun get(path: String, xrnrule: Boolean = true): Int = request("GET", path, null, xrnrule)
+
+        /** What a GET answers, as JSON. */
+        fun getJson(path: String): JsonObject {
+            var answer = ""
+            request("GET", path, null, xrnrule = true) { answer = it }
+            return Json.parseToJsonElement(answer).jsonObject
+        }
 
         fun post(path: String, body: String): Int = request("POST", path, body, xrnrule = true)
 
@@ -200,6 +211,26 @@ class LocalServerTest {
         Thread.sleep(300) // a fetch started before those would have come by now
         assertFalse(looked.toString(), "tracker.example" in looked)
         assertFalse("nothing kept for it", File(d.icons, "tracker.example.miss").exists())
+    }
+
+    @Test
+    fun aBlockNamesItsPhoneAppsAndAHabitItsOwnColourForThePage() {
+        // The page draws a block's phone apps by their logos (/api/icon?key=app:<package>) and a
+        // habit's row in its own colour: a count of apps and the data orange were all it had.
+        val block = Block(
+            "social", "Social", targetPackages = setOf("com.example.video", "com.example.chat"), targetSites = setOf("example.org"),
+            trigger = Trigger(TriggerType.CHECKLIST, -1, TriggerUnit.ITEMS),
+        )
+        val d = Daemon(
+            listOf(block),
+            checklist = mapOf("social" to listOf(ChecklistItem("i1", "social", "Plank", 0, habitId = "plank"))),
+            habits = listOf(Habit("plank", "Plank", paletteColor = 3)),
+        )
+        val shown = d.getJson("/api/state")["blocks"]!!.jsonArray.single().jsonObject
+        assertEquals(listOf("com.example.chat", "com.example.video"), shown["phonePackages"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(2, shown["phoneApps"]!!.jsonPrimitive.int)
+        val habit = shown["items"]!!.jsonArray.single().jsonObject["habit"]!!.jsonObject
+        assertEquals(3, habit["color"]!!.jsonPrimitive.int)
     }
 
     @Test

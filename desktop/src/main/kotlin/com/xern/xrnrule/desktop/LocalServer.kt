@@ -456,11 +456,13 @@ class LocalServer(
      * for a timer); a check's [amount] and [unlock] are 1. [amount] counts toward this block's
      * next unlock, [spent] is what earlier ones used on [day], the habit day the item counts, and
      * [dayValue] is that day's entry. [unlock] is null for an "at most" habit, which never opens.
+     * [color] is the habit's own colour, as Loop's palette index (0..19), which the page draws it in.
      */
     @Serializable
     data class UiHabit(
         val id: String,
         val name: String,
+        val color: Int,
         val kind: String,
         val unit: String,
         val unlock: Long?,
@@ -486,6 +488,8 @@ class LocalServer(
         val state: String,
         val blocking: Boolean,
         val phoneApps: Int,
+        /** The phone apps it covers, by package: the page shows their logos (`/api/icon?key=app:<package>`). */
+        val phonePackages: List<String>,
         val sites: List<String>,
         /** [sites] as the page lists them: `redd.it` folded into `reddit.com` ([Sites.shown]). */
         val shownSites: List<String>,
@@ -693,6 +697,7 @@ class LocalServer(
             state = b.state.name,
             blocking = engine.isBlocking(world, b, clock),
             phoneApps = b.targetPackages.size,
+            phonePackages = b.targetPackages.sorted(),
             sites = b.targetSites.sorted(),
             shownSites = Sites.shown(b.targetSites.sorted()),
             exceptSites = b.exceptSites.sorted(),
@@ -735,6 +740,7 @@ class LocalServer(
                         UiHabit(
                             id = h.id,
                             name = h.name,
+                            color = h.paletteColor.coerceIn(0, 19),
                             kind = h.kind.name,
                             unit = h.unit,
                             unlock = h.unlockUnit,
