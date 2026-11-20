@@ -77,6 +77,12 @@ parts of a site alone (music.youtube.com under youtube.com).
   the Blocks tab say it's ready and take you to Settings → Updates, where it installs when you tap
   Install. See [Updates](#updates).
 - **Backup.** Export your blocks to a file and import them on a new install.
+- **Real logos everywhere.** With sync on, each device sends the server the logos of what its
+  blocks name: the phone its apps' own icons (and a site's where the server has none), the
+  laptop its apps' icons (from their `.desktop` entries and the icon theme) and its sites'. So
+  the laptop's page and the server's status page show the phone's apps as they look on the
+  phone. At most 64 KB each and 400 in all; a logo goes again only when it changed, at most once
+  a day.
 - **Insights.** Both devices' history (the laptop's comes through the sync server), for today,
   7 or 30 days, all devices or one: blocked tries, time unlocked, minutes bought, breaks and
   habits, each over the same figure for the stretch before (once the log reaches back to its
@@ -175,6 +181,10 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
   `<link rel="icon">`, then `/favicon.ico`), with no login and no cookies, and only for real
   domain names, never an IP address or `localhost`. Only PNG, ICO, JPEG, GIF and WebP are
   kept, checked by their first bytes (no SVG: on the laptop page's origin it could carry script).
+  The sync server keeps the devices' logos (`/icons`) under the same rule: a raster image of at
+  most 64 KB, its type told by its bytes, under a key that can't name a path, served with
+  `nosniff`, a sandboxing policy and to its own origin only. Being an `<img>`, the status page's
+  logo asks with its login cookie alone; nothing else does.
 - **Other apps on the phone** can reach `127.0.0.1:47321` as well. They can read which sites are
   blocked and report a site in front, nothing more, and nothing they send can crash the app.
   If xrnrule were down and another app took the port, the extension would still send blocked
@@ -188,7 +198,7 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
   else: a script bug anywhere on the host can't walk off with the password. The cookie only
   counts with a header other sites can't send, and a new password ends every session. The
   pages run only their own scripts and can't be put in another site's frame.
-- **Updates** can only come from you. The server takes no uploads (releases arrive over ssh),
+- **Updates** can only come from you. The server takes no releases over HTTP (they arrive over ssh),
   the extension's files are public because a browser's updater sends no login (it's the
   extension's own code, nothing of yours), and the app's need the sync login. A browser takes
   only a `.crx` signed with the extension's key, and Android only an APK signed with the app's;
