@@ -91,11 +91,22 @@ parts of a site alone (music.youtube.com under youtube.com).
   device; a row per block (tries and their trend, unlocks and time open, minutes bought, a daily
   limit's use a day against it, clean days in a row); on the phone, time per app and site; and a
   day-by-day history. A block has a muted tone from its place in the block list, shown only small:
-  a dot before its name, its part of a bar or a day's strip, its sparkline, the marker on its
-  card. A habit or an unlock both devices logged counts once. On the laptop's page and the
-  server's status page each block's card also says its day so far ("4 tries · 12 min open") and
-  draws today's blocked hours as a strip with now marked; the status page says when each device
-  last checked in, the laptop's page when the phone did.
+  a dot before its name, its part of a bar or a day's strip, its sparkline. A habit or an unlock
+  both devices logged counts once.
+- **The laptop's pages** (the laptop app's own page and the server's status page, which the hub's
+  laptop window shows as Blocks) look and work like the phone's, after Habits First. A block's
+  card has the real icons of what it covers (one alone, or four in a 2 × 2 with "+N"), its name,
+  how it stands in grey words after a coloured dot and its day so far ("4 tries · 12 min open");
+  at the right, a padlock for its state, or its one allowed action (open an earned unlock, block
+  it again after a lockdown): never an on/off switch. Then "DO ALL" and a row per thing it asks
+  for, in the habit's own colour where the laptop knows it, with a thin bar and a round play
+  button for a timer; today's blocked hours as a strip with now marked. Insights leads with the
+  blocked tries big and the other figures under them, then the most tried apps and sites by
+  their icons; By block and the history show icons too. The laptop's block page shows the site's
+  or app's icon, "To unlock reddit.com, finish your habits first!" and what's left. Icons come
+  from the phone, the laptop and the sites themselves through the server (`/icons`); what has
+  none shows a grey globe, phone or laptop. The status page says when each device last checked
+  in, the laptop's page when the phone did.
 - Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
   turns its autostart off, which Xiaomi phones do at every install.
 

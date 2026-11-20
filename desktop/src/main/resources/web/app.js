@@ -2,13 +2,17 @@
 // and the block page ("/block?app=…" or "/block?site=…&back=…") that blocked apps and sites land
 // on. Everything comes from the daemon's /api/state, polled every second; the engine behind it
 // is the phone's. Insights reads /api/history (both devices' log, History.kt). The look, the
-// icons and Insights are shared with the sync server's status page (server/web, copied in).
+// icons and Insights are shared with the sync server's status page (server/web, copied in). The
+// real icons of blocked apps and sites come from the daemon's /api/icon (its own site icons,
+// laptop apps' own icons, and the server's copies of the phone's).
 //
 // The page redraws every second, but only what has no text field in it: the block form and the
 // settings you edit are built once and kept, so typing never loses its place.
 
-import { h, s, icon, duration, coverLine, checkIn, daySpans, dayStrip, limitTone, meter, toneAt, savedTheme, saveTheme, applyTheme } from "./ui.js";
+import { h, s, icon, duration, checkIn, daySpans, dayStrip, limitTone, savedTheme, saveTheme, applyTheme, row, tag, joinTag, statePill, cluster, blockLogos, coverText, habitHue, logo, siteKey, deskKey, iconSource, pooled } from "./ui.js";
 import { normalizeBlocks, mergeShared, renderInsights, dayByBlock, dayLine, clockAt } from "./insights.js";
+
+iconSource({ url: (key) => `/api/icon?key=${encodeURIComponent(key)}` });
 
 const params = new URLSearchParams(location.search);
 const onBlockPage = location.pathname === "/block";
@@ -114,19 +118,6 @@ function heartbeat() {
 
 // ---- helpers -------------------------------------------------------------------------------
 
-// A website's own icon, served by the daemon (which asks the site once and keeps it). The page
-// redraws every second: one that isn't there yet is asked for again after 30 s, not every time.
-const iconMissing = new Map();
-function siteIcon(site) {
-  const host = site.split("/")[0]; // a target can carry a path
-  const since = iconMissing.get(host);
-  if (since && Date.now() - since < 30_000) return null;
-  return h("img", {
-    class: "favicon", alt: "", src: `/api/site-icon?host=${encodeURIComponent(host)}`,
-    onerror: (e) => { iconMissing.set(host, Date.now()); e.target.remove(); },
-  });
-}
-
 const time = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const lockEnd = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
 const min = (ms) => Math.max(0, Math.round(ms / 60000));
@@ -160,7 +151,9 @@ const backHere = (back, site) => {
 const siteBlocked = (host) => state.blockedSites.some((d) => siteMatches(host, d) && !(state.siteExceptions[d] ?? []).some((e) => siteMatches(host, e)));
 const appName = (id) => state?.appNames?.[id] ?? apps?.find((a) => a.id === id)?.name ?? id;
 
-const initial = (name) => (String(name ?? "").trim()[0] ?? "x").toUpperCase();
+/** A block's icons (ui.js blockLogos), its laptop apps by their names; what it covers in words, for their title. */
+const logosOf = (b) => blockLogos(b, appName);
+const coverOf = (b) => coverText({ sites: b.shownSites, phoneApps: b.phoneApps, laptopApps: b.desktopApps.map(appName), except: b.exceptSites });
 
 /** The engine's words for how a block stands: the same sentence as the phone's card. */
 const TONE = { BLOCKED: "blocked", READY: "earned", OPEN: "open", OFF: "idle" };
@@ -198,18 +191,40 @@ function how(b) {
   return rules.length ? rules.join(" ") : null;
 }
 
-/** "Do both", "Do all", "Do 2 of 3": how a habit block's rows add up, or null for one row. */
-function joinTag(b, parts) {
-  if (parts < 2) return null;
-  if (b.trigger === "COMBINED") {
-    if (b.combineOr) return parts === 2 ? "Do either" : "Timer or all tasks";
-    return parts === 2 ? "Do both" : "Do all";
-  }
-  if (b.trigger === "CHECKLIST") {
-    if (b.requiredItems === -1 || b.requiredItems >= parts) return parts === 2 ? "Do both" : "Do all";
-    return `Do ${b.requiredItems} of ${parts}`;
-  }
-  return null;
+/** "a", "a and b", "a, b and c". */
+const listed = (parts, word = "and") => (parts.length < 2 ? parts[0] ?? "" : `${parts.slice(0, -1).join(", ")} ${word} ${parts[parts.length - 1]}`);
+const units = (milli) => +(milli / 1000).toFixed(3);
+
+/** What's left of one thing a habit block asks for, in a few words, or null once it's done (or it can't open anything). */
+function itemLeft(i) {
+  if (i.done) return null;
+  const x = i.habit;
+  if (!x) return i.text;
+  if (x.unlock == null) return null; // an "at most" habit never opens a block
+  const left = Math.max(0, x.unlock - x.amount);
+  if (x.kind === "TIMER") return `${x.name}: ${Math.ceil(left / 1000)} more min`;
+  if (x.kind === "COUNT") return `${x.name}: ${units(left)} more${x.unit ? ` ${x.unit}` : ""}`;
+  return x.name;
+}
+
+/**
+ * The block page's words for a habit block that holds it, as Habits First's: "To unlock
+ * reddit.com, finish your habits first!" (or its timer, for a block that has only that), and
+ * one line of what's left: each thing not done yet, "Any 2 of …" when it needs only some, "… or
+ * 12 more min on the timer" when either will do. [what]: the app's or site's name.
+ */
+function unlockWords(b, what) {
+  const timerOnly = b.trigger === "TIMER";
+  const tasks = timerOnly ? [] : b.items.map(itemLeft).filter(Boolean);
+  const hasTimer = (timerOnly || b.trigger === "COMBINED") && b.timerMs < b.requiredMs;
+  const timer = hasTimer ? `${Math.ceil((b.requiredMs - b.timerMs) / 60_000)} more min on the timer` : null;
+  const need = b.trigger === "CHECKLIST" && b.requiredItems !== -1 ? b.requiredItems - b.items.filter((i) => i.done).length : tasks.length;
+  const todo = need > 0 && need < tasks.length ? [`Any ${need} of ${listed(tasks, "or")}`] : tasks;
+  const left = b.combineOr && timer && todo.length ? `${listed(todo)} or ${timer}` : listed([...todo, timer].filter(Boolean));
+  return {
+    title: `To unlock ${what}, ${timerOnly ? "wait out its timer" : "finish your habits"} first!`,
+    left: left ? `${left[0].toUpperCase()}${left.slice(1)}.` : null,
+  };
 }
 
 // ---- the wait (contract §2.3): a ring counting down over the dimmed page ---------------------
@@ -338,23 +353,6 @@ window.addEventListener("pagehide", () => clearTimeout(leaving));
 /** A block held by time, on the block page: nothing to do here, so only its rules, in a line. */
 const ruleLine = (b) => h("p", { class: "rule" }, h("b", {}, b.name), `: ${how(b) ?? b.hoursText ?? b.headline.text}`);
 
-/**
- * One thing a block asks for or holds to (the phone's HabitRow): a grey icon for its kind (or
- * xrnloops' tile for a linked habit), its words, its figure, a meter for what it has used (a
- * limit's turns amber from 80 % and red once used up), today's 24 hours for blocked hours, and
- * what you can do about it.
- */
-function rrow({ ic, label, value, fraction, limit, note, dim, action, loop, strip }) {
-  return h("div", { class: `rrow${dim ? " dim" : ""}` },
-    h("span", { class: "ricon" }, loop ? h("img", { src: "/xrnloops.svg", alt: "xrnloops" }) : icon(ic ?? "task")),
-    h("div", { class: "main" },
-      h("div", { class: "top" }, h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
-      fraction != null && meter(fraction, limit ? limitTone(fraction) : ""),
-      note && h("span", { class: "note" }, note),
-      strip),
-    h("div", { class: "acts" }, action));
-}
-
 /** The daemon's windows ({days, startMin, endMin}) as the shared state writes a schedule, for daySpans. */
 const windowOf = (start, end) => (start == null ? null : { startMinuteOfDay: start, endMinuteOfDay: end });
 const moreOf = (list) => (list ?? []).map((w) => ({ days: w.days, window: windowOf(w.startMin, w.endMin) }));
@@ -371,44 +369,59 @@ function hoursStrip(schedule, blockedNow) {
 const tick = (key, checked, disabled, onchange) =>
   h("input", { type: "checkbox", class: "tick", "data-key": key, checked, disabled, onchange, "aria-label": "Done" });
 
-/** A round button at the end of a row: an icon, or a short text ("+1"). */
+/** A round button at the end of a row: an icon (filled in the row's colour with "fill"), or a short text ("+1"). */
 const ract = (key, content, title, onclick, cls = "") =>
   h("button", { type: "button", class: `ract ${cls}`.trim(), "data-key": key, title, "aria-label": title, onclick }, cls.includes("text") ? content : icon(content));
 
-/** A block's limit and its blocked hours, on any kind of block that has them (I44). */
+/**
+ * A block's limit and its blocked hours, on any kind of block that has them (I44): a limit's row
+ * in the data colour, amber from 80 % and red once used up; the hours in grey with today's strip.
+ */
 function ruleRows(b) {
   const rows = [];
   if (b.hasLimit) {
     if (b.allowanceMs > 0) {
-      rows.push(rrow({ ic: "hourglass", label: b.perDevice ? "Daily limit, this laptop" : "Daily limit", value: `${min(b.allowanceUsedMs)} / ${min(b.allowanceMs)} min`, fraction: b.allowanceUsedMs / b.allowanceMs, limit: true }));
+      const f = b.allowanceUsedMs / b.allowanceMs;
+      rows.push(row({ ic: "hourglass", label: b.perDevice ? "Daily limit, this laptop" : "Daily limit", value: `${min(b.allowanceUsedMs)} / ${min(b.allowanceMs)} min`, fraction: f, tone: limitTone(f) }));
     }
     if (b.rowMs > 0) {
-      rows.push(rrow({
-        ic: "timer", label: "Time in a row", value: `${min(b.rowUsedMs)} / ${min(b.rowMs)} min`, fraction: b.rowUsedMs / b.rowMs, limit: true,
+      const f = b.rowUsedMs / b.rowMs;
+      rows.push(row({
+        ic: "timer", label: "Time in a row", value: `${min(b.rowUsedMs)} / ${min(b.rowMs)} min`, fraction: f, tone: limitTone(f),
         note: b.rowBreakRemainingMs > 0 ? `Break · ${clock(b.rowBreakRemainingMs)}` : null,
       }));
     }
     if (b.opensPerDay > 0) {
-      rows.push(rrow({ ic: "lockOpen", label: b.perDevice ? "Opens today, this laptop" : "Opens today", value: `${b.opensUsed} / ${b.opensPerDay}`, fraction: b.opensUsed / b.opensPerDay, limit: true }));
+      const f = b.opensUsed / b.opensPerDay;
+      rows.push(row({ ic: "lockOpen", label: b.perDevice ? "Opens today, this laptop" : "Opens today", value: `${b.opensUsed} / ${b.opensPerDay}`, fraction: f, tone: limitTone(f) }));
     }
   }
   if (b.mode !== "SCHEDULE" && b.hoursText) {
-    rows.push(rrow({ ic: "calendar", label: "Blocked hours", note: b.hoursText, dim: b.reason !== "HOURS", strip: hoursStrip(hoursOf(b), b.reason === "HOURS") }));
+    rows.push(row({ ic: "calendar", label: "Blocked hours", note: b.hoursText, tone: "plain", dim: b.reason !== "HOURS", strip: hoursStrip(hoursOf(b), b.reason === "HOURS") }));
   }
   return rows;
 }
 
-/** A habit (contract I23, I36): tick it (on the item's day), add to it, or run its focus timer. Amounts are thousandths of the unit. */
+/** A habit's glyph by its kind, as the phone's habitIcon falls back to. */
+const HABIT_GLYPH = { TIMER: "timer", COUNT: "addCircle", CHECK: "task" };
+
+/**
+ * A habit (contract I23, I36), as Habits First's row: its glyph and its bar in its own colour
+ * (Loop's palette, where the state says which; else the data colour), its name, "12 / 20 pages";
+ * tick it (on the item's day), add to it, or run its focus timer from the round button. Amounts
+ * are thousandths of the unit.
+ */
 function habitRow(x) {
-  const units = (n) => +(n / 1000).toFixed(3);
   const unit = x.unit && x.kind !== "TIMER" ? ` ${x.unit}` : "";
   const label = x.name + (x.yesterday ? " (yesterday)" : "");
+  const look = { ic: HABIT_GLYPH[x.kind] ?? "task", hue: habitHue(x.color), label };
   if (x.kind === "CHECK") {
     const ticked = x.dayValue === YES_MANUAL;
-    return rrow({
-      loop: true, label,
+    const done = ticked || x.dayValue === YES_AUTO;
+    return row({
+      ...look, dim: done,
       value: x.unlock === null ? "Never opens" : x.spent > 0 && x.amount < 1 ? "Used" : null,
-      action: tick(`habit:${x.id}`, ticked || x.dayValue === YES_AUTO, false, () => act({ type: "set", habitId: x.id, day: x.day, value: ticked ? NO : YES_MANUAL })),
+      action: tick(`habit:${x.id}`, done, false, () => act({ type: "set", habitId: x.id, day: x.day, value: ticked ? NO : YES_MANUAL })),
     });
   }
   const toward = x.unlock === null ? "Never opens"
@@ -419,70 +432,81 @@ function habitRow(x) {
     actions.push(ract(`plus:${x.id}`, "+1", "Add one", () => act({ type: "log", habitId: x.id, amount: 1000 }), "text"));
   }
   if (x.kind === "TIMER" && !x.yesterday) {
-    actions.push(ract(`focus:${x.id}`, x.focusing ? "pause" : "play", x.focusing ? "Pause" : x.onBreak ? "Resume" : "Focus", () => act({ type: x.focusing ? "focusPause" : "focus", habitId: x.id })));
+    actions.push(ract(`focus:${x.id}`, x.focusing ? "pause" : "play", x.focusing ? "Pause" : x.onBreak ? "Resume" : "Focus", () => act({ type: x.focusing ? "focusPause" : "focus", habitId: x.id }), "fill"));
   }
   if (x.kind === "TIMER" && (x.focusing || x.onBreak)) actions.push(ract(`end:${x.id}`, "check", "End", () => act({ type: "focusEnd" }), "ring"));
-  return rrow({ loop: true, label, value: toward, fraction: x.unlock ? Math.min(1, x.amount / Math.max(1, x.unlock)) : null, action: actions });
+  const fraction = x.unlock ? Math.min(1, x.amount / Math.max(1, x.unlock)) : null;
+  return row({ ...look, value: toward, fraction, done: fraction === 1, action: actions });
 }
 
-/** A habit block's body, as the phone's: its open pill when earned, then a row per thing it asks for. */
+/**
+ * A habit block's body, as the phone's: why an earned unlock can't open now (Habits First's grey
+ * "no unlocks available"), "DO ALL", then a row per thing it asks for. Opening an earned unlock
+ * is the card's one action, at its right.
+ */
 function habitBody(b) {
   if (b.state === "UNLOCKED") return []; // the headline says how long
   const out = [];
   if (b.state === "EARNED") {
-    const capped = b.redeemRejection === "CAP_REACHED";
-    const held = b.redeemRejection === "HELD"; // I44: opening now would open nothing
-    if (capped) out.push(h("div", { class: "pill" }, `${min(state.dailyCapMs)} min used today`));
-    else if (held) out.push(h("div", { class: "pill" }, "Done · opens once it's no longer blocked"));
-    else out.push(h("button", { class: "pill go", type: "button", "data-key": `redeem:${b.id}`, onclick: () => act({ type: "redeem", blockId: b.id }) }, `Open for ${min(b.unlockMs)} min`));
+    if (b.redeemRejection === "CAP_REACHED") out.push(h("div", { class: "pill" }, `${min(state.dailyCapMs)} min used today`));
+    else if (b.redeemRejection === "HELD") out.push(h("div", { class: "pill" }, "Done · opens once it's no longer blocked")); // I44: opening now would open nothing
   }
   const armed = b.state === "ARMED";
   const rows = b.items.map((i) => {
     if (i.habit) return habitRow(i.habit);
     // An NFC tag (I43): only the phone ticks it, by reading the tag; unticking is always fine.
     if (i.tag) {
-      return rrow({
-        ic: "nfc", label: i.text, dim: i.done, value: i.done ? "Scanned" : "On the phone",
+      return row({
+        ic: "nfc", tone: "plain", label: i.text, dim: i.done, value: i.done ? "Scanned" : "On the phone",
         action: tick(`item:${i.id}`, i.done, !(armed && i.done), (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })),
       });
     }
-    return rrow({ ic: "task", label: i.text, dim: i.done, action: tick(`item:${i.id}`, i.done, !armed, (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })) });
+    return row({ ic: "task", tone: "plain", label: i.text, dim: i.done, action: tick(`item:${i.id}`, i.done, !armed, (e) => act({ type: "toggle", itemId: i.id, done: e.target.checked })) });
   });
   if (b.trigger === "TIMER" || b.trigger === "COMBINED") {
-    rows.push(rrow({
+    rows.push(row({
       ic: "timer", label: "Timer", value: `${clock(Math.min(b.timerMs, b.requiredMs))} / ${clock(b.requiredMs)}`,
       fraction: b.timerMs / Math.max(1, b.requiredMs),
-      action: armed && b.timerMs < b.requiredMs && ract(`timer:${b.id}`, b.timerRunning ? "pause" : "play", b.timerRunning ? "Pause" : "Start", () => act({ type: "timer", blockId: b.id, running: !b.timerRunning })),
+      action: armed && b.timerMs < b.requiredMs && ract(`timer:${b.id}`, b.timerRunning ? "pause" : "play", b.timerRunning ? "Pause" : "Start", () => act({ type: "timer", blockId: b.id, running: !b.timerRunning }), "fill"),
     }));
   }
-  const tag = joinTag(b, rows.length);
-  if (tag) out.push(h("span", { class: "jointag" }, tag));
+  out.push(tag(joinTag(b, rows.length)));
   if (!rows.length) out.push(h("span", { class: "label" }, "Nothing unlocks it yet"));
   out.push(...rows);
-  return out;
+  return out.filter(Boolean);
 }
 
 /** Daily limit, schedule, lockdown: no habit to do, so the card says where the rule stands. */
 function strictBody(b) {
   if (b.mode === "ALLOWANCE") return ruleRows(b);
   if (b.mode === "SCHEDULE") {
-    return b.scheduleText ? [rrow({ ic: "calendar", label: "Blocked hours", note: b.scheduleText, dim: !b.blocking, strip: hoursStrip(scheduleOf(b), b.blocking) })] : [];
+    return b.scheduleText ? [row({ ic: "calendar", label: "Blocked hours", note: b.scheduleText, tone: "plain", dim: !b.blocking, strip: hoursStrip(scheduleOf(b), b.blocking) })] : [];
   }
   if (b.mode === "LOCKDOWN") {
     if (b.lockdownRemainingMs > 0) {
-      return [rrow({ ic: "lock", label: "Locked down", value: `${clock(b.lockdownRemainingMs)} left`, fraction: 1 - b.lockdownRemainingMs / Math.max(1, b.lockdownMs) })];
+      return [row({ ic: "lock", label: "Locked down", value: `${clock(b.lockdownRemainingMs)} left`, fraction: 1 - b.lockdownRemainingMs / Math.max(1, b.lockdownMs) })];
     }
-    // The headline says it is over: only the way to start it again.
-    return [
-      b.enabled && h("button", { class: "pill outline", type: "button", "data-key": `lockdown:${b.id}`, onclick: () => act({ type: "lockdown", blockId: b.id }) }, icon("lock"), `Block again for ${duration(b.lockdownMs)}`),
-    ].filter(Boolean);
+    // The headline says it is over; starting it again is the card's action, at its right.
+    return [row({ ic: "lock", tone: "plain", dim: true, label: `${duration(b.lockdownMs)} lockdown` })];
   }
   return [];
 }
 
-/** What a block covers, in one quiet line; the block page is about the laptop, so no phone apps there. */
-function targets(b) {
-  return coverLine({ sites: b.shownSites, phoneApps: onBlockPage ? 0 : b.phoneApps, laptopApps: b.desktopApps.map(appName), except: b.exceptSites });
+/**
+ * A block's one allowed action, where its state would be: open an earned unlock, or block it
+ * again once a lockdown is over. Null for every other block: the state shows instead, and there
+ * is no switch to turn a block off (I-numbers in docs/domain-contract.md).
+ */
+function sideAction(b) {
+  if (b.mode === "HABIT" && b.state === "EARNED" && !b.redeemRejection) {
+    return h("button", { class: "btn primary act", type: "button", "data-key": `redeem:${b.id}`, title: `Open for ${min(b.unlockMs)} min`, onclick: () => act({ type: "redeem", blockId: b.id }) },
+      icon("lockOpen"), `Open ${min(b.unlockMs)} min`);
+  }
+  if (b.mode === "LOCKDOWN" && b.enabled && b.lockdownRemainingMs === 0) {
+    return h("button", { class: "btn outline act", type: "button", "data-key": `lockdown:${b.id}`, title: `Block again for ${duration(b.lockdownMs)}`, onclick: () => act({ type: "lockdown", blockId: b.id }) },
+      icon("lock"), "Block again");
+  }
+  return null;
 }
 
 /** Each block's day so far, from the history Insights reads (both devices'), by block id; null until it's in. */
@@ -497,27 +521,35 @@ function blockDays() {
   return daysFrom.days;
 }
 
+/**
+ * A block's card, as Habits First's and the phone's: the icons of what it covers and its name
+ * (both open its edit page), how it stands in grey words after a coloured dot, its day so far;
+ * at the right its state, or its one allowed action, with the edit button under it as Habits
+ * First has its lock; then its rules, "DO ALL" and a row per thing it asks for.
+ */
 function blockCard(b) {
   const cls = TONE[b.headline.tone] ?? "idle";
   const editable = !onBlockPage;
+  const day = !onBlockPage && blockDays()?.get(b.id);
   const sub = [
+    day && dayLine(day),
     b.devices === "PHONE" && "Phone only",
     b.devices === "LAPTOP" && "Laptop only",
     b.lockedUntilWall && `Locked until ${lockEnd.format(b.lockedUntilWall)}`,
     b.hardcore && "Hardcore",
   ].filter(Boolean);
   const body = !b.enabled ? [] : b.mode === "HABIT" ? [...ruleRows(b), ...habitBody(b)] : strictBody(b);
-  const head = [h("div", { class: "name" }, h("h3", {}, h("span", {}, b.name)), h("div", { class: `headline ${cls}` }, b.headline.text), sub.length > 0 && h("div", { class: "sub" }, sub.join(" · ")))];
-  // A block's tone is its place in the whole list, as on the phone and in Insights.
-  const index = state.blocks.findIndex((x) => x.id === b.id);
-  const day = !onBlockPage && blockDays()?.get(b.id);
-  return h("section", { class: `card bcard${b.enabled ? "" : " off"}`, "data-block": b.id, style: { "--tone": toneAt(Math.max(0, index)) } },
+  const head = [
+    cluster(logosOf(b), 46, coverOf(b)),
+    h("div", { class: "name" }, h("h3", {}, h("span", {}, b.name)), h("div", { class: `headline ${cls}` }, b.headline.text), sub.length > 0 && h("div", { class: "sub" }, sub.join(" · "))),
+  ];
+  return h("section", { class: `card bcard${b.enabled ? "" : " off"}`, "data-block": b.id },
     h("div", { class: "head" },
       editable ? h("button", { class: "open", type: "button", "data-key": `open:${b.id}`, title: "Edit", onclick: () => openForm(b) }, head) : h("div", { class: "open" }, head),
-      day && h("span", { class: "bday" }, dayLine(day)),
-      editable && h("button", { class: "icon-btn", type: "button", "data-key": `edit:${b.id}`, title: "Edit", "aria-label": `Edit ${b.name}`, onclick: () => openForm(b) }, icon("edit"))),
-    body.length > 0 && h("div", { class: "rows" }, body),
-    targets(b));
+      h("div", { class: "side" },
+        sideAction(b) ?? statePill(cls, b.headline.text),
+        editable && h("button", { class: "round small edit", type: "button", "data-key": `edit:${b.id}`, title: "Edit", "aria-label": `Edit ${b.name}`, onclick: () => openForm(b) }, icon("edit")))),
+    body.length > 0 && h("div", { class: "rows" }, body));
 }
 
 // ---- the block form ------------------------------------------------------------------------
@@ -871,7 +903,7 @@ let insightsNode = null;
 let insightsDrawn = null; // the data the node was last drawn from
 
 function loadInsightsView() {
-  const fallback = { range: "week", device: "all", block: null, historyDays: 7, openDays: {} };
+  const fallback = { range: "week", device: "all", block: null, historyDays: 7, openDays: {}, topAll: false };
   try {
     const kept = JSON.parse(localStorage.getItem(INSIGHTS_KEY) ?? "{}");
     return { ...fallback, range: kept.range ?? fallback.range, device: kept.device ?? fallback.device };
@@ -898,7 +930,11 @@ async function loadHistory() {
     const raw = await res.json();
     historyData = {
       events: mergeShared(raw.events, raw.emergencies),
-      blocks: normalizeBlocks(raw.blocks),
+      // Each block's icons as its card has them: the history names its apps, not which device's.
+      blocks: normalizeBlocks((raw.blocks ?? []).map((b) => {
+        const card = state?.blocks.find((x) => x.id === b.id);
+        return card ? { ...b, logos: logosOf(card) } : b;
+      })),
       limits: raw.limits ?? {},
       now: raw.now,
       zone: raw.zone,
@@ -923,10 +959,11 @@ function drawInsights(force) {
   if (!force && insightsDrawn === historyData) return insightsNode;
   insightsDrawn = historyData;
   renderInsights(insightsNode, historyData, insights, {
-    setRange: (range) => setInsights({ range, historyDays: 7 }),
+    setRange: (range) => setInsights({ range, historyDays: 7, topAll: false }),
     setDevice: (device) => setInsights({ device }),
-    pickBlock: (block) => { setInsights({ block, historyDays: 7 }); window.scrollTo({ top: 0, behavior: "smooth" }); },
+    pickBlock: (block) => { setInsights({ block, historyDays: 7, topAll: false }); window.scrollTo({ top: 0, behavior: "smooth" }); },
     more: () => setInsights({ historyDays: insights.historyDays + 7 }),
+    moreTop: () => setInsights({ topAll: true }),
     toggleDay: (day, open) => setInsights({ openDays: { ...insights.openDays, [day]: open } }),
   });
   if (historyData.reached === false) {
@@ -1082,7 +1119,7 @@ function blocksView() {
       h("div", { class: "today" },
         h("div", { class: "figure" }, h("b", {}, `${min(state.unlockUsedMs)} / ${min(state.dailyCapMs)} min`), h("span", {}, "Unlocked today")),
         breakButton,
-        h("button", { class: "btn primary", type: "button", "data-key": "new", onclick: () => openForm(null) }, icon("add"), "New block"))),
+        h("button", { class: "round", type: "button", "data-key": "new", title: "New block", "aria-label": "New block", onclick: () => openForm(null) }, icon("add")))),
     state.pauseRemainingMs > 0 && h("div", { class: "banner" }, icon("coffee"),
       h("div", {}, h("b", {}, "On a break"), h("span", { class: "left" }, `${clock(state.pauseRemainingMs)} left`)),
       h("button", { class: "btn ghost", type: "button", "data-key": "endPause", onclick: () => act({ type: "endPause" }) }, "End now")),
@@ -1101,14 +1138,22 @@ function blockPageView() {
     location.replace(backUrl);
     return null;
   }
+  // Habits First's block screen: the thing's own icon, big; for a habit block that holds it, what
+  // to do ("To unlock reddit.com, finish your habits first!") and what's left; for one held by
+  // time, when it's back and why.
+  const lead = still && !sub?.opening && !sub?.back && blocks.find((b) => b.reason === "HABIT" && b.state === "ARMED");
+  const words = lead && unlockWords(lead, what);
+  const host = (blockedSite ?? "").split("/")[0].toLowerCase();
+  const named = blocks.flatMap((b) => b.shownSites).find((x) => siteMatches(host, x.split("/")[0]));
+  const key = blockedApp ? deskKey(blockedApp) : siteKey(named ?? host);
   const hero = h("section", { class: "hero" + (still ? "" : " open") },
-    h("div", { class: "pic letter" }, initial(what), blockedSite && !blockedApp && siteIcon(blockedSite)),
-    h("h2", {}, sub?.opening ? `${what} is opening` : still ? `${what} is blocked` : `${what} is open`),
+    h("div", { class: "pic" }, logo(key, 96)),
+    h("h2", {}, sub?.opening ? `${what} is opening` : words ? words.title : still ? `${what} is blocked` : `${what} is open`),
     still && sub?.back && h("div", { class: "back" }, sub.back),
-    still && sub?.why && h("p", {}, sub.why));
+    still && (words ? words.left && h("p", {}, words.left) : sub?.why && h("p", {}, sub.why)));
   const buyable = still && sub && !sub.overrideRejection && !sub.overrideReadyAtWall;
   const way = still && h("section", { class: "way" },
-    h("button", { class: "btn big leave", type: "button", "data-key": "leave", onclick: leaveBlockPage }, blockedApp ? "Close this page" : "Leave this site"),
+    h("button", { class: "btn big leave", type: "button", "data-key": "leave", onclick: leaveBlockPage }, blockedApp ? "Close" : "Back"),
     buyable && h("button", { class: "quiet", type: "button", "data-key": "buy", onclick: () => buy("begin") }, `Take ${min(state.settings.grantMs)} more minutes`),
     sub?.overrideRejection === "NONE_LEFT" && h("p", { class: "rule" }, "None left to buy today"));
   // Time holds these, so they have nothing to do here: only a habit gets its card.
@@ -1170,11 +1215,12 @@ function render() {
   shell.bar.replaceChildren(header());
   let view;
   if (!state) view = h("div", {}, alertsView() ?? h("p", { class: "boot" }, "Loading…"));
-  else if (onBlockPage) view = blockPageView();
+  // Drawn every second: they keep their icon elements (ui.js pooled).
+  else if (onBlockPage) view = pooled(blockPageView);
   else if (form) view = formView(state.blocks.find((x) => x.id === form.blockId));
   else if (tab === "insights") view = insightsView();
   else if (tab === "settings") view = settingsView();
-  else view = blocksView();
+  else view = pooled(blocksView);
   if (!view) return;
   if (shell.main.firstChild !== view || shell.main.childNodes.length !== 1) {
     const scrollY = window.scrollY;

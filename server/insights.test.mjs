@@ -1,7 +1,8 @@
 // The Insights page's reading of both devices' event log (server/web/insights.js): the blocks it
 // reads and their tones, which block a try counts for, one of each shared event, ranges and days
 // where the devices are (I54), the period before, the busiest hour, each block's tries over the
-// range and its day so far, clean-day streaks, a limit's use day by day and a history day's figures.
+// range and its day so far, clean-day streaks, a limit's use day by day and a history day's figures,
+// and which icon each try, each thing tried most and each block shows.
 //
 //     node --test server        (from the repo root)
 import { test } from "node:test";
@@ -9,7 +10,7 @@ import assert from "node:assert/strict";
 
 // Viewed from a browser in another zone than the devices': their days are the ones counted.
 process.env.TZ = "America/Los_Angeles";
-const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline, dayByBlock, dayLine } = await import("./web/insights.js");
+const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline, dayByBlock, dayLine, tryKey } = await import("./web/insights.js");
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -185,6 +186,37 @@ test("the history runs newest first, a run of tries at one thing on one device a
   assert.deepEqual(days[0].rows.map((r) => [r.dev, r.n]), [["phone", 1], ["laptop", 1], ["phone", 3]]);
   assert.equal(days[0].rows[2].from, TODAY + HOUR);
   assert.deepEqual(days[0].rows[0].blocks, ["social"]);
+});
+
+test("a try shows what was tried by its own icon: a site the block names, an app by the device it was tried on", () => {
+  const key = (d, target, name) => tryKey({ ...tried(d, target, 0, name), dev: d }, blocks);
+  assert.equal(key("phone", "com.instagram.android", "Instagram"), "app:com.instagram.android");
+  assert.equal(key("laptop", "steam", "Steam"), "desk:steam");
+  assert.equal(key("phone", "m.youtube.com"), "site:youtube.com", "the block's site, whose icon there is");
+  assert.equal(key("laptop", "www.reddit.com"), "site:reddit.com");
+  assert.equal(key("laptop", "example.org"), "site:example.org", "a site no block names any more: its own host");
+  // The history's rows and the most tried carry them; other events have none.
+  const events = mergeShared([
+    tried("phone", "com.instagram.android", NOW - 3 * HOUR, "Instagram"),
+    tried("laptop", "m.youtube.com", NOW - 2 * HOUR),
+    { d: "laptop", t: "unlock", block: "social", ms: 5 * MIN, at: NOW - HOUR },
+  ]);
+  assert.deepEqual(timeline(events, blocks, ZONE)[0].rows.map((r) => r.icon), [null, "site:youtube.com", "app:com.instagram.android"]);
+  const data = compute({ events, blocks, limits: {}, now: NOW, zone: ZONE }, { range: "today" });
+  assert.deepEqual(data.top.map((t) => [t.name, t.icon]), [["Instagram", "app:com.instagram.android"], ["m.youtube.com", "site:youtube.com"]]);
+});
+
+test("the most tried is all of it, the page showing the first eight until asked for more", () => {
+  const events = mergeShared(Array.from({ length: 11 }, (_, i) => tried("laptop", `site${i}.example.com`, NOW - (i + 1) * MIN)));
+  assert.equal(compute({ events, blocks, limits: {}, now: NOW, zone: ZONE }, { range: "today" }).top.length, 11);
+});
+
+test("each block brings its icons, or the ones its page worked out", () => {
+  assert.deepEqual(blocks[0].logos.items.map((x) => x.key), ["app:com.instagram.android", "site:reddit.com", "site:x.com"]);
+  const given = { items: [{ key: "desk:steam", name: "Steam" }], extra: 1 };
+  assert.equal(normalizeBlocks([{ id: "g", name: "G", apps: ["steam"], sites: [], logos: given }])[0].logos, given);
+  const perBlock = compute({ events: [], blocks, limits: {}, now: NOW, zone: ZONE }, {}).perBlock;
+  assert.equal(perBlock[0].logos, blocks[0].logos, "By block draws them");
 });
 
 test("a day starts at midnight where the devices are, across a change of the clocks", () => {

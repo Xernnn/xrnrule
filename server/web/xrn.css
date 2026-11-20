@@ -64,6 +64,10 @@
   color-scheme: light;
 }
 
+/* A habit's own colour: Loop's light palette on a light page. */
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .rrow.hued { --hc: var(--hc-l); --on-hc: #fff; } }
+:root[data-theme="light"] .rrow.hued { --hc: var(--hc-l); --on-hc: #fff; }
+
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 html, body { margin: 0; }
@@ -105,14 +109,15 @@ a { color: inherit; text-decoration: none; }
   .app-link:hover, .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 }
 
-/* A phone's width: the tabs go to the bottom, as on the phone and the hub. */
+/* A phone's width: the tabs go to the bottom, as Habits First's floating bar: an icon over each
+   name, the chosen one on a raised pill. */
 @media (max-width: 720px) {
-  .wrap { padding: 0 16px 96px; }
+  .wrap { padding: 0 16px 104px; }
   /* A backdrop filter would make the bar the box the fixed tab bar sits in. */
   .bar { backdrop-filter: none; background: var(--bg); }
   .bar .wrap { gap: 10px; min-height: 56px; }
-  .tabs { position: fixed; z-index: 30; left: 0; right: 0; bottom: 0; gap: 0; border-top: 1px solid var(--line); padding: 6px 8px calc(8px + env(safe-area-inset-bottom)); justify-content: space-around; background: var(--surface); }
-  .tabs button { flex: 1; flex-direction: column; gap: 3px; padding: 4px 0; font-size: 12px; border-radius: 0; background: none !important; }
+  .tabs { position: fixed; z-index: 30; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(340px, calc(100% - 32px)); gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 10px 30px rgb(0 0 0 / 0.32); }
+  .tabs button { flex: 1; flex-direction: column; gap: 2px; padding: 7px 0 6px; font-size: 11.5px; border-radius: 21px; }
   .tabs button .icon { display: block; width: 22px; height: 22px; }
   .sync span { display: none; }
 }
@@ -171,73 +176,106 @@ h3.section, .section { margin: 0 0 12px; font-size: 14px; font-weight: 600; colo
 .checkin.stale::before { background: var(--warn); }
 .checkin b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* ---- block cards ---------------------------------------------------------------------------- */
+/* ---- logos: what a block covers, by its own icons ----------------------------------------- */
+/* A site's, an app's or a laptop app's icon at a fixed size (a class per size: the pages allow no
+   style attributes); a grey glyph for its kind when it has none. */
+.logo { display: block; flex: none; border-radius: 23%; object-fit: cover; }
+.logo.glyph { display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.logo.glyph .icon { width: 64%; height: 64%; }
+.s11 { width: 11px; height: 11px; } .s13 { width: 13px; height: 13px; } .s18 { width: 18px; height: 18px; } .s20 { width: 20px; height: 20px; }
+.s24 { width: 24px; height: 24px; } .s28 { width: 28px; height: 28px; } .s30 { width: 30px; height: 30px; } .s36 { width: 36px; height: 36px; }
+.s40 { width: 40px; height: 40px; } .s46 { width: 46px; height: 46px; } .s52 { width: 52px; height: 52px; } .s96 { width: 96px; height: 96px; }
+.logo.s11, .logo.s13 { border-radius: 3px; }
+
+/* A block's icons, as the phone's tile: one alone, or up to four in a 2 × 2 on a grey tile, "+N"
+   in its corner for the rest. */
+.cluster { position: relative; display: grid; place-items: center; flex: none; border-radius: 26%; background: var(--surface-2); }
+.cluster.one { background: none; border-radius: 0; }
+.cluster-grid { display: grid; grid-template-columns: repeat(2, auto); gap: 3px; }
+.cluster-grid.n1 { grid-template-columns: auto; }
+.cluster.s30 .cluster-grid, .cluster.s24 .cluster-grid { gap: 2px; }
+.cluster-grid .logo.glyph { background: color-mix(in srgb, var(--text) 9%, var(--surface-2)); }
+.cluster-glyph { width: 45%; height: 45%; color: var(--muted); }
+.cluster-more { position: absolute; right: 0; bottom: 0; padding: 2px 4px 2px 5px; border-radius: 6px 0 12px 0; background: var(--outline); color: var(--text); font-size: 10px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.cluster.s30 .cluster-more, .cluster.s24 .cluster-more { font-size: 8.5px; padding: 1px 3px; border-radius: 4px 0 7px 0; }
+
+/* ---- block cards: Habits First's ------------------------------------------------------------ */
 .today { display: flex; align-items: center; gap: 12px; }
 .today .figure { display: grid; text-align: right; margin-right: 6px; }
 .today .figure + .figure { margin-left: 10px; }
 .today .figure b { font-size: 17px; font-weight: 650; white-space: nowrap; }
 .today .figure span { font-size: 12px; color: var(--muted); }
 .blocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px; align-items: start; }
-.bcard { display: grid; gap: 12px; }
+.bcard { display: grid; gap: 10px; padding: 16px 16px 12px; }
 .bcard.off { opacity: 0.55; }
-.bcard .head { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
-.bcard .head > .open { display: flex; flex: 1; min-width: 0; border: 0; background: none; padding: 0; text-align: left; color: inherit; }
-.bcard .name { min-width: 0; display: grid; gap: 2px; }
-.bcard h3 { display: flex; align-items: center; gap: 9px; font-size: 17px; font-weight: 600; margin: 0; min-width: 0; }
+/* Its icons and its name, how it stands under it; at the right its state, where Habits First has its switch. */
+.bcard .head { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.bcard .head > .open { display: flex; flex: 1; gap: 12px; align-items: center; min-width: 0; border: 0; background: none; padding: 0; text-align: left; color: inherit; border-radius: 14px; }
+.bcard .name { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.bcard h3 { display: flex; align-items: center; font-size: 16px; font-weight: 600; margin: 0; min-width: 0; }
 .bcard h3 span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The block's tone, as a short marker before its name. */
-.bcard h3::before { content: ""; flex: none; width: 4px; height: 16px; border-radius: 2px; background: var(--tone, var(--faint)); }
-/* Its day so far, small, at the card's top right; under its name on a phone. */
-.bcard .bday { flex: none; margin-top: 3px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-@media (max-width: 560px) {
-  .bcard .head { flex-wrap: wrap; row-gap: 4px; }
-  .bcard .bday { order: 3; flex-basis: 100%; margin: 0 0 0 13px; }
-}
-.bcard .sub { color: var(--muted); font-size: 12.5px; }
+.bcard .sub { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bcard .side { align-self: flex-start; display: grid; justify-items: end; gap: 8px; flex: none; }
 /* How a block stands: its words in grey, and only the dot before them in colour, red while it is
    blocked and green while it is open. */
 .headline { font-size: 13.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .headline::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; vertical-align: 1px; background: var(--faint); }
 .headline.blocked::before { background: var(--blocked); }
 .headline.open::before, .headline.earned::before { background: var(--open); }
+/* Its state in the switch's place: a padlock, shut on red while it blocks, open on green while it's
+   open, open on grey while it rests. Never a switch: a block isn't simply turned off. */
+.state { display: grid; place-items: center; width: 52px; height: 30px; border-radius: 999px; background: var(--surface-2); color: var(--muted); flex: none; }
+.state .icon { width: 17px; height: 17px; }
+.state.blocked { background: color-mix(in srgb, var(--blocked) 22%, var(--surface)); color: var(--blocked); }
+.state.open, .state.earned { background: color-mix(in srgb, var(--open) 24%, var(--surface)); color: var(--open); }
+/* Its one allowed action, in the same place: open it, block it again. */
+.side .act { min-height: 30px; padding: 4px 12px 4px 10px; gap: 6px; font-size: 13px; }
+.side .act .icon { width: 16px; height: 16px; }
+.side .edit { width: 28px; height: 28px; border-radius: 50%; }
+.side .edit .icon { width: 15px; height: 15px; }
 
-/* What a block asks for or holds to, a row each: words, a figure, a meter, what to do. */
+/* What a block asks for or holds to, a row each, as Habits First's habit rows: its icon in its
+   colour (a habit's own, else the data colour; a limit's amber from 80 %, red once used up; grey
+   for what only holds), its words and figure, a thin bar in the same colour, what to do at the right. */
 .rows { display: grid; gap: 2px; }
-.rrow { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 5px 0; min-height: 38px; }
-/* What kind of rule or thing to do it is, in grey; a habit linked to xrnloops has xrnloops' tile. */
-.rrow > .ricon { align-self: start; margin-top: 1px; width: 20px; height: 20px; display: grid; place-items: center; color: var(--muted); }
-.rrow > .ricon .icon { width: 18px; height: 18px; }
-.rrow > .ricon img { width: 18px; height: 18px; display: block; }
+.rrow { --hc: var(--data); --on-hc: #fff; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; column-gap: 12px; align-items: center; padding: 5px 0; min-height: 40px; }
+.rrow.hued { --hc: var(--hc-d); --on-hc: #1f1f23; }
+.rrow.warn { --hc: var(--warn); }
+.rrow.over { --hc: var(--blocked); }
+.rrow.plain { --hc: var(--muted); }
+.rrow > .ricon { width: 22px; height: 22px; display: grid; place-items: center; color: var(--hc); }
+.rrow > .ricon .icon { width: 19px; height: 19px; }
 .rrow .main { display: grid; gap: 6px; min-width: 0; }
-.rrow .top { display: flex; gap: 8px; align-items: center; min-width: 0; }
-.rrow .lbl { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rrow .val { color: var(--muted); font-size: 13.5px; white-space: nowrap; }
+.rrow .top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.rrow .lbl { flex: 1; min-width: 0; font-size: 14px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rrow .val { color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rrow .note { color: var(--muted); font-size: 12.5px; }
 .rrow.dim .lbl { color: var(--muted); }
+.rbar { height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.rbar i { display: block; height: 100%; min-width: 5px; border-radius: 3px; background: var(--hc); transition: width 0.4s; }
+.rrow.done .rbar i { background: var(--muted); }
 .rrow .acts { display: flex; gap: 6px; align-items: center; }
 .rrow .acts:empty { display: none; }
-/* A ring to tick, filled once done. */
+/* A ring to tick, filled once done: green, or a habit's own colour. */
 .tick { appearance: none; width: 24px; height: 24px; margin: 0; border-radius: 50%; border: 1.5px solid var(--outline); display: grid; place-items: center; cursor: pointer; background: none; flex: none; }
 .tick:checked { background: var(--open); border-color: var(--open); }
+.rrow.hued .tick:checked { background: var(--hc); border-color: var(--hc); }
 .tick:checked::after { content: ""; width: 5px; height: 10px; border: solid var(--surface); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
 .tick:disabled { opacity: 0.7; cursor: default; }
+/* The round button at a row's end: play, filled in the row's colour as Habits First's; −1, +1, end. */
 .ract { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--surface-2); color: var(--text); padding: 0; }
 .ract .icon { width: 17px; height: 17px; }
+.ract.fill { background: var(--hc); color: var(--on-hc); }
 .ract.ring { background: none; border: 1.5px solid var(--outline); }
 .ract.text { width: auto; min-width: 30px; padding: 0 10px; border-radius: 999px; font-size: 13px; font-weight: 650; }
-.jointag { justify-self: start; font-size: 12.5px; color: var(--muted); }
-/* The wide pill under a card's header: open it now, or why it can't be. */
+/* "DO ALL": how a habit block's rows add up, in small capitals on a grey tag. */
+.jointag { justify-self: start; margin: 2px 0; padding: 3px 7px 2px; border-radius: 6px; background: var(--surface-2); color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+/* The wide grey pill under a card's header, as Habits First's "no unlocks available". */
 .pill { min-height: 42px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; background: var(--surface-2); color: var(--muted); border: 0; width: 100%; }
 button.pill.go { background: var(--accent); color: var(--on-accent); }
 button.pill.go:hover { filter: brightness(1.08); }
 .pill.outline { background: none; border: 1px solid var(--outline); color: var(--text); gap: 8px; }
 .pill.outline .icon { width: 18px; height: 18px; }
-/* What a block covers, in one line: a small grey glyph before each kind, what it leaves alone fainter. */
-.targets { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.targets .glyph { display: inline-block; width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px; color: var(--muted); }
-.targets .except { color: var(--faint); }
-.targets .sep { color: var(--faint); }
-
 /* A day's 24 hours: the blocked stretches shaded, ticks at 06, 12 and 18, a mark at now. */
 .daystrip { position: relative; height: 8px; border-radius: 4px; background: var(--surface-2); margin: 2px 0 1px; }
 .daystrip .span { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--muted); opacity: 0.55; }
@@ -245,7 +283,6 @@ button.pill.go:hover { filter: brightness(1.08); }
 .daystrip .dtick { position: absolute; top: 2px; bottom: 2px; width: 1px; background: var(--outline); }
 .daystrip .nowmark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
 .favicon { width: 16px; height: 16px; padding: 1px; border-radius: 4px; background: #fff; object-fit: contain; flex: none; }
-.letter { display: grid; place-items: center; background: var(--surface-2); color: var(--muted); font-weight: 650; }
 .first-run { text-align: center; padding: 48px 20px; }
 .first-run .btn { margin-top: 14px; }
 
@@ -279,12 +316,18 @@ button.pill.go:hover { filter: brightness(1.08); }
 .ins-controls .offline { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
 .ins-controls .offline .icon { width: 16px; height: 16px; }
 
-/* Figures, as the hub's tiles: what it counts, the figure, and the period before's, small. */
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 14px; }
-.stat { background: var(--surface); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 2px; min-width: 0; align-content: start; }
-.stat .label { font-size: 13px; }
-.stat b { font-size: 26px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stat .before { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The period at a glance, as Habits First's screen time: one big figure in the data colour, what
+   it counts under it, then the other figures in a row, each with the period before's. */
+.glance { display: grid; justify-items: center; text-align: center; gap: 2px; padding: 22px 18px 16px; margin-bottom: 14px; }
+.glance-num { font-size: 46px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; color: var(--data); font-variant-numeric: tabular-nums; }
+.glance-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; }
+.glance-label .icon { width: 15px; height: 15px; }
+.glance-label .before { font-variant-numeric: tabular-nums; }
+.stats { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.stat { display: grid; gap: 1px; justify-items: center; min-width: 0; }
+.stat b { font-size: 19px; font-weight: 650; line-height: 1.3; white-space: nowrap; }
+.stat .label { font-size: 12.5px; color: var(--muted); }
+.stat .before { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
 .card-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 12px; }
 .card-head .section { margin: 0; flex: 1; }
@@ -293,6 +336,7 @@ button.pill.go:hover { filter: brightness(1.08); }
 
 .ins-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; align-items: start; }
 .ins-grid .wide { grid-column: 1 / -1; }
+.ins-col { display: grid; gap: 14px; min-width: 0; }
 @media (max-width: 900px) { .ins-grid { grid-template-columns: 1fr; } }
 
 /* Blocked tries: columns stacked by block, the first block at the bottom, a gap between parts. */
@@ -329,17 +373,21 @@ button.pill.go:hover { filter: brightness(1.08); }
 .heatmap .l4 { background: color-mix(in srgb, var(--data) 78%, var(--surface-2)); }
 .heatmap .l5 { background: var(--data); }
 
-/* What was tried most: its block's dot and its name, a bar in the block's tone, each device's part, the count. */
-.ranked { display: grid; gap: 6px; }
-.rank { display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr) 30px; align-items: center; gap: 10px; min-height: 28px; font-size: 14px; }
-.ranked.split .rank { grid-template-columns: minmax(0, 38%) minmax(0, 1fr) 82px 30px; }
-.rank-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.rank-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rank-bar i { display: block; height: 6px; min-width: 2px; border-radius: 0 3px 3px 0; background: var(--tone); }
-.rank-devs { display: flex; justify-content: flex-end; gap: 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* What was tried most, as Habits First's apps: its icon, its name and each device's part, the
+   count at the right, a thin bar under them in the data colour. */
+.ranked { display: grid; gap: 13px; }
+.rank { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; align-items: center; }
+.rank-main { display: grid; gap: 6px; min-width: 0; }
+.rank-top { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 14px; }
+.rank-name { flex: 1; min-width: 0; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-bar { display: block; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.rank-bar i { display: block; height: 100%; min-width: 5px; border-radius: 3px; background: var(--data); }
+.rank-devs { display: flex; gap: 8px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rank-devs span { display: inline-flex; align-items: center; gap: 2px; }
 .rank-devs .dev { width: 13px; height: 13px; }
-.rank b { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+.rank b { min-width: 24px; text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+.show-more { display: block; margin: 16px auto 2px; border: 0; background: none; color: var(--text); font-size: 14px; font-weight: 600; padding: 6px 14px; border-radius: 10px; }
+.show-more:hover { background: var(--surface-2); }
 
 /* Every block in a row; on a narrow page each figure carries its own label instead of a column. */
 .bb { display: grid; }
@@ -348,7 +396,7 @@ button.pill.go:hover { filter: brightness(1.08); }
 .bb-head { border-top: 0; padding: 0 0 6px; font-size: 12.5px; color: var(--muted); }
 .bb-head span:nth-child(n + 2) { text-align: right; }
 .bb-row.with-limit.bb-head span:nth-child(6) { text-align: left; padding-left: 10px; }
-.bb-name { display: flex; align-items: center; gap: 9px; justify-self: start; max-width: 100%; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font-size: 14px; font-weight: 600; }
+.bb-name { display: flex; align-items: center; gap: 10px; justify-self: start; max-width: 100%; min-width: 0; border: 0; background: none; padding: 0; text-align: left; font-size: 14px; font-weight: 600; }
 .bb-name .bname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.bb-name:hover .bname { text-decoration: underline; text-underline-offset: 3px; }
 .bb-tries { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
@@ -402,7 +450,7 @@ button.bb-name:hover .bname { text-decoration: underline; text-underline-offset:
 .hstrip-fill i { display: block; min-width: 2px; background: var(--tone); }
 .hday-figs { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hrows { padding: 0 0 10px 0; }
-.hrow { display: grid; grid-template-columns: 96px 18px 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 4px; border-radius: 8px; font-size: 14px; }
+.hrow { display: grid; grid-template-columns: 96px 18px 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 4px; border-radius: 8px; font-size: 14px; }
 .hrow:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
 .htime { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .hdev .dev { width: 16px; height: 16px; }
@@ -419,7 +467,7 @@ button.bb-name:hover .bname { text-decoration: underline; text-underline-offset:
 .hblock .bname { overflow: hidden; text-overflow: ellipsis; }
 .history .more { margin: 14px auto 0; display: flex; }
 @media (max-width: 560px) {
-  .hrow { grid-template-columns: 74px 16px 16px minmax(0, 1fr) auto; gap: 7px; }
+  .hrow { grid-template-columns: 74px 16px 20px minmax(0, 1fr) auto; gap: 7px; }
   .hrow .htime { font-size: 12px; }
   /* A day's head: its title and strip, its figures under them. */
   .hday-head { flex-wrap: wrap; row-gap: 3px; }
