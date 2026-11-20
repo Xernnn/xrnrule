@@ -15,9 +15,11 @@ import com.xern.xrnrule.domain.Effect
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.ExtensionApi
 import com.xern.xrnrule.domain.HabitEntry
+import com.xern.xrnrule.domain.Icons
 import com.xern.xrnrule.domain.LinkedDay
 import com.xern.xrnrule.domain.Schedule
 import com.xern.xrnrule.domain.Settings
+import com.xern.xrnrule.domain.SiteIcons
 import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.World
@@ -68,6 +70,10 @@ class LocalServer(
     private val telemetry: FileTelemetry,
     /** Both devices' history on the server, with sync on (the Insights page). */
     remote: RemoteHistory? = shared.takeIf { config.syncConfigured },
+    /** Laptop apps' own icons ([LaptopAppIcons]). */
+    private val laptopIcons: LaptopAppIcons = LaptopAppIcons(),
+    /** The server's copies of every device's logos, with sync on ([ServerIcons]). */
+    private val serverIcons: ServerIcons? = null,
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
     private val history = History(telemetry, remote, store.clock)
@@ -111,6 +117,7 @@ class LocalServer(
             ex.requestMethod == "GET" && path == "/api/history" ->
                 send(ex, 200, history.json(store.world.value, query["days"]?.toIntOrNull() ?: History.KEEP_DAYS))
             ex.requestMethod == "GET" && path == "/api/site-icon" -> siteIcon(ex, query["host"].orEmpty())
+            ex.requestMethod == "GET" && path == "/api/icon" -> icon(ex, query["key"].orEmpty())
             ex.requestMethod == "POST" && path == "/api/block" -> send(ex, 200, saveBlock(body(ex)))
             ex.requestMethod == "POST" && path == "/api/block/delete" -> send(ex, 200, deleteBlock(json.parseToJsonElement(body(ex)).jsonObject))
             ex.requestMethod == "POST" && path == "/api/item" -> send(ex, 200, item(json.parseToJsonElement(body(ex)).jsonObject))
@@ -449,11 +456,13 @@ class LocalServer(
      * for a timer); a check's [amount] and [unlock] are 1. [amount] counts toward this block's
      * next unlock, [spent] is what earlier ones used on [day], the habit day the item counts, and
      * [dayValue] is that day's entry. [unlock] is null for an "at most" habit, which never opens.
+     * [color] is the habit's own colour, as Loop's palette index (0..19), which the page draws it in.
      */
     @Serializable
     data class UiHabit(
         val id: String,
         val name: String,
+        val color: Int,
         val kind: String,
         val unit: String,
         val unlock: Long?,
@@ -479,6 +488,8 @@ class LocalServer(
         val state: String,
         val blocking: Boolean,
         val phoneApps: Int,
+        /** The phone apps it covers, by package: the page shows their logos (`/api/icon?key=app:<package>`). */
+        val phonePackages: List<String>,
         val sites: List<String>,
         /** [sites] as the page lists them: `redd.it` folded into `reddit.com` ([Sites.shown]). */
         val shownSites: List<String>,
@@ -686,6 +697,7 @@ class LocalServer(
             state = b.state.name,
             blocking = engine.isBlocking(world, b, clock),
             phoneApps = b.targetPackages.size,
+            phonePackages = b.targetPackages.sorted(),
             sites = b.targetSites.sorted(),
             shownSites = Sites.shown(b.targetSites.sorted()),
             exceptSites = b.exceptSites.sorted(),
@@ -728,6 +740,7 @@ class LocalServer(
                         UiHabit(
                             id = h.id,
                             name = h.name,
+                            color = h.paletteColor.coerceIn(0, 19),
                             kind = h.kind.name,
                             unit = h.unit,
                             unlock = h.unlockUnit,
@@ -820,8 +833,32 @@ class LocalServer(
      * for each. [secure] keeps such a page from telling by the answer which sites are blocked.
      */
     private fun siteIcon(ex: HttpExchange, host: String) {
-        val named = store.world.value.blocks.any { b -> (b.targetSites + b.exceptSites).any { Sites.matches(host, Sites.hostOf(it)) } }
-        val icon = (if (named) siteIcons.icon(host) else null) ?: return send(ex, 404, "no icon yet")
+        val icon = (if (named(host)) siteIcons.icon(host) else null) ?: return send(ex, 404, "no icon yet")
+        sendIcon(ex, icon)
+    }
+
+    /** Whether a block names [host], or a site [host] is under. */
+    private fun named(host: String): Boolean =
+        store.world.value.blocks.any { b -> (b.targetSites + b.exceptSites).any { Sites.matches(host, Sites.hostOf(it)) } }
+
+    /**
+     * The logo of what an [Icons] key names, for the pages' rows and tiles; 404 when there's none:
+     * a site's from the laptop's own [siteIcons] (under the same rule as [siteIcon]), a laptop
+     * app's own ([laptopIcons]), else the copy kept of the server's, which is how the phone's apps
+     * get here ([serverIcons]).
+     */
+    private fun icon(ex: HttpExchange, key: String) {
+        if (!Icons.valid(key)) return send(ex, 404, "no icon")
+        val own = when {
+            key.startsWith("site:") -> key.removePrefix("site:").takeIf(::named)?.let(siteIcons::icon)
+            key.startsWith("desk:") -> laptopIcons.icon(key.removePrefix("desk:"))
+            else -> null
+        }
+        val icon = own ?: serverIcons?.icon(key) ?: return send(ex, 404, "no icon")
+        sendIcon(ex, icon)
+    }
+
+    private fun sendIcon(ex: HttpExchange, icon: SiteIcons.Icon) {
         ex.responseHeaders.add("Content-Type", icon.type) // a raster type, from the bytes themselves
         ex.responseHeaders.add("Cache-Control", "private, max-age=86400")
         secure(ex)

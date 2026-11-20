@@ -57,6 +57,11 @@ class SiteIconCache(context: Context, private val scope: CoroutineScope) {
         return null
     }
 
+    /** The icon file this phone keeps for [host], as the site sent it ([IconUpload]); null when it has none. */
+    fun kept(host: String): ByteArray? = runCatching {
+        File(dir, host).takeIf { SiteIcons.fetchable(host) && it.isFile && it.length() <= SiteIcons.ICON_BYTES }?.readBytes()
+    }.getOrNull()
+
     private fun load(host: String) {
         try {
             val file = File(dir, host)

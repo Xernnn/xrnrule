@@ -10,6 +10,7 @@ import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Defaults
 import com.xern.xrnrule.domain.DeviceKind
 import com.xern.xrnrule.domain.EnforcementTier
+import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.PersistPort
 import com.xern.xrnrule.domain.SiteIcons
 import com.xern.xrnrule.domain.Trigger
@@ -21,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -64,14 +67,17 @@ class LocalServerTest {
     private inner class Daemon(
         blocks: List<Block> = emptyList(),
         checklist: Map<String, List<ChecklistItem>> = emptyMap(),
+        habits: List<Habit> = emptyList(),
         known: String? = null,
         fetcher: (String, Int) -> SiteIcons.Fetched? = { _, _ -> null },
+        laptopIcons: LaptopAppIcons = LaptopAppIcons({ null }, emptyList(), rsvg = null, homeIcons = null),
+        serverIcons: ServerIcons? = null,
     ) {
         val clock = TestClock()
         val port = ServerSocket(0).use { it.localPort }
         private val config = Config(server = "", user = "", password = "", port = port, dataDir = dir)
         private val scope = CoroutineScope(Dispatchers.Unconfined)
-        private val world = World(blocks = blocks, checklist = checklist, deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
+        private val world = World(blocks = blocks, checklist = checklist, habits = habits, deviceId = "laptop-1", deviceKind = DeviceKind.LAPTOP)
         val store = Store(
             BlockEngine(),
             object : PersistPort {
@@ -92,11 +98,30 @@ class LocalServerTest {
             }
             val enforcer = Enforcer(store, quiet, config).also { it.foreground = foreground }
             val shared = SharedSyncClient(config, store, telemetry, scope)
-            LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), SiteIconCache(icons, scope, fetcher), telemetry).start()
+            LocalServer(
+                config, store, foreground, enforcer, shared, HabitClient(config, store, scope), SiteIconCache(icons, scope, fetcher), telemetry,
+                laptopIcons = laptopIcons, serverIcons = serverIcons,
+            ).start()
+        }
+
+        /** A GET as a page's <img> makes it: (status, body, headers). */
+        fun image(path: String): Triple<Int, ByteArray, Map<String, List<String>>> {
+            val conn = URI("http://127.0.0.1:$port$path").toURL().openConnection() as HttpURLConnection
+            val code = conn.responseCode
+            val body = (if (code < 400) conn.inputStream else conn.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+            val headers = java.util.TreeMap<String, List<String>>(String.CASE_INSENSITIVE_ORDER).apply { putAll(conn.headerFields.filterKeys { it != null }) }
+            return Triple(code, body, headers)
         }
 
         /** The answer's status code. [xrnrule]: with the header that only our pages and the extension can send. */
         fun get(path: String, xrnrule: Boolean = true): Int = request("GET", path, null, xrnrule)
+
+        /** What a GET answers, as JSON. */
+        fun getJson(path: String): JsonObject {
+            var answer = ""
+            request("GET", path, null, xrnrule = true) { answer = it }
+            return Json.parseToJsonElement(answer).jsonObject
+        }
 
         fun post(path: String, body: String): Int = request("POST", path, body, xrnrule = true)
 
@@ -186,6 +211,71 @@ class LocalServerTest {
         Thread.sleep(300) // a fetch started before those would have come by now
         assertFalse(looked.toString(), "tracker.example" in looked)
         assertFalse("nothing kept for it", File(d.icons, "tracker.example.miss").exists())
+    }
+
+    @Test
+    fun aBlockNamesItsPhoneAppsAndAHabitItsOwnColourForThePage() {
+        // The page draws a block's phone apps by their logos (/api/icon?key=app:<package>) and a
+        // habit's row in its own colour: a count of apps and the data orange were all it had.
+        val block = Block(
+            "social", "Social", targetPackages = setOf("com.example.video", "com.example.chat"), targetSites = setOf("example.org"),
+            trigger = Trigger(TriggerType.CHECKLIST, -1, TriggerUnit.ITEMS),
+        )
+        val d = Daemon(
+            listOf(block),
+            checklist = mapOf("social" to listOf(ChecklistItem("i1", "social", "Plank", 0, habitId = "plank"))),
+            habits = listOf(Habit("plank", "Plank", paletteColor = 3)),
+        )
+        val shown = d.getJson("/api/state")["blocks"]!!.jsonArray.single().jsonObject
+        assertEquals(listOf("com.example.chat", "com.example.video"), shown["phonePackages"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(2, shown["phoneApps"]!!.jsonPrimitive.int)
+        val habit = shown["items"]!!.jsonArray.single().jsonObject["habit"]!!.jsonObject
+        assertEquals(3, habit["color"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun anIconIsTheLaptopsOwnElseTheServersCopyOfAnyDevicesAndNoneIsNotFound() {
+        val block = Block(
+            "yt", "YouTube", targetSites = setOf("youtube.com"), targetDesktopApps = setOf("steam"),
+            trigger = Trigger(TriggerType.TIMER, 0, TriggerUnit.MS), mode = BlockMode.SCHEDULE,
+        )
+        val share = File(dir, "share").apply { File(this, "icons/hicolor/128x128/apps").mkdirs() }
+        val steam = testPng(128, tint = 1).also { File(share, "icons/hicolor/128x128/apps/steam.png").writeBytes(it) }
+        val site = testPng(180, tint = 2)
+        val looked = ConcurrentHashMap.newKeySet<String>()
+        val server = ServerIcons(File(dir, "server-icons"), "", null, kotlinx.coroutines.flow.MutableStateFlow(World()), { emptyMap() }, CoroutineScope(Dispatchers.Unconfined))
+        val phonesApp = testPng(96, tint = 3).also { server.keep("app:com.example.chat", it) }
+        val elsewhere = testPng(32, tint = 4).also { server.keep("site:elsewhere.example", it) }
+        val d = Daemon(
+            listOf(block),
+            fetcher = { url, _ -> looked += URI(url).host; if (url == "https://youtube.com/apple-touch-icon.png") SiteIcons.Fetched(url, site) else null },
+            laptopIcons = LaptopAppIcons({ if (it == "steam") "steam" else null }, listOf(share), rsvg = null, homeIcons = null),
+            serverIcons = server,
+        )
+
+        // The phone's app, from the copy of the server's; asked as an <img> asks, with no X-Xrnrule.
+        val (code, bytes, headers) = d.image("/api/icon?key=app%3Acom.example.chat")
+        assertEquals(200, code)
+        assertTrue(phonesApp.contentEquals(bytes))
+        assertEquals(listOf("image/png"), headers["Content-Type"])
+        assertEquals(listOf("same-origin"), headers["Cross-Origin-Resource-Policy"])
+        assertEquals(listOf("nosniff"), headers["X-Content-Type-Options"])
+        assertEquals(listOf("private, max-age=86400"), headers["Cache-Control"])
+        // A laptop app's own.
+        assertTrue(steam.contentEquals(d.image("/api/icon?key=desk%3Asteam").second))
+        // A site a block names: its own, once fetched.
+        assertEquals(404, d.image("/api/icon?key=site%3Ayoutube.com").first)
+        await("the site's icon") { d.image("/api/icon?key=site%3Ayoutube.com").first == 200 }
+        assertTrue(site.contentEquals(d.image("/api/icon?key=site%3Ayoutube.com").second))
+        // A site no block names is never fetched here, but the server's copy (the phone's) is shown.
+        assertTrue(elsewhere.contentEquals(d.image("/api/icon?key=site%3Aelsewhere.example").second))
+        assertFalse(looked.toString(), "elsewhere.example" in looked)
+        // What no one has, and what is no key.
+        for (key in listOf("desk%3Amissing", "app%3Acom.example.none", "site%3Anowhere.example", "..%2F..%2Fworld.json", "site%3AYouTube.com", "steam", "")) {
+            assertEquals(key, 404, d.image("/api/icon?key=$key").first)
+        }
+        assertEquals(404, d.image("/api/icon").first)
+        assertFalse(looked.toString(), "nowhere.example" in looked)
     }
 
     @Test

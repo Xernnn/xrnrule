@@ -54,6 +54,15 @@ class AppContainer(context: Context) {
     /** Unlocks, breaks and blocks shared with the laptop through the home server (contract §2.4). */
     val shared = SharedSync(context, store, telemetry, appScope)
 
+    /** The blocked apps' and sites' logos, sent to the sync server for the laptop's pages. */
+    val icons = IconUpload(
+        server = { shared.settings.takeIf { it.isConfigured }?.let { IconUpload.Server(it.url, it.user, it.password) } },
+        world = store.world,
+        render = AppIconRender(context, siteIcons),
+        sentFile = File(context.filesDir, "icons-sent.json"),
+        scope = appScope,
+    )
+
     /** Habits and their entries, shared with xrnloops, the web app and the laptop (contract §2.5). */
     val habits = HabitSync(context, store, shared.settings, appScope)
 
@@ -85,6 +94,7 @@ class AppContainer(context: Context) {
         // Which blocks hold here (I42): those for the phone, and those for both.
         if (store.world.value.deviceKind != DeviceKind.PHONE) store.edit { it.copy(deviceKind = DeviceKind.PHONE) }
         shared.start()
+        icons.start(shared.status)
         habits.start()
         extensionServer.start()
         updates.start()

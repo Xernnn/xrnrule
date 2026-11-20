@@ -8,6 +8,7 @@ import com.xern.xrnrule.domain.Sites
 import com.xern.xrnrule.domain.World
 import com.xern.xrnrule.domain.appliesHere
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -418,8 +419,9 @@ object KWin : WindowSystem {
 
 /** Installed desktop apps, from `.desktop` files, for the local page and to name windows. */
 object DesktopApps {
+    /** [icon]: its entry's `Icon=`, a name in the icon themes or a file ([LaptopAppIcons]); not for the page. */
     @Serializable
-    data class App(val id: String, val name: String, val wmClass: String? = null)
+    data class App(val id: String, val name: String, val wmClass: String? = null, @Transient val icon: String? = null)
 
     private val home = System.getProperty("user.home")
     private val dirs = listOf(
@@ -462,6 +464,7 @@ object DesktopApps {
         var inEntry = false
         var name: String? = null
         var wmClass: String? = null
+        var icon: String? = null
         var hidden = false
         var type: String? = null
         for (line in lines) {
@@ -475,12 +478,13 @@ object DesktopApps {
             when (key) {
                 "Name" -> name = value
                 "StartupWMClass" -> wmClass = value
+                "Icon" -> icon = value.takeIf { it.isNotEmpty() }
                 "NoDisplay", "Hidden" -> if (value == "true") hidden = true
                 "Type" -> type = value
             }
         }
         if (hidden || type != "Application" || name == null) return null
-        return App(f.name.removeSuffix(".desktop"), name, wmClass)
+        return App(f.name.removeSuffix(".desktop"), name, wmClass, icon)
     }
 
     /** The id we block by: the window's `.desktop` id, else the app whose WM class it has, else the class. */
@@ -492,6 +496,9 @@ object DesktopApps {
     }
 
     fun name(id: String): String = all().firstOrNull { it.id == id }?.name ?: id
+
+    /** The icon [id]'s entry names, or null when it has no entry or names none. */
+    fun iconOf(id: String): String? = all().firstOrNull { it.id == id }?.icon
 }
 
 /** Whether [block] has anything to lock on this laptop: the end of a phone game's unlock isn't news here. */

@@ -53,12 +53,21 @@ fun main() = runBlocking {
     val shared = SharedSyncClient(config, store, telemetry, scope)
     val habits = HabitClient(config, store, scope)
 
+    // The blocked apps' and sites' logos: the laptop's own, and the phone's through the server.
+    val siteIcons = SiteIconCache(File(config.dataDir, "site-icons"), scope)
+    val laptopIcons = LaptopAppIcons()
+    val serverIcons = ServerIcons(
+        File(config.dataDir, "server-icons"), config.ruleUrl, Http(config.user, config.password).takeIf { config.syncConfigured },
+        store.world, { world -> ServerIcons.owned(world, siteIcons, laptopIcons) }, scope,
+    )
+
     store.coldStart {
         windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
-        LocalServer(config, store, foreground, enforcer, shared, habits, SiteIconCache(File(config.dataDir, "site-icons"), scope), telemetry).start()
+        LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons).start()
     }
     shared.start()
     habits.start()
+    serverIcons.start(shared.status)
     Runtime.getRuntime().addShutdownHook(Thread { persist.flush() })
 
     // Engine effects -> desktop notifications.

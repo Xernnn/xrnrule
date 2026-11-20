@@ -137,8 +137,11 @@ curl -s http://127.0.0.1:47321/api/state | head -c 400
 
 State lives in `~/.local/share/xrnrule/` (owner-only): `world.json`, `habit-entries.json` (the
 habit history), `shared-base.json` (the copy last agreed with the server), `clock.json` (how far the clock was
-set by hand, and the time zone blocks go by), and `site-icons/`
-(each blocked website's own icon, asked of that site, served to the page at `/api/site-icon`).
+set by hand, and the time zone blocks go by), `site-icons/`
+(each blocked website's own icon, asked of that site, served to the page at `/api/site-icon`), and
+`server-icons/` (the sync server's copies of the other devices' logos, the phone's apps above all).
+The page asks `/api/icon?key=site:<host>|desk:<app id>|app:<package>` for any of them: the
+laptop's own first, else the server's copy.
 
 ## Working on the page
 

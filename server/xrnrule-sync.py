@@ -25,6 +25,15 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
     GET  /limits              each block's daily limit use per device and day, as the devices'
                               writes of /state said it (its `allowance`), for the history pages:
                               {"limits": {block: {device id: {day start ms: ms}}}}; 120 days kept
+    GET  /icons               the blocked apps' and sites' logos kept here, for the pages:
+                              {"site:reddit.com" | "app:<package>" | "desk:<laptop app id>": the first
+                              12 hex of its SHA-256}
+    GET  /icons/<key>         one of them, its key URL-encoded: the image as it was sent (PNG, JPEG,
+                              GIF, WebP or ICO), cached a day, or 404. The status page's <img> asks
+                              with its login cookie alone, since an image can't carry X-Xrn-Client
+    PUT  /icons/<key>         a device's copy: a raster image of at most ICON_MAX bytes, told by its
+                              first bytes (never SVG, which could carry script); 204. At most
+                              ICONS_MAX per user, the one written longest ago dropped first
     POST /session             with Basic auth: sets the web pages' login cookie (below)
     DELETE /session           signs the browser out, and ends its cookie on every server (below)
     GET  /health              200 "ok", no login (for monitoring)
@@ -68,7 +77,7 @@ import time
 import zlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, unquote
 
 MAX_BODY = 8 * 1024 * 1024
 FAIL_DELAY_S = 2  # after a wrong password, as Radicale does
@@ -87,6 +96,16 @@ EVENTS_MAX = 50000
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
 LIMITS_WRITE_S = 60  # limits.json is rewritten at most this often per user
 LIMITS_MAX_KEYS = 200  # blocks, devices per block: more than any real state has
+# Logos of what blocks name, sent by the devices for the pages (GET/PUT /icons). An icon of 96-128 px
+# is a few KB; the most a user keeps, 400 of the largest, is some 25 MB.
+ICON_MAX = 64 * 1024
+ICONS_MAX = 400
+ICON_KEY = re.compile(r"site:[a-z0-9.-]{1,253}|app:[A-Za-z0-9._]{1,200}|desk:[A-Za-z0-9._ +-]{1,200}")
+# Served as an image only: no script runs in it even opened on its own, and no other site's page can load it.
+ICON_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; sandbox",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
 PREFIX = "/xrnrule"
 # What /update/ may serve: a plain file name, no path, no leading dot. The extension's two kinds
 # are public, since a browser's updater sends no login; the app is the private repo's code.
@@ -119,6 +138,8 @@ limits_lock = threading.Lock()
 limits = {}  # user -> {block: {device id: {day start ms (str): ms}}}, mirrored to limits.json
 limits_written = {}  # user -> time.monotonic() of the last limits.json write
 limits_dirty = set()  # users whose limits.json is behind what's here
+icons_lock = threading.Lock()
+icons = {}  # user -> {key: {"h": first 12 hex of the image's sha256, "at": ms it was written}}, mirrored to icons/index.json
 session_key = b""  # signs the web pages' login cookies; see load_session_key()
 signed_out_lock = threading.Lock()
 signed_out_seen = None  # the signed-out.json (path, inode, mtime, size) signed_out_list was read from
@@ -705,6 +726,106 @@ def limits_of(user):
         return json.loads(json.dumps(load_limits(user)))
 
 
+def icon_type(data):
+    """The media type of a raster image, told by its first bytes; None for anything else. SVG,
+    HTML and text above all: served from this origin, a browser could run script in them."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:4] == b"\x00\x00\x01\x00":
+        return "image/x-icon"
+    return None
+
+
+def icon_hash(data):
+    return hashlib.sha256(data).hexdigest()[:12]
+
+
+def icons_dir(user):
+    return os.path.join(args.data, "users", user, "icons")
+
+
+def icon_file(user, key):
+    """Named by the key's hash: a key is the devices' text, never a path."""
+    return os.path.join(icons_dir(user), hashlib.sha256(key.encode()).hexdigest())
+
+
+def load_icons(user):
+    """The user's icon index (cached). One that can't be read starts over: the devices send again
+    what it lacks, and the files it named go with the next write. Call under icons_lock."""
+    if user not in icons:
+        path = os.path.join(icons_dir(user), "index.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            if not isinstance(doc, dict):
+                raise ValueError("not a JSON object")
+        except FileNotFoundError:
+            doc = {}
+        except (OSError, ValueError, RecursionError) as e:
+            print(f"icons of {user} unreadable, starting over: {e}", file=sys.stderr, flush=True)
+            doc = {}
+        icons[user] = {k: v for k, v in doc.items() if isinstance(k, str) and ICON_KEY.fullmatch(k) and isinstance(v, dict)
+                       and isinstance(v.get("h"), str) and isinstance(v.get("at"), int)}
+    return icons[user]
+
+
+def write_whole(path, data):
+    """[data] in [path], all or nothing: a new file that then takes the old one's place."""
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def put_icon(user, key, data):
+    """Keeps [data] as [key]'s icon. Past ICONS_MAX, the ones written longest ago go."""
+    with icons_lock:
+        index = load_icons(user)
+        folder = icons_dir(user)
+        os.makedirs(folder, exist_ok=True)
+        write_whole(icon_file(user, key), data)
+        index[key] = {"h": icon_hash(data), "at": int(time.time() * 1000)}
+        if len(index) > ICONS_MAX:
+            # Never the one just written, whatever the clock says.
+            for old in sorted((k for k in index if k != key), key=lambda k: index[k]["at"])[:len(index) - ICONS_MAX]:
+                del index[old]
+        write_whole(os.path.join(folder, "index.json"), json.dumps(index, separators=(",", ":")).encode())
+        # The files of icons dropped, of an index that couldn't be read and of a write cut off: nothing
+        # names them now, and every write here is under this lock.
+        kept = {os.path.basename(icon_file(user, k)) for k in index} | {"index.json"}
+        for name in os.listdir(folder):
+            if name not in kept:
+                try:
+                    os.remove(os.path.join(folder, name))
+                except OSError:
+                    pass
+
+
+def get_icon(user, key):
+    """[key]'s image, or None."""
+    with icons_lock:
+        if key not in load_icons(user):
+            return None
+        try:
+            with open(icon_file(user, key), "rb") as f:
+                return f.read(ICON_MAX + 1)
+        except OSError:
+            return None
+
+
+def icon_index(user):
+    with icons_lock:
+        return {k: v["h"] for k, v in load_icons(user).items()}
+
+
 def state_path(user):
     return os.path.join(args.data, "users", user, "state.json")
 
@@ -768,6 +889,13 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""  # the Server header named the Python version too
     timeout = 120  # seconds of silence before a connection is dropped, so a stalled client can't hold a thread
 
+    def log_request(self, code="-", size="-"):
+        # A logo the server hasn't got is routine: the pages ask for every target's and draw a glyph
+        # instead. xrnhub's log page counts each 404 as a warning, and a page asks for dozens.
+        if code == 404 and getattr(self, "icon_miss", False):
+            return
+        super().log_request(code, size)
+
     def log_message(self, fmt, *a):
         headers = getattr(self, "headers", None)  # none yet on a request line that didn't parse
         who = headers.get("X-Forwarded-For", self.client_address[0]) if headers else "-"
@@ -794,6 +922,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
 
     def parse_request(self):
+        self.icon_miss = False
         if not super().parse_request():
             return False
         # Before the login, which a page elsewhere can have the browser pass for it.
@@ -817,7 +946,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Cache-Control", "no-store")
         for k, v in SECURITY_HEADERS.items():
-            self.send_header(k, v)
+            if k not in (headers or {}):  # an icon's answer has a policy of its own
+                self.send_header(k, v)
         if code != 304:
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -827,14 +957,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD" and code != 304:
             self.wfile.write(body)
 
-    def body(self):
-        """The request's body, gunzipped if it came so; None once an error has been answered."""
+    def body(self, limit=MAX_BODY):
+        """The request's body, gunzipped if it came so, of at most [limit] bytes; None once an error
+        has been answered."""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             self.send(400, "bad Content-Length")
             return None
-        if length <= 0 or length > MAX_BODY:
+        if length <= 0 or length > limit:
             self.send(413, "body missing or too large")
             return None
         raw = self.rfile.read(length)
@@ -845,26 +976,31 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if (self.headers.get("Content-Encoding") or "").lower() != "gzip":
             return raw
-        # Unpacked only up to MAX_BODY: a few megabytes of gzip can unpack to gigabytes.
+        # Unpacked only up to the limit: a few megabytes of gzip can unpack to gigabytes.
         unpack = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
         try:
-            out = unpack.decompress(raw, MAX_BODY + 1)
+            out = unpack.decompress(raw, limit + 1)
         except zlib.error:
             out = None
-        if out is None or (not unpack.eof and len(out) <= MAX_BODY):
+        if out is None or (not unpack.eof and len(out) <= limit):
             self.send(400, "bad gzip")
             return None
-        if len(out) > MAX_BODY:
+        if len(out) > limit:
             self.send(413, "body too large")
             return None
         return out
 
-    def login(self):
+    def login(self, image=False):
+        """The user a request is from, or None once a 401 or 429 has been answered. [image]: an
+        <img> on the status page, which can't add X-Xrn-Client, signs in with its cookie alone. It
+        reads one logo, and no other site's page gets it: the cookie is SameSite=Strict and the
+        answer same-origin only (ICON_HEADERS)."""
         # A web page: its login cookie, with the header another site's page couldn't add.
-        if not self.headers.get("Authorization") and self.headers.get("X-Xrn-Client"):
+        cookie_alone = image and session_token(self.headers.get("Cookie"))
+        if not self.headers.get("Authorization") and (self.headers.get("X-Xrn-Client") or cookie_alone):
             user = check_session(self.headers.get("Cookie"))
             if not user:
-                self.send(401, "login required")
+                self.send(401, "login required", headers=ICON_HEADERS if image else None)
             return user
         addr = client_address(self)
         password = self.headers.get("Authorization")
@@ -888,9 +1024,11 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             if password:  # a request with none guessed nothing, and needn't hold a thread for it
                 time.sleep(FAIL_DELAY_S)
-            # The status page logs in with its own form: a challenge would pop the browser's dialog.
-            challenge = {} if self.headers.get("X-Xrn-Client") else {"WWW-Authenticate": 'Basic realm="xrnrule"'}
-            self.send(401, "login required", headers=challenge)
+            # The status page logs in with its own form: a challenge would pop the browser's dialog,
+            # and would for each of its images too.
+            quiet = self.headers.get("X-Xrn-Client") or (image and not password)
+            challenge = {} if quiet else {"WWW-Authenticate": 'Basic realm="xrnrule"'}
+            self.send(401, "login required", headers={**challenge, **(ICON_HEADERS if image else {})})
             return None
         note_device(user, self.headers.get("X-Device"))
         return user
@@ -924,6 +1062,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, json.dumps({"limits": limits_of(user)}, separators=(",", ":")),
                           "application/json; charset=utf-8")
             return
+        if path == "/icons":
+            user = self.login()
+            if user:
+                self.send(200, json.dumps(icon_index(user), separators=(",", ":")), "application/json; charset=utf-8")
+            return
+        if path.startswith("/icons/"):
+            return self.icon(path[len("/icons/"):])
         if path != "/state":
             return self.static(path)
         user = self.login()
@@ -1009,6 +1154,8 @@ class Handler(BaseHTTPRequestHandler):
         user = self.login()
         if not user:
             return
+        if path.startswith("/icons/"):
+            return self.icon_sent(path[len("/icons/"):], user)
         if path != "/state":
             return self.send(404, "not found")
         raw = self.body()
@@ -1040,6 +1187,46 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # a history for the pages: never a failed write for a device
             print(f"limits of {user} not kept: {e}", file=sys.stderr, flush=True)
         self.send(200, '{"ok":true}', "application/json", {"ETag": f'"{version}"'})
+
+    def icon(self, raw_key):
+        """GET /icons/<key>: the image as a device sent it, or 404."""
+        user = self.login(image=True)
+        if not user:
+            return
+        key = unquote(raw_key)
+        if not ICON_KEY.fullmatch(key):
+            return self.send(400, "bad icon key", headers=ICON_HEADERS)
+        data = get_icon(user, key)
+        ctype = icon_type(data) if data and len(data) <= ICON_MAX else None
+        if not ctype:
+            self.icon_miss = True
+            return self.send(404, "no such icon", headers=ICON_HEADERS)
+        etag = icon_hash(data)
+        code = 304 if etag_version(self.headers.get("If-None-Match")) == etag else 200
+        self.send_response(code)
+        self.send_header("Cache-Control", "private, max-age=86400")
+        for k, v in {**SECURITY_HEADERS, **ICON_HEADERS}.items():
+            self.send_header(k, v)
+        self.send_header("ETag", f'"{etag}"')
+        if code == 200:
+            self.send_header("Content-Type", ctype)  # from the bytes themselves, never from the device
+            self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if code == 200 and self.command != "HEAD":
+            self.wfile.write(data)
+
+    def icon_sent(self, raw_key, user):
+        """PUT /icons/<key>: a device's copy of a logo, a raster image only."""
+        key = unquote(raw_key)
+        if not ICON_KEY.fullmatch(key):
+            return self.send(400, "bad icon key")
+        data = self.body(ICON_MAX)
+        if data is None:
+            return
+        if not icon_type(data):
+            return self.send(400, "not a PNG, JPEG, GIF, WebP or ICO image")
+        put_icon(user, key, data)
+        self.send(204)
 
     def update_file(self, name):
         """A release, streamed as is: an .apk is already compressed and runs to megabytes."""
