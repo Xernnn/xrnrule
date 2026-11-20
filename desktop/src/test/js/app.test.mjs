@@ -30,7 +30,7 @@ function load(href) {
     URLSearchParams,
     Intl,
   };
-  vm.runInNewContext(source() + "\n;globalThis.backHere = backHere; globalThis.joinTag = joinTag;", page);
+  vm.runInNewContext(source() + "\n;globalThis.backHere = backHere; globalThis.joinTag = joinTag; globalThis.unlockWords = unlockWords; globalThis.iconSrc = iconSrc;", page);
   return page;
 }
 
@@ -58,4 +58,42 @@ test("a habit block's rows say how they add up, as the phone's card does", () =>
   assert.equal(joinTag(block("COMBINED", -1, true), 2), "Do either");
   assert.equal(joinTag(block("COMBINED"), 3), "Do all");
   assert.equal(joinTag(block("TIMER"), 1), null);
+});
+
+/** A habit as /api/state has it (UiHabit): amounts in thousandths, a timer's in minutes. */
+const habit = (name, kind, unlock, amount, unit = "") => ({ id: name, name, kind, unit, unlock, amount, spent: 0, day: 0, dayValue: amount, yesterday: false, focusing: false, onBreak: false });
+const item = (text, done = false, h = null) => ({ id: text, text, done, ...(h ? { habit: h } : {}) });
+const habitBlock = (over) => ({ trigger: "CHECKLIST", requiredItems: -1, combineOr: false, timerMs: 0, requiredMs: 0, items: [], ...over });
+
+test("the block page says what a habit block asks for, and what's left of it, as Habits First's", () => {
+  const { unlockWords } = load("http://127.0.0.1:47321/block?site=reddit.com");
+  const social = habitBlock({
+    items: [
+      item("Inbox zero"),
+      item("Read", false, habit("Read", "COUNT", 20_000, 12_000, "pages")),
+      item("Workout", false, habit("Workout", "TIMER", 30_000, 18_000)),
+      item("Vitamins", true, habit("Vitamins", "CHECK", 1, 1)),
+      item("Water", false, habit("Water", "COUNT", null, 0)), // "at most": never opens, nothing to do for it
+    ],
+  });
+  assert.deepEqual({ ...unlockWords(social, "reddit.com") }, {
+    title: "To unlock reddit.com, finish your habits first!",
+    left: "Inbox zero, Read: 8 more pages and Workout: 12 more min.",
+  });
+  // Only some of them needed.
+  const some = habitBlock({ requiredItems: 1, items: [item("Stretch"), item("Walk"), item("Tidy", false)] });
+  assert.equal(unlockWords(some, "x.com").left, "Any 1 of Stretch, Walk or Tidy.");
+  // A timer alone, and a timer that will do instead of the tasks.
+  const timer = habitBlock({ trigger: "TIMER", requiredMs: 20 * 60_000, timerMs: 5 * 60_000 });
+  assert.deepEqual({ ...unlockWords(timer, "Steam") }, { title: "To unlock Steam, wait out its timer first!", left: "15 more min on the timer." });
+  const either = habitBlock({ trigger: "COMBINED", combineOr: true, requiredMs: 10 * 60_000, items: [item("Stretch"), item("Walk")] });
+  assert.equal(unlockWords(either, "x.com").left, "Stretch and Walk or 10 more min on the timer.");
+  // Nothing left (it's about to open): no line.
+  assert.equal(unlockWords(habitBlock({ items: [item("Stretch", true)] }), "x.com").left, null);
+});
+
+test("the laptop's page asks the daemon for an icon by its key", () => {
+  const { iconSrc } = load("http://127.0.0.1:47321/");
+  assert.equal(iconSrc("site:reddit.com"), "/api/icon?key=site%3Areddit.com");
+  assert.equal(iconSrc("desk:net.lutris.Lutris"), "/api/icon?key=desk%3Anet.lutris.Lutris");
 });

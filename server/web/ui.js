@@ -56,6 +56,7 @@ const PATHS = {
   openNew: "M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z",
   task: "M22 5.18L10.59 16.6l-4.24-4.24 1.41-1.41 2.83 2.83 10-10L22 5.18zm-2.21 5.04c.13.57.21 1.17.21 1.78 0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8c1.58 0 3.04.46 4.28 1.25l1.44-1.44C16.1 2.67 14.13 2 12 2 6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10c0-1.19-.22-2.33-.6-3.39l-1.61 1.61z",
   play: "M8 5v14l11-7z",
+  addCircle: "M13 7h-2v4H7v2h4v4h2v-4h4v-2h-4V7zm-1-5C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z",
   pause: "M6 19h4V5H6v14zm8-14v14h4V5h-4z",
   globe: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.91 4.33 3.56zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56zm2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z",
   bolt: "M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z",
@@ -109,6 +110,219 @@ export function meter(fraction, tone = "", cls = "") {
   return h("div", { class: `meter ${tone} ${cls}`.replace(/\s+/g, " ").trim() },
     h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } }));
 }
+
+// ---- logos: the real icons of what a block covers ------------------------------------------
+// Each page asks its own server by key (the icon contract): the status page `icons/<key>`
+// (relative, so it works under the server's path and in the hub's window), the laptop's page
+// `/api/icon?key=<key>`. What has none shows a grey glyph for its kind: a globe, a phone or a laptop.
+
+/** "site:reddit.com": a site by its host, lowercased, as a block names it (no path). */
+export const siteKey = (host) => `site:${String(host ?? "").toLowerCase().split("/")[0]}`;
+/** "app:com.instagram.android": a phone app by its package. */
+export const appKey = (pkg) => `app:${pkg}`;
+/** "desk:steam": a laptop app by its id, as blocks and the laptop's events name it. */
+export const deskKey = (id) => `desk:${id}`;
+
+/** A blocked try's target as an icon key: a host is a site, an id from the phone an app, one from the laptop a laptop app. */
+export function targetKey(target, device, site) {
+  if (target == null || target === "") return null;
+  if (site) return siteKey(target);
+  return device === "phone" ? appKey(target) : device === "laptop" ? deskKey(target) : null;
+}
+
+const KIND_GLYPH = { site: "globe", app: "phone", desk: "laptop" };
+const kindOf = (key) => String(key ?? "").split(":")[0];
+
+let iconUrl = (key) => `icons/${encodeURIComponent(key)}`;
+/** The keys the server has (its index), or null to ask for any. */
+let iconKnown = null;
+/** Keys that answered 404 lately, and when: a page that redraws asks again after a minute, not every time. */
+const iconMissing = new Map();
+const MISSING_MS = 60_000;
+
+/** Where this page's icons come from: [url] a key's address, [known] the keys there are (null: any). */
+export function iconSource({ url, known } = {}) {
+  if (url) iconUrl = url;
+  if (known !== undefined) iconKnown = known ? new Set(known) : null;
+}
+
+/** The address of [key]'s icon, or null while it's known not to be there. */
+export function iconSrc(key, now = Date.now()) {
+  if (!key) return null;
+  if (iconKnown && !iconKnown.has(key)) return null;
+  const since = iconMissing.get(key);
+  if (since != null && now - since < MISSING_MS) return null;
+  return iconUrl(key);
+}
+
+/** The grey glyph for what has no icon: a globe for a site, a phone or a laptop for an app. */
+export function glyphTile(key, size, cls = "") {
+  return h("span", { class: `logo glyph s${size} ${cls}`.trim(), "aria-hidden": "true" }, icon(KIND_GLYPH[kindOf(key)] ?? "globe"));
+}
+
+/**
+ * A view drawn again every second (the laptop's Blocks) gets the same icon elements back, in the
+ * order it asks for them, instead of new ones that could show blank for a moment each time. Only
+ * inside [pooled]; anything else gets new ones.
+ */
+const pool = new Map(); // "key|size|cls|title" -> elements
+const handed = new Map(); // "key|size|cls|title" -> how many this drawing has taken
+let pooling = false;
+export function pooled(draw) {
+  pooling = true;
+  handed.clear();
+  try {
+    return draw();
+  } finally {
+    pooling = false;
+  }
+}
+
+/** [key]'s icon at [size] px (a class per size: no style attributes), its glyph if it has none. */
+export function logo(key, size, { title = null, cls = "" } = {}) {
+  const src = iconSrc(key);
+  if (!src) {
+    const g = glyphTile(key, size, cls);
+    if (title) g.title = title;
+    return g;
+  }
+  const slot = `${key}|${size}|${cls}|${title ?? ""}`;
+  const kept = pooling ? pool.get(slot) ?? [] : null;
+  if (kept) {
+    const i = handed.get(slot) ?? 0;
+    handed.set(slot, i + 1);
+    if (kept[i]) return kept[i];
+  }
+  const img = h("img", {
+    class: `logo s${size} ${cls}`.trim(), src, alt: "", width: size, height: size, loading: "lazy", title,
+    onerror: (e) => {
+      iconMissing.set(key, Date.now());
+      pool.delete(slot);
+      const g = glyphTile(key, size, cls);
+      if (title) g.title = title;
+      e.target.replaceWith(g);
+    },
+  });
+  if (kept) pool.set(slot, [...kept, img]);
+  return img;
+}
+
+/** Sites.ALIASES: another name of a site, shown only where its main name isn't in the list too. */
+const ALIASES = { "redd.it": "reddit.com", "twitter.com": "x.com", "t.co": "x.com", "fb.com": "facebook.com", "fb.me": "facebook.com",
+  "fb.watch": "facebook.com", "youtu.be": "youtube.com", "instagr.am": "instagram.com" };
+/** Companions.PAIRS: a site and its phone apps, one tile for one service. */
+const PAIRS = {
+  "youtube.com": ["com.google.android.youtube"], "instagram.com": ["com.instagram.android"], "facebook.com": ["com.facebook.katana", "com.facebook.lite"],
+  "x.com": ["com.twitter.android"], "reddit.com": ["com.reddit.frontpage"], "tiktok.com": ["com.zhiliaoapp.musically", "com.ss.android.ugc.trill"],
+  "pinterest.com": ["com.pinterest"], "snapchat.com": ["com.snapchat.android"], "twitch.tv": ["tv.twitch.android.app"], "discord.com": ["com.discord"],
+  "netflix.com": ["com.netflix.mediaclient"],
+};
+const covers = (site, domain) => {
+  const host = String(site).split("/")[0];
+  return host === domain || host.endsWith(`.${domain}`);
+};
+
+/**
+ * What a block covers as icons, in the phone's order (AppTile): its phone apps, its laptop apps,
+ * then its sites, a site's other name folded into its main one (Sites.shown) and a site whose app
+ * is in the block left out (Companions.withoutPaired). Either page's block: the shared state's
+ * (targetPackages, targetDesktopApps, targetSites) or the laptop's (phonePackages, desktopApps,
+ * shownSites, and only a count of phone apps where it has no packages). [names]: a laptop app's
+ * name by its id. Returns {items: [{key, name}], extra}: [extra] counts phone apps it can't show.
+ */
+export function blockLogos(b, names = (id) => id) {
+  const packages = [...new Set(b.phonePackages ?? b.targetPackages ?? [])].sort();
+  const desk = [...new Set(b.desktopApps ?? b.targetDesktopApps ?? [])].sort((x, y) => String(names(x)).localeCompare(String(names(y))));
+  const all = (b.shownSites ?? b.targetSites ?? b.sites ?? []).map((x) => String(x).toLowerCase());
+  const named = new Set(all);
+  const sites = [];
+  for (const site of [...all].sort()) {
+    if (ALIASES[site] && named.has(ALIASES[site])) continue;
+    if (Object.entries(PAIRS).some(([domain, apps]) => covers(site, domain) && apps.some((a) => packages.includes(a)))) continue;
+    const host = site.split("/")[0];
+    if (!sites.includes(host)) sites.push(host);
+  }
+  const items = [
+    ...packages.map((p) => ({ key: appKey(p), name: p })),
+    ...desk.map((id) => ({ key: deskKey(id), name: names(id) })),
+    ...sites.map((s) => ({ key: siteKey(s), name: s })),
+  ];
+  const extra = b.phonePackages || b.targetPackages ? 0 : (b.phoneApps ?? 0);
+  return { items, extra };
+}
+
+/**
+ * A block's icons as the phone's AppTile draws them: one alone at full size, or up to four in a
+ * 2 × 2 on a grey tile with "+N" for the rest; a shield on the tile when there's nothing to show.
+ */
+export function cluster({ items = [], extra = 0 } = {}, size = 46, title = null) {
+  const hidden = extra + Math.max(0, items.length - 4);
+  if (items.length === 1 && hidden === 0) return h("span", { class: `cluster one s${size}`, title }, logo(items[0].key, size, { title: items[0].name }));
+  const cell = CELL[size] ?? Math.round(size * 0.38);
+  return h("span", { class: `cluster s${size}`, title },
+    items.length === 0 ? icon("shield", "cluster-glyph")
+      : h("span", { class: `cluster-grid n${Math.min(4, items.length)}` }, items.slice(0, 4).map((x) => logo(x.key, items.length === 1 ? ONE[size] ?? cell : cell, { title: x.name }))),
+    hidden > 0 && h("span", { class: "cluster-more" }, `+${hidden}`));
+}
+/** A cluster's cell by its size, and its one icon beside a "+N" (each a class in xrn.css). */
+const CELL = { 46: 18, 52: 20, 30: 13, 24: 11 };
+const ONE = { 46: 36, 52: 40, 30: 24, 24: 18 };
+
+/** Loop's habit colours (Habit.paletteColor, 0..19), as the phone has them: its dark palette and its light one. */
+export const LOOP_DARK = ["#EF9A9A", "#FFAB91", "#FFCC80", "#FFECB3", "#FFF59D", "#E6EE9C", "#C5E1A5", "#69F0AE", "#80CBC4", "#80DEEA",
+  "#81D4FA", "#64B5F6", "#9FA8DA", "#B39DDB", "#CE93D8", "#F48FB1", "#BCAAA4", "#F5F5F5", "#E0E0E0", "#9E9E9E"];
+export const LOOP_LIGHT = ["#D32F2F", "#E64A19", "#F57C00", "#FF8F00", "#F9A825", "#AFB42B", "#7CB342", "#388E3C", "#00897B", "#00ACC1",
+  "#039BE5", "#1976D2", "#303F9F", "#5E35B1", "#8E24AA", "#D81B60", "#5D4037", "#424242", "#757575", "#9E9E9E"];
+
+/** A habit's own colour from its palette index, {dark, light}; null for none (it's drawn in the data colour). */
+export function habitHue(index) {
+  if (!Number.isInteger(index)) return null;
+  const i = Math.max(0, Math.min(LOOP_DARK.length - 1, index));
+  return { dark: LOOP_DARK[i], light: LOOP_LIGHT[i] };
+}
+
+/**
+ * "Do both", "Do all", "Do 2 of 3": how a habit block's rows add up, or null for one row (the
+ * phone's joinTag). [b]: {trigger: "CHECKLIST"|"TIMER"|"COMBINED", requiredItems (-1: all), combineOr}.
+ */
+export function joinTag(b, parts) {
+  if (parts < 2) return null;
+  if (b.trigger === "COMBINED") {
+    if (b.combineOr) return parts === 2 ? "Do either" : "Timer or all tasks";
+    return parts === 2 ? "Do both" : "Do all";
+  }
+  if (b.trigger === "CHECKLIST") {
+    if (b.requiredItems === -1 || b.requiredItems >= parts) return parts === 2 ? "Do both" : "Do all";
+    return `Do ${b.requiredItems} of ${parts}`;
+  }
+  return null;
+}
+
+/** How a block stands, where Habits First has its switch: a padlock on red while it blocks, open on green while it's open. Its words in its title. */
+const STATE_ICON = { blocked: "lock", open: "lockOpen", earned: "lockOpen", idle: "lockOpen" };
+export function statePill(tone, words) {
+  return h("span", { class: `state ${tone}`, role: "img", title: words, "aria-label": words }, icon(STATE_ICON[tone] ?? "lockOpen"));
+}
+
+/**
+ * One thing a block asks for or holds to, as Habits First's habit row: its icon in its colour (a
+ * habit's own, else the data colour; a limit's turns amber from 80 % and red once used up), its
+ * words and figure, a thin bar in the same colour, and what you can do about it at the right.
+ * [ic]: a glyph name or a node; [hue]: habitHue(); [tone]: "", "warn", "over" or "plain" (grey).
+ */
+export function row({ ic, label, value, fraction, hue = null, tone = "", note, dim, action, strip, done }) {
+  return h("div", { class: `rrow${dim ? " dim" : ""}${done ? " done" : ""}${hue ? " hued" : ""}${tone ? ` ${tone}` : ""}`, style: hue ? { "--hc-d": hue.dark, "--hc-l": hue.light } : null },
+    h("span", { class: "ricon" }, typeof ic === "string" || ic == null ? icon(ic ?? "task") : ic),
+    h("div", { class: "main" },
+      h("div", { class: "top" }, h("span", { class: "lbl" }, label), value && h("span", { class: "val" }, value)),
+      fraction != null && h("div", { class: "rbar" }, h("i", { style: { width: `${Math.max(0, Math.min(100, fraction * 100))}%` } })),
+      note && h("span", { class: "note" }, note),
+      strip),
+    h("div", { class: "acts" }, action));
+}
+
+/** The small caps tag over a habit block's rows: "DO ALL", "DO EITHER". */
+export const tag = (text) => text && h("span", { class: "jointag" }, text);
 
 /**
  * The stretches of [day] (ISO weekday, 1 = Monday) a schedule blocks, as [from, to] minutes of
@@ -166,7 +380,7 @@ export function deviceIcon(device, cls = "") {
 }
 
 /**
- * What a block covers, a part per kind, each to go after its glyph: its sites, how many phone apps
+ * What a block covers, a part per kind, for its icons' title (coverText): its sites, how many phone apps
  * (the pages know their count, not their names), its laptop apps, and what it leaves alone.
  */
 export function coverParts({ sites = [], phoneApps = 0, laptopApps = [], except = [] }) {
@@ -178,16 +392,9 @@ export function coverParts({ sites = [], phoneApps = 0, laptopApps = [], except 
   ].filter(Boolean);
 }
 
-const COVER_GLYPH = { site: "globe", phone: "phone", laptop: "laptop" };
-
-/** What a block covers, as one quiet line: a small grey glyph before each kind, what it leaves alone fainter. */
-export function coverLine(what) {
-  const parts = coverParts(what);
-  if (!parts.length) return null;
-  return h("p", { class: "targets" }, parts.map((p, i) => [
-    i > 0 && h("span", { class: "sep" }, " · "),
-    h("span", { class: `cover ${p.kind}` }, COVER_GLYPH[p.kind] && icon(COVER_GLYPH[p.kind], "glyph"), p.text),
-  ]));
+/** What a block covers in words, for its icons' title: "reddit.com, x.com · 2 phone apps · Steam · except …". */
+export function coverText(what) {
+  return coverParts(what).map((p) => (p.kind === "phone" ? p.text.replace("app", "phone app") : p.text)).join(" · ") || null;
 }
 
 /** "now", "16 min", "3 h", "4 d": how long ago, short. */
