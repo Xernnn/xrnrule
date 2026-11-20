@@ -194,12 +194,11 @@ h3.section, .section { margin: 0 0 12px; font-size: 14px; font-weight: 600; colo
   .bcard .bday { order: 3; flex-basis: 100%; margin: 0 0 0 13px; }
 }
 .bcard .sub { color: var(--muted); font-size: 12.5px; }
-/* How a block stands: a dot and its words; red only while it is blocked. */
+/* How a block stands: its words in grey, and only the dot before them in colour, red while it is
+   blocked and green while it is open. */
 .headline { font-size: 13.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .headline::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; vertical-align: 1px; background: var(--faint); }
-.headline.blocked { color: var(--blocked); }
 .headline.blocked::before { background: var(--blocked); }
-.headline.open, .headline.earned { color: var(--open); }
 .headline.open::before, .headline.earned::before { background: var(--open); }
 
 /* What a block asks for or holds to, a row each: words, a figure, a meter, what to do. */
