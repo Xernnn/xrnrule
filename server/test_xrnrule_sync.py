@@ -22,6 +22,7 @@ import time
 import unittest
 import unittest.mock
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
@@ -44,6 +45,7 @@ class SyncServerTest(unittest.TestCase):
         users = os.path.join(cls.tmp.name, "htpasswd")
         with open(users, "w") as f:
             f.write("sonn:" + bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode() + "\n")
+            f.write("other:" + bcrypt.hashpw(b"secret2", bcrypt.gensalt(4)).decode() + "\n")
         web = os.path.join(cls.tmp.name, "web")
         os.makedirs(web)
         with open(os.path.join(web, "index.html"), "w") as f:
@@ -897,6 +899,205 @@ class SyncServerTest(unittest.TestCase):
         with conn.getresponse() as r:  # no answer at all raises here
             self.assertEqual(401, r.status)
         conn.close()
+
+    # ---- icons: the logos the pages show ----------------------------------------------------
+
+    PNG = b"\x89PNG\r\n\x1a\n" + bytes(16) + b"a tiny made-up logo"
+
+    def raw(self, method, path, data=None, headers=None, login="sonn:secret"):
+        """A request with [data] as it is (no JSON): (status, body bytes, headers)."""
+        req = urllib.request.Request(self.base + path, method=method, data=data)
+        if login:
+            req.add_header("Authorization", "Basic " + base64.b64encode(login.encode()).decode())
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read(), r.headers
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(), e.headers
+
+    @staticmethod
+    def quoted(key):
+        return urllib.parse.quote(key, safe="")
+
+    def icons_folder(self, user="sonn"):
+        return os.path.join(srv.args.data, "users", user, "icons")
+
+    def test_an_icon_sent_is_listed_and_served_as_the_image_it_is(self):
+        key = "app:com.example.chat"
+        self.assertEqual(204, self.raw("PUT", f"/xrnrule/icons/{self.quoted(key)}", self.PNG, {"X-Device": "phone"})[0])
+        status, body, _ = self.raw("GET", "/xrnrule/icons")
+        self.assertEqual(200, status)
+        listed = json.loads(body)
+        self.assertEqual(hashlib.sha256(self.PNG).hexdigest()[:12], listed[key])
+        for path in (f"/xrnrule/icons/{self.quoted(key)}", f"/icons/{key}"):  # with and without the prefix, the ':' as is
+            status, body, h = self.raw("GET", path)
+            self.assertEqual((200, self.PNG), (status, body), path)
+            self.assertEqual("image/png", h["Content-Type"])
+            self.assertEqual("nosniff", h["X-Content-Type-Options"])
+            self.assertEqual("same-origin", h["Cross-Origin-Resource-Policy"])
+            self.assertEqual("private, max-age=86400", h["Cache-Control"])
+            self.assertEqual(f'"{listed[key]}"', h["ETag"])
+            self.assertIn("sandbox", h["Content-Security-Policy"])
+        self.assertEqual(304, self.raw("GET", f"/icons/{self.quoted(key)}", headers={"If-None-Match": f'"{listed[key]}"'})[0])
+        # Sent again, changed: the new one, under the same key.
+        changed = self.PNG + b" v2"
+        self.assertEqual(204, self.raw("PUT", f"/icons/{self.quoted(key)}", changed)[0])
+        self.assertEqual(changed, self.raw("GET", f"/icons/{self.quoted(key)}")[1])
+        self.assertEqual(hashlib.sha256(changed).hexdigest()[:12], json.loads(self.raw("GET", "/icons")[1])[key])
+        # A laptop app's id may have a space or a plus in it.
+        for other in ("desk:Some App+", "site:news.example.org"):
+            self.assertEqual(204, self.raw("PUT", f"/icons/{self.quoted(other)}", self.PNG)[0], other)
+            self.assertEqual(200, self.raw("GET", f"/icons/{self.quoted(other)}")[0], other)
+
+    def test_head_of_an_icon_is_its_headers(self):
+        self.raw("PUT", "/icons/site%3Ahead.example", self.PNG)
+        with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+            s.sendall(b"HEAD /icons/site%3Ahead.example HTTP/1.1\r\nHost: x\r\nConnection: close\r\n" + self.LOGIN + b"\r\n")
+            answer = b"".join(iter(lambda: s.recv(4096), b""))
+        self.assertRegex(answer, rb"^HTTP/1\.[01] 200 ")
+        self.assertIn(b"Content-Type: image/png", answer)
+        self.assertTrue(answer.endswith(b"\r\n\r\n"))
+
+    def test_an_icon_the_server_hasnt_got_is_a_404_left_out_of_the_log(self):
+        # The pages ask for every target's logo; xrnhub's log page counts each 404 as a warning.
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+            status, _, h = self.raw("GET", "/icons/site%3Anever-sent.example")
+            self.assertEqual(404, status)
+            self.assertEqual("same-origin", h["Cross-Origin-Resource-Policy"])
+            self.assertEqual(404, self.raw("GET", "/nothing-here")[0])  # any other 404 still is
+            time.sleep(0.1)
+        self.assertNotIn("never-sent", log.getvalue())
+        self.assertIn("/nothing-here", log.getvalue())
+
+    def test_every_raster_kind_is_taken_and_served_by_its_first_bytes(self):
+        kinds = {
+            "image/png": self.PNG,
+            "image/jpeg": b"\xff\xd8\xff\xe0" + bytes(20),
+            "image/gif": b"GIF89a" + bytes(20),
+            "image/webp": b"RIFF\x10\x00\x00\x00WEBPVP8 " + bytes(20),
+            "image/x-icon": b"\x00\x00\x01\x00\x01\x00" + bytes(20),
+        }
+        for ctype, data in kinds.items():
+            key = f"site:{ctype.split('/')[1]}.example"
+            # Whatever the device says it is: the type comes from the bytes.
+            self.assertEqual(204, self.raw("PUT", f"/icons/{self.quoted(key)}", data, {"Content-Type": "text/html"})[0], ctype)
+            status, body, h = self.raw("GET", f"/icons/{self.quoted(key)}")
+            self.assertEqual((200, data, ctype), (status, body, h["Content-Type"]))
+
+    def test_svg_html_and_anything_else_but_a_raster_is_refused(self):
+        # Served from the status page's origin, an SVG or HTML "icon" could run script there.
+        for bad in (b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+                    b'<?xml version="1.0"?><svg/>',
+                    b"<!doctype html><script>alert(1)</script>",
+                    b"\xef\xbb\xbf<svg/>",  # behind a byte-order mark
+                    b"  <svg/>",
+                    b"\x89PN" + b"G" * 20,  # PNG's start, cut
+                    b"GIF8<script>",
+                    b"RIFF\x00\x00\x00\x00AVI LIST",
+                    b"just text"):
+            status, _, _ = self.raw("PUT", "/icons/site%3Abad.example", bad)
+            self.assertEqual(400, status, bad)
+        self.assertNotIn("site:bad.example", json.loads(self.raw("GET", "/icons")[1]))
+        self.assertEqual(404, self.raw("GET", "/icons/site%3Abad.example")[0])
+
+    def test_an_icon_over_64_kb_is_refused(self):
+        exact = self.PNG + bytes(srv.ICON_MAX - len(self.PNG))
+        self.assertEqual(204, self.raw("PUT", "/icons/site%3Aexact.example", exact)[0])
+        self.assertEqual(413, self.raw("PUT", "/icons/site%3Abig.example", exact + b"x")[0])
+        self.assertEqual(413, self.raw("PUT", "/icons/site%3Abig.example", b"")[0])  # nothing at all
+        # Nor unpacked past it.
+        bomb = gzip.compress(exact + bytes(srv.ICON_MAX))
+        self.assertEqual(413, self.raw("PUT", "/icons/site%3Abig.example", bomb, {"Content-Encoding": "gzip"})[0])
+        self.assertNotIn("site:big.example", json.loads(self.raw("GET", "/icons")[1]))
+
+    def files_in_data(self):
+        return {os.path.relpath(os.path.join(d, f), srv.args.data) for d, _, fs in os.walk(srv.args.data) for f in fs}
+
+    def test_a_key_that_isnt_one_is_refused_and_never_a_path(self):
+        before = self.files_in_data()
+        bad_keys = ["../state.json", "..%2F..%2Fusers%2Fsonn%2Fstate.json", "%2e%2e%2fstate.json", "site:Reddit.com",
+                    "site:reddit.com%2F..%2F..%2Fstate.json", "site:a%00b", "site:a%2Fb", "web:reddit.com", "app:a%20b",
+                    "app:com.x%2F..", "desk:", "desk:a%0Ab", "site:" + "a" * 254, "app:" + "a" * 201, "site:%E2%80%AEx.com",
+                    "state.json", "", "%"]
+        for key in bad_keys:
+            self.assertEqual(400, self.raw("PUT", f"/icons/{key}", self.PNG)[0], key)
+            self.assertIn(self.raw("GET", f"/icons/{key}")[0], (400, 404), key)
+        # A slash that isn't encoded is a path, which no key is.
+        self.assertEqual(400, self.raw("PUT", "/icons/site:a.example/../../state.json", self.PNG)[0])
+        listed = json.loads(self.raw("GET", "/icons")[1])
+        self.assertFalse([k for k in listed if not srv.ICON_KEY.fullmatch(k)], listed)
+        self.assertEqual(set(), self.files_in_data() - before, "nothing written anywhere")
+
+    def test_icons_need_the_login(self):
+        self.raw("PUT", "/icons/site%3Aprivate.example", self.PNG)
+        guesser = {"X-Forwarded-For": "203.0.113.90"}  # its wrong passwords counted apart from the other tests'
+        for method, path, data in (("GET", "/icons", None), ("GET", "/icons/site%3Aprivate.example", None),
+                                   ("PUT", "/icons/site%3Anew.example", self.PNG)):
+            self.assertEqual(401, self.raw(method, path, data, guesser, login=None)[0], (method, path))
+            self.assertEqual(401, self.raw(method, path, data, guesser, login="sonn:nope")[0], (method, path))
+        self.assertNotIn("site:new.example", json.loads(self.raw("GET", "/icons")[1]))
+
+    def test_the_status_pages_images_sign_in_with_the_cookie_alone(self):
+        # An <img> can't add X-Xrn-Client: the page's images carry the login cookie and nothing else.
+        self.raw("PUT", "/icons/site%3Acookie.example", self.PNG)
+        cookie = self.sign_in()
+        jar = {"Cookie": f"{srv.SESSION_COOKIE}={cookie}"}
+        status, body, _ = self.raw("GET", "/xrnrule/icons/site%3Acookie.example", headers=jar, login=None)
+        self.assertEqual((200, self.PNG), (status, body))
+        # Nor does a missing or stale one pop the browser's login box for every image.
+        for headers in ({}, {"Cookie": f"{srv.SESSION_COOKIE}=garbage"}):
+            status, _, h = self.raw("GET", "/icons/site%3Acookie.example", headers=headers, login=None)
+            self.assertEqual(401, status)
+            self.assertIsNone(h.get("WWW-Authenticate"))
+        # The cookie alone reads that one image, nothing more: the list, the state and every write
+        # still want the header too.
+        self.assertEqual(401, self.raw("GET", "/icons", headers=jar, login=None)[0])
+        self.assertEqual(401, self.raw("GET", "/state", headers=jar, login=None)[0])
+        self.assertEqual(401, self.raw("PUT", "/icons/site%3Aforged.example", self.PNG, headers=jar, login=None)[0])
+        # A page on another site can't send one with the browser's login.
+        self.assertEqual(403, self.raw("PUT", "/icons/site%3Aforged.example", self.PNG,
+                                       {"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"})[0])
+
+    def test_one_user_cannot_read_or_overwrite_anothers_icons(self):
+        self.assertEqual(204, self.raw("PUT", "/icons/site%3Amine.example", self.PNG)[0])
+        self.assertNotIn("site:mine.example", json.loads(self.raw("GET", "/icons", login="other:secret2")[1]))
+        self.assertEqual(404, self.raw("GET", "/icons/site%3Amine.example", login="other:secret2")[0])
+        self.assertEqual(204, self.raw("PUT", "/icons/site%3Amine.example", self.PNG + b"theirs", login="other:secret2")[0])
+        self.assertEqual(self.PNG, self.raw("GET", "/icons/site%3Amine.example")[1])
+
+    def test_a_user_keeps_at_most_so_many_icons_those_written_longest_ago_going_first(self):
+        user = "many"
+        with unittest.mock.patch.object(srv, "ICONS_MAX", 3):
+            for i in range(5):
+                srv.put_icon(user, f"site:s{i}.example", self.PNG + bytes([i]))
+                time.sleep(0.002)
+            self.assertEqual(["site:s2.example", "site:s3.example", "site:s4.example"], sorted(srv.icon_index(user)))
+            # Written again, an old one is new: the next to go is s3.
+            srv.put_icon(user, "site:s2.example", self.PNG + b"again")
+            srv.put_icon(user, "site:s5.example", self.PNG)
+            self.assertEqual(["site:s2.example", "site:s4.example", "site:s5.example"], sorted(srv.icon_index(user)))
+            self.assertIsNone(srv.get_icon(user, "site:s0.example"))
+        # Their files go with them: what is on disk is what is listed.
+        self.assertEqual(4, len(os.listdir(self.icons_folder(user))))  # three icons and the index
+        srv.icons.pop(user)
+        self.assertEqual(3, len(srv.icon_index(user)))  # read back from the disk the same
+
+    def test_an_icon_index_that_cant_be_read_starts_over(self):
+        # Every logo is a copy of one the devices have: they send again what the list lacks.
+        user = "broken"
+        srv.put_icon(user, "site:a.example", self.PNG)
+        srv.put_icon(user, "site:b.example", self.PNG)
+        with open(os.path.join(self.icons_folder(user), "index.json"), "w") as f:
+            f.write("{half a file")
+        srv.icons.pop(user)
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+            self.assertEqual({}, srv.icon_index(user))
+        self.assertIn("icons of broken unreadable", log.getvalue())
+        srv.put_icon(user, "site:c.example", self.PNG)
+        self.assertEqual(["site:c.example"], list(srv.icon_index(user)))
+        self.assertEqual(2, len(os.listdir(self.icons_folder(user))))  # the old files went
 
     def test_the_session_key_is_private_and_shared_by_every_server_on_the_users_file(self):
         path = os.path.join(os.path.dirname(srv.args.users), "session.key")
