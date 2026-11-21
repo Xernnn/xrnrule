@@ -146,3 +146,26 @@ test("a habit block's rows say how they add up, as the phone's card does", () =>
   assert.equal(joinTag(block("COMBINED"), 3), "Do all");
   assert.equal(joinTag(block("TIMER"), 1), null);
 });
+
+// WCAG 2 contrast of two "#rrggbb" colours.
+function contrast(a, b) {
+  const lum = (hex) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+test("the data colour is xrnrule's tile in every theme, and white on it and it on a white card reach 3:1", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("./web/xrn.css", import.meta.url), "utf8");
+  const tile = (await readFile(new URL("./web/icon.svg", import.meta.url), "utf8")).match(/<rect [^>]*fill="(#[0-9A-Fa-f]{6})"/)[1].toLowerCase();
+  const values = [...css.matchAll(/--(data|brand):\s*(#[0-9a-fA-F]{6})/g)].map((m) => m[2].toLowerCase());
+  assert.equal(values.length, 4); // --data and --brand dark, --data in both light blocks
+  for (const v of values) assert.equal(v, tile);
+  // Its text is the big glance figure, and white sits on it only as an icon: both need 3:1.
+  assert.ok(contrast(tile, "#ffffff") >= 3);
+  assert.ok(contrast(tile, "#2b2b30") >= 3);
+});

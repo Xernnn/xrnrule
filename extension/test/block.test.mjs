@@ -55,3 +55,14 @@ test("the block page only goes back to the site it stands in for, not anywhere i
   // A rule on a path stands in for that site too.
   assert.deepEqual(blockPage(`${PAGE}?site=example.com%2Fshorts#https://www.example.com/shorts/1`, { blocked: false }).replaced, ["https://www.example.com/shorts/1"]);
 });
+
+test("the letter's square is xrnrule's tile, and its white letter reaches 3:1 for large text", () => {
+  const tile = read("icons/icon.svg").match(/<rect [^>]*fill="(#[0-9A-Fa-f]{6})"/)[1].toLowerCase();
+  const brand = read("page.css").match(/--brand:\s*(#[0-9a-fA-F]{6})/)[1].toLowerCase();
+  assert.equal(brand, tile);
+  const lum = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+    .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+  assert.match(read("page.css"), /\.shield \.pic \{[^}]*font-size: 34px[^}]*color: #fff|\.shield \.pic \{[^}]*color: #fff[^}]*font-size: 34px/);
+  assert.ok(1.05 / (lum(brand) + 0.05) >= 3);
+});
