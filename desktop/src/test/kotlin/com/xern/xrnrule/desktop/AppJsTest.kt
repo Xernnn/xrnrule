@@ -1,5 +1,6 @@
 package com.xern.xrnrule.desktop
 
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -15,7 +16,12 @@ class AppJsTest {
             probe.inputStream.bufferedReader().readText().trim().takeIf { probe.waitFor(10, TimeUnit.SECONDS) && probe.exitValue() == 0 }
         }.getOrNull()
         assumeTrue("node isn't installed", version != null)
-        val command = listOf("node", "--test", File("src/test/js").absolutePath)
+        // Each file by name, not the folder: node 21 to 25 read a folder here as a pattern that
+        // matches only the folder, and try to run it as a test file (Cannot find module); 26
+        // searches it again, as 20 did. CI's runner has 24.
+        val tests = File("src/test/js").listFiles { file -> file.name.endsWith(".test.mjs") }.orEmpty().map { it.absolutePath }.sorted()
+        assertTrue("no page tests in src/test/js", tests.isNotEmpty())
+        val command = listOf("node", "--test") + tests
         // Into a file, not read off a pipe: reading the pipe to its end would wait out a node that
         // never exits, and the timeout below would never come.
         val log = File.createTempFile("xrnrule-app-js", ".log").apply { deleteOnExit() }

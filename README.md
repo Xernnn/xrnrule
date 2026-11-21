@@ -353,9 +353,9 @@ the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`. The server ne
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
 ./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
 python3 -m unittest server/test_xrnrule_sync.py   # the sync server
-node --test extension/test             # the extension's helpers and its signed .crx
-node --test server                     # the status page's reading of the shared state, Insights
-node --test desktop/src/test/js        # the laptop page
+node --test extension/test/*.test.mjs  # the extension's helpers and its signed .crx
+node --test server/*.test.mjs          # the status page's reading of the shared state, Insights
+node --test desktop/src/test/js/*.test.mjs   # the laptop page
 scripts/smoke.sh                       # the block screen on an emulator of its own, end to end
 desktop/install.sh                     # build and (re)start the laptop daemon
 server/deploy.sh                       # test and deploy the sync server and its page

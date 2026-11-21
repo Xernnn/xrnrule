@@ -155,4 +155,4 @@ synced or fetched (never point it at the real data dir):
 ./gradlew --no-daemon :desktop:demo --args="47391 $(mktemp -d) empty"   # a fresh install
 ```
 
-Tests: `node --test desktop/src/test/js server` (the page, Insights) besides `:desktop:test`.
+Tests: `node --test desktop/src/test/js/*.test.mjs server/*.test.mjs` (the page, Insights) besides `:desktop:test`.

@@ -1,5 +1,5 @@
 // The laptop's page (src/main/resources/web/app.js), run in a stubbed page: no DOM, no daemon.
-// Run: node --test desktop/src/test/js (AppJsTest runs it with the desktop tests).
+// Run: node --test desktop/src/test/js/*.test.mjs (AppJsTest runs it with the desktop tests).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
