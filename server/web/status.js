@@ -11,6 +11,7 @@ import { h, icon, coverText, checkIn, daySpans, dayStrip, limitTone, row, tag, j
 import { normalizeBlocks, mergeShared, renderInsights, dayByBlock, dayLine, clockAt } from "./insights.js";
 
 const KEY_SIGNED_IN = "xrn.signedIn"; // a hint only: whether to try the cookie or show the form
+const KEY_USER = "xrn.user"; // the name last signed in with here, to fill in the form next time
 const KEY_OLD_AUTH = "xrnloops.auth"; // the password, as these pages kept it before the cookie
 const KEY_INSIGHTS = "xrnrule.insights";
 const HEADERS = { "X-Xrn-Client": "web" }; // what makes the cookie count
@@ -162,7 +163,8 @@ function signOut(message) {
 }
 
 function loginView(message = "") {
-  const user = h("input", { name: "user", value: "sonn", autocomplete: "username", required: true });
+  // Empty until someone has signed in from this browser; then their name, and the password to type.
+  const user = h("input", { name: "user", value: load(KEY_USER) ?? "", autocomplete: "username", required: true });
   const password = h("input", { name: "password", type: "password", autocomplete: "current-password", required: true });
   const error = h("div", { class: "error" }, message);
   const form = h("form", {
@@ -171,6 +173,7 @@ function loginView(message = "") {
       e.preventDefault();
       try {
         await signIn("Basic " + btoa(unescape(encodeURIComponent(`${user.value.trim()}:${password.value}`))));
+        save(KEY_USER, user.value.trim());
         await start();
       } catch (err) {
         error.textContent = err instanceof AuthError ? WRONG_LOGIN : err.message === LOCKED_OUT ? LOCKED_OUT : `Server unreachable · ${err.message}`;
@@ -180,7 +183,7 @@ function loginView(message = "") {
   document.getElementById("app").replaceChildren(h("div", { class: "login" },
     h("img", { class: "login-mark", src: "icon.svg", alt: "xrnrule", width: 64, height: 64 }),
     form));
-  setTimeout(() => password.focus(), 0);
+  setTimeout(() => (user.value ? password : user).focus(), 0);
 }
 
 // ---- time ----------------------------------------------------------------------------------

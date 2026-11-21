@@ -430,4 +430,10 @@ shared with xrnloops; and your own server instead of an account.
 xrnrule is free software under the GNU General Public License, version 3 or later; see
 [LICENSE](LICENSE). Parts of it are ported from [Loop Habit Tracker](https://github.com/iSoron/uhabits)
 (also GPLv3), copyright Álinson Santos Xavier and its contributors; those files say so at the
-top. The font is Xiaomi's MiSans (Latin), under its own licence.
+top.
+
+MiSans by Xiaomi, used under the MiSans font licence (free for commercial use when the software
+notes that it uses MiSans). The font files are not covered by this repository's licence.
+<https://hyperos.mi.com/font/en/> The phone app, the extension and the status page each carry a
+copy, with this note beside it: [app/src/main/FONTS.md](app/src/main/FONTS.md),
+[extension/fonts/README.md](extension/fonts/README.md) and [server/web/FONTS.md](server/web/FONTS.md).
