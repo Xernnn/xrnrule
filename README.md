@@ -15,29 +15,103 @@ xrnrule was called xrnhabit until 24 Oct 2026, when it took in
 [xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension that put time limits on
 sites. One set of rules now covers apps and sites on both devices.
 
+Phone app 0.2.20 (build 20), browser extension 2.3.8.
+
+## Screenshots
+
+All of them show made-up blocks, habits and history.
+
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/phone-block-screen.png" alt="The phone's block screen over YouTube"></td>
+<td width="33%"><img src="docs/screenshots/phone-insights.png" alt="Insights on the phone"></td>
+<td width="33%"><img src="docs/screenshots/phone-wait.png" alt="The 60-second wait before a block is deleted"></td>
+</tr>
+<tr>
+<td>The block screen over a limited app: today's 30 minutes are used up, and a few more can be bought after a 45-second wait and a typed sentence.</td>
+<td>Insights for the last 7 days, from both devices: blocked tries, time unlocked, minutes bought, breaks and habits, against the week before.</td>
+<td>Deleting a block, or making one easier, waits 60 seconds first.</td>
+</tr>
+</table>
+
+![The laptop's page: every block with its icons, state and what it asks for](docs/screenshots/laptop-blocks.png)
+
+The laptop's own page (`127.0.0.1:47321`), Blocks tab: each block with the icons of what it covers,
+how it stands, its day so far, and what opens it (tasks, habits with a bar and a play button for
+a timer, a daily limit's minutes, today's blocked hours).
+
+![The laptop's Insights tab](docs/screenshots/laptop-insights.png)
+
+Insights on the laptop: the same figures as the phone's, with the most tried apps and sites by
+their icons.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/laptop-block-page.png" alt="The laptop's block page for a site"></td>
+<td width="50%"><img src="docs/screenshots/status-page.png" alt="The sync server's status page"></td>
+</tr>
+<tr>
+<td>Where a blocked site or laptop app lands, with what's left to do before it opens.</td>
+<td>The sync server's status page: the blocks both devices share, live, and when each device last checked in.</td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/extension-popup.png" alt="The extension's popup on a limited site and on a blocked one"></td>
+<td width="50%"><img src="docs/screenshots/extension-options.png" alt="The extension's settings page"></td>
+</tr>
+<tr>
+<td>The extension's toolbar popup on a limited site (what's left today, and of which block) and on a blocked one.</td>
+<td>The extension's settings: the port xrnrule listens on, and where updates come from.</td>
+</tr>
+</table>
+
 ## How it fits together
 
 ```
-Phone                                      Laptop (KDE Plasma 6)
- xrnrule app: rules, apps, habits           xrnrule-desktop: rules, desktop apps
-   ↑ 127.0.0.1:47321                          ↑ 127.0.0.1:47321
- Quetta + the xrnrule extension: sites      Helium + the xrnrule extension: sites
-              \                             /
-               your home server (server/): blocks, unlocks, minutes used, bought minutes
+Phone                                        Laptop (Hyprland or KDE Plasma 6)
+ xrnrule app: rules, apps, habits             xrnrule-desktop: rules, desktop apps, its page
+   ↑ 127.0.0.1:47321                            ↑ 127.0.0.1:47321
+ Quetta + the xrnrule extension: sites        Zen or a Chromium browser + the extension: sites
+              \                               /
+   your home server: xrnrule-sync (server/): blocks, unlocks, minutes used, bought minutes,
+                     history, logos, the status page and updates
+                     xrnloops-sync (from xrnloops): habits and their ticks
 ```
 
 A block is about a thing, not a device: a "YouTube" block can cover the phone app,
-youtube.com in both browsers and a laptop app. Each block is one of three kinds:
+youtube.com in both browsers and a laptop app. It holds on the phone and the laptop, or only on
+one of them (**Blocks on**); the other device still shows it and can unlock it. A block asks one
+or more of these:
 
-1. **Earn it.** Blocked until you do the habit: a checklist, a timer (optionally counted in a
-   *different* app, such as a reading app), or both. A checklist item can be linked to a habit
-   in [xrnloops](#companion-app-xrnloops), so only a real tick there counts.
+1. **Earn it.** Blocked until you do what it asks:
+   - tick a task, or do a habit (a check, or an amount such as 20 pages);
+   - a **focus session**: a timer habit, run on the phone's full-screen timer (a ring filling toward
+     today's goal, with pause, a five-minute break and end) or from the play button on the laptop's
+     page;
+   - minutes in a *different* app, such as a reading app, or a plain wait timer;
+   - a habit **linked** to [xrnloops](#habits-and-xrnloops), so only a real tick there counts;
+   - an **NFC tag** stuck somewhere out of reach (the kitchen, the gym bag): holding the phone
+     to it opens the block from any screen. A new tag is read twice, since some cards show a new
+     id on every read.
+
+   An unlock lasts the minutes you set (**Block again after**), as a timer or as minutes of use
+   over the day (**Self paced**). All unlocks together give at most an hour a day (Settings →
+   Unlocks), counted across both devices.
 2. **Limit.** N minutes a day, N opens a day, and/or "at most N minutes in a row, then a break".
    Coming back within a minute is the same open. Optionally a few seconds' pause before each
    open, showing what's left; it opens by itself, and leaving first costs nothing. Phone and
    laptop share one limit, or each gets its own (a choice per block).
 3. **Set time.** Blocked on a weekly schedule (as many time windows as you like), or locked
-   down right now for N minutes.
+   down right now for N minutes. A Quick Settings tile starts every lockdown block without
+   opening the app, then shows the time left; it can't stop one.
+
+A habit block can also have a daily limit and blocked hours of its own, and a limit block can
+have blocked hours; whichever rule is holding wins, and a habit only opens its own part. With a
+habit and a daily limit you choose what comes first: **Limit first** (the free minutes go first,
+then the habit opens it again) or **Habit first** (blocked until the habit is done, and the limit
+stays on top). A lockdown stands alone.
 
 A thing can be in several blocks; whichever is strictest right now wins. A block can leave
 parts of a site alone (music.youtube.com under youtube.com).
@@ -46,8 +120,8 @@ parts of a site alone (music.youtube.com under youtube.com).
 
 - **Do the habit** (Earn-it blocks): it opens on both devices.
 - **Buy a few minutes** (Limit and Set-time blocks): start, wait 45 s, type "I choose to keep
-  scrolling", get a few minutes. A few times a day per block, counted across both devices.
-  Never past a lockdown, a hardcore block or a forced break.
+  scrolling", get a few minutes. Twice a day per block by default, counted across both devices.
+  Never past a lockdown, a hardcore block, a lock or a forced break.
 - **The daily break**: 15 minutes off every soft block, once a day.
 
 ## What else it does
@@ -94,21 +168,56 @@ parts of a site alone (music.youtube.com under youtube.com).
   a dot before its name, its part of a bar or a day's strip, its sparkline. A habit or an unlock
   both devices logged counts once.
 - **The laptop's pages** (the laptop app's own page and the server's status page, which the hub's
-  laptop window shows as Blocks) look and work like the phone's, after Habits First. A block's
-  card has the real icons of what it covers (one alone, or four in a 2 × 2 with "+N"), its name,
-  how it stands in grey words after a coloured dot and its day so far ("4 tries · 12 min open");
-  at the right, a padlock for its state, or its one allowed action (open an earned unlock, block
-  it again after a lockdown): never an on/off switch. Then "DO ALL" and a row per thing it asks
-  for, in the habit's own colour where the laptop knows it, with a thin bar and a round play
-  button for a timer; today's blocked hours as a strip with now marked. Insights leads with the
-  blocked tries big and the other figures under them, then the most tried apps and sites by
-  their icons; By block and the history show icons too. The laptop's block page shows the site's
-  or app's icon, "To unlock reddit.com, finish your habits first!" and what's left. Icons come
-  from the phone, the laptop and the sites themselves through the server (`/icons`); what has
-  none shows a grey globe, phone or laptop. The status page says when each device last checked
-  in, the laptop's page when the phone did.
+  laptop window shows as Blocks) look and work like the phone's. A block's card has the real
+  icons of what it covers (one alone, or four in a 2 × 2 with "+N"), its name, how it stands in
+  grey words after a coloured dot and its day so far ("4 tries · 12 min open"); at the right, a
+  padlock for its state, or its one allowed action (open an earned unlock, block it again after a
+  lockdown): never an on/off switch. Then "DO ALL" and a row per thing it asks for, in the
+  habit's own colour where the laptop knows it, with a thin bar and a round play button for a
+  timer; today's blocked hours as a strip with now marked. Insights leads with the blocked tries
+  big and the other figures under them, then the most tried apps and sites by their icons; By
+  block and the history show icons too. The laptop's block page shows the site's or app's icon,
+  "To unlock reddit.com, finish your habits first!" and what's left. Icons come from the phone,
+  the laptop and the sites themselves through the server (`/icons`); what has none shows a grey
+  globe, phone or laptop. The status page says when each device last checked in, the laptop's
+  page when the phone did.
 - Built to survive reboots, process death and OEM battery killers, and it tells you when the phone
   turns its autostart off, which Xiaomi phones do at every install.
+
+## On the laptop
+
+`desktop/` is a small JVM daemon, `xrnrule-desktop` (a systemd user service), that runs the same
+engine as the phone. It closes blocked laptop apps (Steam, Discord, …), answers the browser
+extension, and serves its own page on `127.0.0.1:47321`: Blocks, Insights and Settings, where
+blocks can be made and edited much as on the phone, and the block page where blocked apps and
+sites land. It learns which window is in front from Hyprland's event socket, or from a KWin script
+on KDE Plasma 6. `desktop/install.sh` builds it, installs it to `~/.local/share/xrnrule-desktop`
+and starts the service; `~/.config/xrnrule/desktop.properties` names the server and the login.
+Everything else (popups, the phone going quiet, troubleshooting, looking at the page on made-up
+data) is in [desktop/README.md](desktop/README.md).
+
+## The sync server and its status page
+
+`server/xrnrule-sync.py` is one Python file (standard library plus `bcrypt`) that runs on your own
+server behind HTTPS, under a path such as `/xrnrule`. It keeps no logic of its own:
+
+- **The shared state**, one JSON document per user (`GET`/`PUT /state`): blocks, tasks, unlocks,
+  each device's minutes used, bought minutes, settings, locks. Each device merges three ways on
+  its side and writes back with `If-Match`, so two devices can't overwrite each other. The laptop
+  long-polls it, so it hears of the phone's changes as soon as they're written.
+- **History** (`POST`/`GET /events`, `GET /limits`): blocked tries, habits, unlocks, bought
+  minutes and breaks from both devices, and each limit's use a day, kept 120 days, for Insights
+  and the weekly review in the habits web app.
+- **Logos** (`/icons`), **check-ins** (`/devices`) and **releases** (`/update/…`: the extension's
+  signed `.crx`, the phone app's `.apk`; see [Updates](#updates)).
+- **The status page** (`/`): the blocks both devices share, live, with Insights, after one
+  sign-in (see [Security](#security)).
+
+Logins come from an htpasswd file of bcrypt hashes; the same file and session key can serve
+xrnloops-sync, so one sign-in covers both web pages. `server/deploy.sh [ssh host]` tests the server,
+copies the program and its `web/` folder to a Termux + runit host together, restarts the
+service and waits for `/health`. The full list of endpoints is at the top of
+`xrnrule-sync.py`.
 
 ## The browser extension
 
@@ -149,7 +258,10 @@ it has nothing to go back to, so the rest of the browser stays yours.
   A copy installed from a `.zip` (`scripts/pack-extension.sh`) works too, but never updates, and
   each one gets a new extension ID, so remove it before installing the `.crx`.
 
-The extension's settings page shows its version and where it updates from, with **Check now**.
+The toolbar popup shows the site in front and what xrnrule says about it (blocked, what's left
+today and of which block, or no rule), whether xrnrule is answering, and a way into it. The
+extension's settings page has its one setting, the port xrnrule listens on, and shows its version
+and where it updates from, with **Check now**.
 The phone app warns when the browser the extension lives in goes quiet, without ever blocking
 that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
 off is closed after two minutes in front, and so is one that withholds the extension's site access
@@ -170,8 +282,9 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
 ```
 
 - **The extension** is signed with `~/.config/xrnrule/extension.pem`, made on the first release
-  (`--new-key`; without it a missing key stops the release). **Back it up.** The key is the extension's identity: an update signed with another one is
-  refused, and the phone would have to install afresh under a new ID.
+  (`--new-key`; without it a missing key stops the release). **Back it up.** The key is the
+  extension's identity: an update signed with another one is refused, and the phone would have to
+  install afresh under a new ID.
 - **The app** is the sideload release build, signed with the key it shares with xrnloops
   (`../xrn-signing.properties`; the release refuses to go without it, since the phone only takes
   an update signed like the app it has). On the phone, Settings → Updates → **Allow installing
@@ -180,6 +293,7 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
   there. The first build with the updater has to be installed
   by hand: `./gradlew :app:installSideloadRelease`, or open
   `https://<your server>/xrnrule/update/xrnrule.apk` on the phone and sign in with the sync login.
+- **The laptop daemon** has no updater: `desktop/install.sh` again, from an up-to-date checkout.
 
 ## Security
 
@@ -226,20 +340,37 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
 ## Build
 
 Requirements: **JDK 17 or newer** (Gradle 9.8 runs on 17 through 27; everything is built
-for Java 17 whatever the JDK) and the Android SDK (platform 35, build tools 36). Point Gradle at the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`.
+for Java 17 whatever the JDK) and the Android SDK (platform 35, build tools 36). Point Gradle at
+the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`. The server needs Python 3 with
+`bcrypt`, the extension's and the pages' tests Node 22.
 
 ```sh
 ./gradlew :domain:test                 # engine unit tests (pure JVM)
+./gradlew :desktop:test                # the laptop daemon (end to end only with python3 + bcrypt and ../xrnloops beside this repo)
+./gradlew :app:testSideloadDebugUnitTest   # the phone app's unit tests
 ./gradlew :app:assembleSideloadDebug   # full build, with hardcore mode
 ./gradlew :app:assemblePlayDebug       # Play-safe build: no Device Admin
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
 ./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
+python3 -m unittest server/test_xrnrule_sync.py   # the sync server
 node --test extension/test             # the extension's helpers and its signed .crx
-node --test server                     # the status page's reading of the shared state
+node --test server                     # the status page's reading of the shared state, Insights
+node --test desktop/src/test/js        # the laptop page
 scripts/smoke.sh                       # the block screen on an emulator of its own, end to end
+desktop/install.sh                     # build and (re)start the laptop daemon
+server/deploy.sh                       # test and deploy the sync server and its page
 node scripts/release.mjs               # publish the extension and the app; see Updates
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
 ```
+
+CI (`.github/workflows/ci.yml`) runs the three Gradle test tasks, the server's tests and the
+extension's and status page's Node tests on every push.
+
+The phone app's screens can be drawn without a phone:
+`app/src/debug/kotlin/com/xern/xrnrule/app/ui/Previews.kt` holds Compose previews on made-up data
+(`android preview render "?:app@sideloadDebug"`). The laptop's
+page runs on made-up data with `./gradlew :desktop:demo --args="<port> <empty dir>"` (see
+[desktop/README.md](desktop/README.md#working-on-the-page)).
 
 The two flavors exist because the distribution channel is undecided: anti-uninstall uses
 Device Admin, which carries Play Store policy risk, so the `play` build leaves it out.
@@ -250,8 +381,9 @@ Minimum Android version: 8.0 (API 26).
 
 Usage access (to see the foreground app), draw over other apps (the block screen),
 notifications, and exemption from battery optimization. On Xiaomi/MIUI also enable
-autostart. The Settings screen shows what's missing and links to each one. Sites need the
-browser extension (above); the app only listens for it on `127.0.0.1`.
+autostart. NFC only if a block asks for a tag. The Settings screen shows what's missing and
+links to each one. Sites need the browser extension (above); the app only listens for it on
+`127.0.0.1`.
 
 ## Habits, and xrnloops
 
@@ -275,16 +407,27 @@ it to sync every half hour, raising an alert when it doesn't answer.
 | `:domain` | The rules engine: a pure Kotlin state machine with no Android dependencies, fully unit-tested |
 | `:app` | Compose UI, the foreground service that enforces blocks, the extension's door, persistence, permissions |
 | `:hardcore` | Device Admin receiver (sideload builds only) |
-| `:desktop` | The laptop daemon and its KWin script; see [desktop/README.md](desktop/README.md) |
+| `:desktop` | The laptop daemon, its page and its KWin script; see [desktop/README.md](desktop/README.md) |
 | `extension/` | The browser extension, for both devices |
-| `server/` | `xrnrule-sync.py`, the tiny sync server (Python), and its status page |
+| `server/` | `xrnrule-sync.py`, the tiny sync server (Python), its status page (`web/`) and `deploy.sh` |
+| `scripts/` | Releases (`release.mjs`, `crx.mjs`), the packed extension, the emulator smoke test |
 
-The engine's rules (states, transitions, invariants I1–I40, multi-device sync in §2.4) are
-specified in `docs/domain-contract.md`, which is in Vietnamese.
+The engine's rules (states, transitions, invariants I1–I54, multi-device sync in §2.4, the
+habit server in §2.5) are specified in `docs/domain-contract.md`, which is in Vietnamese.
+
+## What it's modelled on
+
+The phone app's screens, and since November 2026 the laptop's pages, follow Habits First, a
+phone app that keeps apps blocked until you've done your habits: the block cards with their logo
+clusters and padlocks, "DO ALL" and the habit rows, the block form, "Block again after" and
+self-paced unlocks, and the block screen's "finish your habits first!". None of its code or
+artwork is in this repo. Where xrnrule goes its own way: one set of blocks shared by the phone,
+a Linux laptop and their browsers; websites through an extension, never Accessibility; habits
+shared with xrnloops; and your own server instead of an account.
 
 ## License
 
 xrnrule is free software under the GNU General Public License, version 3 or later; see
 [LICENSE](LICENSE). Parts of it are ported from [Loop Habit Tracker](https://github.com/iSoron/uhabits)
 (also GPLv3), copyright Álinson Santos Xavier and its contributors; those files say so at the
-top.
+top. The font is Xiaomi's MiSans (Latin), under its own licence.
