@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // The laptop half of xrnrule: the same engine (:domain) enforcing the same shared blocks on
@@ -48,6 +49,15 @@ dependencies {
     runtimeOnly(libs.slf4j.nop)
 
     testImplementation(libs.junit)
+}
+
+// A failed test's message in full, not only its class and line: AppJsTest's message is everything
+// node printed, and on CI the console is the only place to read it.
+tasks.test {
+    testLogging {
+        events("failed")
+        exceptionFormat = TestExceptionFormat.FULL
+    }
 }
 
 // The page on made-up data, to look at it (DemoDaemon.kt): ./gradlew :desktop:demo --args="<port> <empty dir> [empty]"
