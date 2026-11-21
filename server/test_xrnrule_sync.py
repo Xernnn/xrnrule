@@ -323,6 +323,31 @@ class SyncServerTest(unittest.TestCase):
                 self.assertEqual(400, r.status, path)
             conn.close()
 
+    def test_a_document_too_deep_to_write_back_is_refused_before_anything_is_written(self):
+        # json.loads takes a few thousand levels (tens of thousands on Python 3.14), json.dump only
+        # about a thousand. A document in between was taken, the day's copy was kept in backups/,
+        # and then writing it raised RecursionError: the connection closed with no answer, after a
+        # write that never happened, with a half written state.json.tmp left beside it.
+        _, _, h = self.call("PUT", "/state", {"blocks": {"kept": {}}}, {"If-Match": "*"})
+        backups = os.path.join(os.path.dirname(self.state_file()), "backups")
+        shutil.rmtree(backups, ignore_errors=True)
+        deep = b'{"blocks":{"a":{"rules":' + b"[" * 2000 + b"]" * 2000 + b"}}}"
+        status, body, _ = self.raw("PUT", "/state", deep, {"If-Match": h["ETag"]})
+        self.assertEqual((400, True), (status, b"nested" in body))
+        status, body, headers = self.call("GET", "/state")
+        self.assertEqual((h["ETag"], {"blocks": {"kept": {}}}), (headers["ETag"], json.loads(body)))
+        self.assertFalse(os.path.exists(backups))
+        self.assertFalse(os.path.exists(self.state_file() + ".tmp"))
+
+    def test_a_document_nested_up_to_the_limit_is_taken(self):
+        def nested(depth):  # {"blocks": {"a": {"rules": [[...]]}}}: the outermost object is level 1
+            return b'{"blocks":{"a":{"rules":' + b"[" * (depth - 3) + b"]" * (depth - 3) + b"}}}"
+        status, _, h = self.raw("PUT", "/state", nested(srv.MAX_DEPTH), {"If-Match": "*"})
+        self.assertEqual(200, status)
+        status, _, _ = self.raw("PUT", "/state", nested(srv.MAX_DEPTH + 1), {"If-Match": h["ETag"]})
+        self.assertEqual(400, status)
+        self.assertEqual(h["ETag"], self.call("GET", "/state")[2]["ETag"])
+
     def test_a_broken_content_length_is_a_400(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         conn.putrequest("PUT", "/state")
@@ -959,6 +984,29 @@ class SyncServerTest(unittest.TestCase):
         self.assertRegex(answer, rb"^HTTP/1\.[01] 200 ")
         self.assertIn(b"Content-Type: image/png", answer)
         self.assertTrue(answer.endswith(b"\r\n\r\n"))
+
+    def test_every_answer_says_the_connection_closes_as_it_does(self):
+        # The server closes each connection after its answer but didn't say so. Java's HttpClient,
+        # the laptop daemon's, kept such a connection for its next request, and a PUT it sent down
+        # one this side had closed was lost: an icon pass ended part way.
+        self.raw("PUT", "/icons/site%3Aclose.example", self.PNG)
+        sent = {
+            "a page": b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n",
+            "a PUT": b"PUT /icons/site%3Aclose.example HTTP/1.1\r\nHost: x\r\n" + self.LOGIN +
+                     b"Content-Length: " + str(len(self.PNG)).encode() + b"\r\n\r\n" + self.PNG,
+            "an icon": b"GET /icons/site%3Aclose.example HTTP/1.1\r\nHost: x\r\n" + self.LOGIN + b"\r\n",
+            "an icon's 304": b"GET /icons/site%3Aclose.example HTTP/1.1\r\nHost: x\r\n" + self.LOGIN +
+                             b'If-None-Match: "' + hashlib.sha256(self.PNG).hexdigest()[:12].encode() + b'"\r\n\r\n',
+            "http.server's own error": b"BREW / HTTP/1.1\r\nHost: x\r\n\r\n",  # it says so itself: once
+        }
+        for what, request in sent.items():
+            with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                s.sendall(request)
+                answer = b"".join(iter(lambda: s.recv(4096), b""))
+            head = answer.split(b"\r\n\r\n", 1)[0].lower()
+            self.assertRegex(head, rb"^http/1\.[01] [2-5]\d\d ", what)
+            self.assertEqual(1, head.count(b"\r\nconnection:"), what)
+            self.assertIn(b"\r\nconnection: close\r\n", head + b"\r\n", what)
 
     def test_an_icon_the_server_hasnt_got_is_a_404_left_out_of_the_log(self):
         # The pages ask for every target's logo; xrnhub's log page counts each 404 as a warning.

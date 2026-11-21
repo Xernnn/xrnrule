@@ -80,6 +80,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote
 
 MAX_BODY = 8 * 1024 * 1024
+# How many lists and objects deep a state document may go. The devices' own nest a handful;
+# json.dump gives up near a thousand (the recursion limit), while json.loads takes thousands,
+# more on Python 3.14.
+MAX_DEPTH = 64
 FAIL_DELAY_S = 2  # after a wrong password, as Radicale does
 AUTH_CACHE_S = 600  # a bcrypt check costs ~0.3s on a phone; don't pay it per request
 MAX_WAIT_S = 55
@@ -862,6 +866,20 @@ def keep_backup(path):
         os.remove(os.path.join(folder, old))
 
 
+def nested_within(value, limit):
+    """Whether no list or object in [value] sits more than [limit] deep, the outermost being 1.
+    Walked with a list of its own, not by recursion, so any depth is measured without a stack."""
+    todo = [(value, 1)] if isinstance(value, (dict, list)) else []
+    while todo:
+        value, depth = todo.pop()
+        if depth > limit:
+            return False
+        for v in value.values() if isinstance(value, dict) else value:
+            if isinstance(v, (dict, list)):
+                todo.append((v, depth + 1))
+    return True
+
+
 def write_state(user, doc):
     path = state_path(user)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -900,6 +918,22 @@ class Handler(BaseHTTPRequestHandler):
         headers = getattr(self, "headers", None)  # none yet on a request line that didn't parse
         who = headers.get("X-Forwarded-For", self.client_address[0]) if headers else "-"
         sys.stderr.write(f"{who} {fmt % a}".translate(LOG_ESCAPES) + "\n")
+
+    def send_header(self, keyword, value):
+        if keyword.lower() == "connection":
+            self.said_connection = True
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        # Every connection is closed after its answer (http.server's HTTP/1.0), and a server that
+        # keeps none open must say so in each answer (RFC 9112, 9.6). Java's HttpClient, the laptop
+        # daemon's, goes by this header alone: without it, it kept the connection to send its next
+        # request down, and when this side closed first that request was lost. Java sends a GET
+        # again on a new connection, but not a PUT, so an icon pass ended part way.
+        if self.close_connection and not getattr(self, "said_connection", False):
+            super().send_header("Connection", "close")
+        self.said_connection = False
+        super().end_headers()
 
     def handle(self):
         # A caller hanging up, mid-request or before the answer is out, is the network, not a fault
@@ -1167,6 +1201,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError
         except (ValueError, RecursionError):  # RecursionError: nested too deep
             return self.send(400, "body must be a JSON object")
+        if not nested_within(data, MAX_DEPTH):
+            # Parsed, but past what json.dump can write back: it raised RecursionError after the
+            # day's copy was kept, and the device got no answer. Refused before anything is written.
+            return self.send(400, f"body nested deeper than {MAX_DEPTH} levels")
         want = (self.headers.get("If-Match") or "").strip()
         if not want:
             return self.send(428, "If-Match required")
