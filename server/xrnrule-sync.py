@@ -901,6 +901,22 @@ class Handler(BaseHTTPRequestHandler):
         who = headers.get("X-Forwarded-For", self.client_address[0]) if headers else "-"
         sys.stderr.write(f"{who} {fmt % a}".translate(LOG_ESCAPES) + "\n")
 
+    def send_header(self, keyword, value):
+        if keyword.lower() == "connection":
+            self.said_connection = True
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        # Every connection is closed after its answer (http.server's HTTP/1.0), and a server that
+        # keeps none open must say so in each answer (RFC 9112, 9.6). Java's HttpClient, the laptop
+        # daemon's, goes by this header alone: without it, it kept the connection to send its next
+        # request down, and when this side closed first that request was lost. Java sends a GET
+        # again on a new connection, but not a PUT, so an icon pass ended part way.
+        if self.close_connection and not getattr(self, "said_connection", False):
+            super().send_header("Connection", "close")
+        self.said_connection = False
+        super().end_headers()
+
     def handle(self):
         # A caller hanging up, mid-request or before the answer is out, is the network, not a fault
         # here: the laptop's tailnet path drops, a phone loses its signal, a page is closed. One
