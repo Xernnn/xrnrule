@@ -58,6 +58,12 @@ tasks.test {
         events("failed")
         exceptionFormat = TestExceptionFormat.FULL
     }
+    // ServerIconsTest and EndToEndTest run the sync servers themselves (xrnloops' when it is checked
+    // out beside this repo). Without them as inputs, a change to a server alone took the last
+    // results from the build cache, on CI too, and its tests never ran against it.
+    inputs.files(rootProject.file("server/xrnrule-sync.py"), rootProject.file("../xrnloops/server/xrnloops-sync.py"))
+        .withPropertyName("syncServers")
+        .withPathSensitivity(PathSensitivity.NAME_ONLY)
 }
 
 // The page on made-up data, to look at it (DemoDaemon.kt): ./gradlew :desktop:demo --args="<port> <empty dir> [empty]"
