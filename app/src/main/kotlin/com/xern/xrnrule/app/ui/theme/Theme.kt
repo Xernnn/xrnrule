@@ -182,7 +182,7 @@ object ChartPalette {
  * heatmap's ramp, a lone bar series, a limit's meter until it nears the limit. The web pages'
  * `--data`.
  */
-val DataColor = Color(0xFFE8590C)
+val DataColor = Color(0xFFE86C05)
 
 /**
  * Muted colours for small marks that carry one meaning each: an event's kind in the history
