@@ -591,7 +591,7 @@ private fun SyncPage(shared: SharedSync, habits: HabitSync) {
     val habitStatus by habits.status.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf(!settings.isConfigured) }
     var url by remember { mutableStateOf(settings.url) }
-    var user by remember { mutableStateOf(settings.user.ifEmpty { "sonn" }) }
+    var user by remember { mutableStateOf(settings.user) }
     var password by remember { mutableStateOf(settings.password) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
