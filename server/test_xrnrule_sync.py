@@ -44,7 +44,7 @@ class SyncServerTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         users = os.path.join(cls.tmp.name, "htpasswd")
         with open(users, "w") as f:
-            f.write("sonn:" + bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode() + "\n")
+            f.write("alex:" + bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode() + "\n")
             f.write("other:" + bcrypt.hashpw(b"secret2", bcrypt.gensalt(4)).decode() + "\n")
         web = os.path.join(cls.tmp.name, "web")
         os.makedirs(web)
@@ -66,7 +66,7 @@ class SyncServerTest(unittest.TestCase):
     def call(self, method, path, body=None, headers=None, password=RIGHT):
         req = urllib.request.Request(self.base + path, method=method,
                                      data=json.dumps(body).encode() if body is not None else None)
-        req.add_header("Authorization", "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode())
+        req.add_header("Authorization", "Basic " + base64.b64encode(f"alex:{password}".encode()).decode())
         for k, v in (headers or {}).items():
             req.add_header(k, v)
         try:
@@ -76,7 +76,7 @@ class SyncServerTest(unittest.TestCase):
             return e.code, e.read().decode(), e.headers
 
     def state_file(self):
-        return os.path.join(srv.args.data, "users", "sonn", "state.json")
+        return os.path.join(srv.args.data, "users", "alex", "state.json")
 
     def test_an_unreadable_file_is_never_an_empty_document(self):
         status, _, h = self.call("GET", "/state")
@@ -168,7 +168,7 @@ class SyncServerTest(unittest.TestCase):
         # NaN is past every comparison: the long poll would never see its time run out.
         for bad in ("nan", "-nan", "x"):
             req = urllib.request.Request(self.base + f"/state?wait={bad}")
-            req.add_header("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+            req.add_header("Authorization", "Basic " + base64.b64encode(b"alex:secret").decode())
             req.add_header("If-None-Match", headers["ETag"])
             try:
                 with urllib.request.urlopen(req, timeout=3) as r:
@@ -181,7 +181,7 @@ class SyncServerTest(unittest.TestCase):
                 _, _, headers = self.call("GET", "/state")
             self.assertEqual(400, status, bad)
 
-    LOGIN = b"Authorization: Basic " + base64.b64encode(b"sonn:secret") + b"\r\n"
+    LOGIN = b"Authorization: Basic " + base64.b64encode(b"alex:secret") + b"\r\n"
 
     def logged_after(self, raw, close, done=("Traceback", "dropped", "long-poll", '" 400 ')):
         """What the server logs, and answers, once [raw] is sent and [close] has ended the connection."""
@@ -270,7 +270,7 @@ class SyncServerTest(unittest.TestCase):
             req = urllib.request.Request(self.base + path)
             req.add_header("Accept-Encoding", "gzip")  # never applied: these go out as they are
             if password:
-                req.add_header("Authorization", "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode())
+                req.add_header("Authorization", "Basic " + base64.b64encode(f"alex:{password}".encode()).decode())
             try:
                 with urllib.request.urlopen(req, timeout=10) as r:
                     return r.status, r.read(), r.headers
@@ -291,13 +291,13 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(401, get("/update/xrnrule-9.apk")[0])
         self.assertEqual(404, get("/update/xrnrule-9.apk", password=RIGHT)[0])
         self.assertEqual(404, get("/update/missing.crx")[0])
-        for bad in ("..%2Fusers%2Fsonn%2Fstate.json", "../x.crx", ".hidden.crx", "state.json.gz", "x.crx/y", ""):
+        for bad in ("..%2Fusers%2Falex%2Fstate.json", "../x.crx", ".hidden.crx", "state.json.gz", "x.crx/y", ""):
             self.assertEqual(404, get(f"/update/{bad}")[0], bad)
 
     def test_gzip_bodies_are_unpacked_only_so_far(self):
         def put(raw):
             req = urllib.request.Request(self.base + "/state", method="PUT", data=raw)
-            req.add_header("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+            req.add_header("Authorization", "Basic " + base64.b64encode(b"alex:secret").decode())
             req.add_header("Content-Encoding", "gzip")
             req.add_header("If-Match", '"999"')  # never the version: nothing gets written
             try:
@@ -318,7 +318,7 @@ class SyncServerTest(unittest.TestCase):
         for method, path in (("PUT", "/state"), ("POST", "/events")):
             conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
             conn.request(method, path, body=deep, headers={
-                "Authorization": "Basic " + base64.b64encode(b"sonn:secret").decode(), "If-Match": "*", "X-Device": "phone"})
+                "Authorization": "Basic " + base64.b64encode(b"alex:secret").decode(), "If-Match": "*", "X-Device": "phone"})
             with conn.getresponse() as r:  # no answer at all raises here
                 self.assertEqual(400, r.status, path)
             conn.close()
@@ -326,7 +326,7 @@ class SyncServerTest(unittest.TestCase):
     def test_a_broken_content_length_is_a_400(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         conn.putrequest("PUT", "/state")
-        conn.putheader("Authorization", "Basic " + base64.b64encode(b"sonn:secret").decode())
+        conn.putheader("Authorization", "Basic " + base64.b64encode(b"alex:secret").decode())
         conn.putheader("Content-Length", "lots")
         conn.endheaders()
         with conn.getresponse() as r:
@@ -438,13 +438,13 @@ class SyncServerTest(unittest.TestCase):
             conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
             headers = {"X-Forwarded-For": addr}
             if password:
-                headers["Authorization"] = "Basic " + base64.b64encode(f"sonn:{password}".encode()).decode()
+                headers["Authorization"] = "Basic " + base64.b64encode(f"alex:{password}".encode()).decode()
             start = time.monotonic()
             conn.request("GET", "/state", headers=headers)
             status = conn.getresponse().status
             conn.close()
             return status, time.monotonic() - start
-        srv.failures["203.0.113.61"] = [(time.monotonic(), "sonn")] * srv.FAIL_LIMIT  # locked out
+        srv.failures["203.0.113.61"] = [(time.monotonic(), "alex")] * srv.FAIL_LIMIT  # locked out
         with unittest.mock.patch.object(srv, "FAIL_DELAY_S", 0.5):
             for addr, status in (("203.0.113.60", 401), ("203.0.113.61", 429)):
                 got, took = timed(addr)
@@ -462,7 +462,7 @@ class SyncServerTest(unittest.TestCase):
             with unittest.mock.patch.object(bcrypt, "checkpw", wraps=bcrypt.checkpw) as checkpw:
                 self.assertIsNone(srv.check_login(header))
             return checkpw.call_count
-        self.assertEqual(1, checks("sonn:nope"))
+        self.assertEqual(1, checks("alex:nope"))
         self.assertEqual(1, checks("nobody:nope"))  # none: the answer came sooner, and said so
         self.assertIsNone(srv.check_login("Basic " + base64.b64encode(b"nobody:secret").decode()))
 
@@ -492,9 +492,9 @@ class SyncServerTest(unittest.TestCase):
         for _ in range(5):
             self.assertEqual(401, self.guess_as("admin", WRONG, addr))
         for _ in range(4):
-            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
+            self.assertEqual(401, self.guess_as("alex", WRONG, addr))
         srv.auth_cache.clear()
-        self.assertEqual(200, self.guess_as("sonn", RIGHT, addr))  # sonn's four go, admin's five stay
+        self.assertEqual(200, self.guess_as("alex", RIGHT, addr))  # alex's four go, admin's five stay
         for _ in range(srv.FAIL_LIMIT - 5):
             self.assertEqual(401, self.guess_as("admin", WRONG, addr))
         self.assertEqual(429, self.guess_as("admin", WRONG, addr))
@@ -504,12 +504,12 @@ class SyncServerTest(unittest.TestCase):
         # cleared the guesser's count with every sync, so the guesses never ran out. A password
         # the server already knows is right (its auth cache) is a session, not a login.
         addr = "203.0.113.81"
-        self.assertEqual(200, self.guess_as("sonn", RIGHT, addr))  # the device, signed in
+        self.assertEqual(200, self.guess_as("alex", RIGHT, addr))  # the device, signed in
         for _ in range(srv.FAIL_LIMIT - 1):
-            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
-            self.assertEqual(200, self.guess_as("sonn", RIGHT, addr))  # it syncs on
-        self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
-        self.assertEqual(429, self.guess_as("sonn", WRONG, addr))
+            self.assertEqual(401, self.guess_as("alex", WRONG, addr))
+            self.assertEqual(200, self.guess_as("alex", RIGHT, addr))  # it syncs on
+        self.assertEqual(401, self.guess_as("alex", WRONG, addr))
+        self.assertEqual(429, self.guess_as("alex", WRONG, addr))
 
     def test_a_login_in_flight_is_not_a_wrong_guess(self):
         # Counted as wrong before it was checked, a right login being checked took a place: two
@@ -520,13 +520,13 @@ class SyncServerTest(unittest.TestCase):
             time.sleep(0.3)
             return real(header)
         with unittest.mock.patch.object(srv, "FAIL_LIMIT", 3):
-            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))
-            self.assertEqual(401, self.guess_as("sonn", WRONG, addr))  # one place left
+            self.assertEqual(401, self.guess_as("alex", WRONG, addr))
+            self.assertEqual(401, self.guess_as("alex", WRONG, addr))  # one place left
             srv.auth_cache.clear()
             start = threading.Barrier(2)
             def login(_):
                 start.wait()
-                return self.guess_as("sonn", RIGHT, addr)
+                return self.guess_as("alex", RIGHT, addr)
             with unittest.mock.patch.object(srv, "check_login", slow):
                 with concurrent.futures.ThreadPoolExecutor(2) as pool:
                     self.assertEqual([200, 200], list(pool.map(login, range(2))))
@@ -539,7 +539,7 @@ class SyncServerTest(unittest.TestCase):
         seen = json.loads(body)
         self.assertGreaterEqual(seen["phone"], before)
         self.assertNotIn("", seen)  # the status page itself sends no X-Device
-        self.assertTrue(os.path.isfile(srv.devices_path("sonn")))
+        self.assertTrue(os.path.isfile(srv.devices_path("alex")))
 
     def test_shortcuts_are_kept_as_events(self):
         now = int(time.time() * 1000)
@@ -718,12 +718,12 @@ class SyncServerTest(unittest.TestCase):
         return res.status, res.getheader("Set-Cookie") or ""
 
     def sign_in(self):
-        status, set_cookie = self.web("POST", "/xrnrule/session", auth="sonn:secret")
+        status, set_cookie = self.web("POST", "/xrnrule/session", auth="alex:secret")
         self.assertEqual(200, status)
         return set_cookie.split(";")[0].partition("=")[2]
 
     def test_a_password_signs_the_web_pages_in_with_a_cookie_scripts_cannot_read(self):
-        status, set_cookie = self.web("POST", "/xrnrule/session", auth="sonn:secret")
+        status, set_cookie = self.web("POST", "/xrnrule/session", auth="alex:secret")
         self.assertEqual(200, status)
         for flag in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/", f"Max-Age={srv.SESSION_S}"):
             self.assertIn(flag, set_cookie)
@@ -734,7 +734,7 @@ class SyncServerTest(unittest.TestCase):
         self.assertEqual(401, self.web("GET", "/state", cookie, client=False)[0])
         # A cookie can't make itself a new one, and a wrong password makes none.
         self.assertEqual(401, self.web("POST", "/session", cookie)[0])
-        self.assertEqual((401, ""), self.web("POST", "/session", auth="sonn:nope"))
+        self.assertEqual((401, ""), self.web("POST", "/session", auth="alex:nope"))
         status, set_cookie = self.web("DELETE", "/session", cookie)
         self.assertEqual(200, status)
         self.assertIn("Max-Age=0", set_cookie)
@@ -747,14 +747,14 @@ class SyncServerTest(unittest.TestCase):
                     "garbage", "", f"{who}.{expires}", "%%%.1.2"):
             self.assertEqual(401, self.web("GET", "/state", bad)[0], bad)
         body = f"{who}.{int(time.time()) - 1}"
-        self.assertEqual(401, self.web("GET", "/state", f"{body}.{srv.session_mac(body, srv.password_tag('sonn'))}")[0])
+        self.assertEqual(401, self.web("GET", "/state", f"{body}.{srv.session_mac(body, srv.password_tag('alex'))}")[0])
         # A new password ends the sessions made with the old one.
         import bcrypt
         with open(srv.args.users) as f:
             old = f.read()
         try:
             with open(srv.args.users, "w") as f:
-                f.write("sonn:" + bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode() + "\n")
+                f.write("alex:" + bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode() + "\n")
             self.assertEqual(401, self.web("GET", "/state", cookie)[0])
         finally:
             with open(srv.args.users, "w") as f:
@@ -764,9 +764,9 @@ class SyncServerTest(unittest.TestCase):
     def a_cookie(self, expires):
         """A login cookie as make_session makes it, running out at [expires]: two made in the same
         second are the same cookie."""
-        who = base64.urlsafe_b64encode(b"sonn").decode().rstrip("=")
+        who = base64.urlsafe_b64encode(b"alex").decode().rstrip("=")
         body = f"{who}.{expires}"
-        return f"{body}.{srv.session_mac(body, srv.password_tag('sonn'))}"
+        return f"{body}.{srv.session_mac(body, srv.password_tag('alex'))}"
 
     def shared_list(self):
         """signed-out.json beside the users file: what every server that takes the cookie reads."""
@@ -826,12 +826,12 @@ class SyncServerTest(unittest.TestCase):
                 # The list read before the file broke still holds.
                 self.assertEqual(401, self.web("GET", "/state", gone)[0])
             self.assertEqual(200, self.call("GET", "/state")[0])
-            self.assertEqual(200, self.web("POST", "/session", auth="sonn:secret")[0])
+            self.assertEqual(200, self.web("POST", "/session", auth="alex:secret")[0])
         self.assertEqual(1, said.getvalue().count("signed-out.json"), said.getvalue())  # one line, not one a request
         os.remove(self.shared_list())
         self.assertEqual(200, self.web("GET", "/state", live)[0])
         self.assertEqual(200, self.call("GET", "/state")[0])
-        self.assertEqual(200, self.web("POST", "/session", auth="sonn:secret")[0])
+        self.assertEqual(200, self.web("POST", "/session", auth="alex:secret")[0])
 
     def test_a_new_session_is_never_one_signed_out(self):
         # A cookie is made from the name, the second it runs out and the password, so a sign-in in
@@ -839,16 +839,16 @@ class SyncServerTest(unittest.TestCase):
         clock = unittest.mock.Mock()
         clock.time.return_value = 1_900_000_100.5
         with unittest.mock.patch.object(srv, "time", clock):
-            first = srv.make_session("sonn")
-            self.assertEqual("sonn", srv.end_session(f"{srv.SESSION_COOKIE}={first}"))
-            again = srv.make_session("sonn")
+            first = srv.make_session("alex")
+            self.assertEqual("alex", srv.end_session(f"{srv.SESSION_COOKIE}={first}"))
+            again = srv.make_session("alex")
             self.assertEqual(int(first.split(".")[1]) + 1, int(again.split(".")[1]))
-            self.assertEqual("sonn", srv.check_session(f"{srv.SESSION_COOKIE}={again}"))
+            self.assertEqual("alex", srv.check_session(f"{srv.SESSION_COOKIE}={again}"))
             # Signed out by the hub instead, the next one is new again.
             self.write_list({**self.read_list(), self.hash_of(again): int(again.split(".")[1])})
-            third = srv.make_session("sonn")
+            third = srv.make_session("alex")
             self.assertNotIn(third, (first, again))
-            self.assertEqual("sonn", srv.check_session(f"{srv.SESSION_COOKIE}={third}"))
+            self.assertEqual("alex", srv.check_session(f"{srv.SESSION_COOKIE}={third}"))
 
     def test_servers_signing_out_at_once_keep_every_sign_out(self):
         # The servers share one file: written without a lock, of two signing out together, one
@@ -904,7 +904,7 @@ class SyncServerTest(unittest.TestCase):
 
     PNG = b"\x89PNG\r\n\x1a\n" + bytes(16) + b"a tiny made-up logo"
 
-    def raw(self, method, path, data=None, headers=None, login="sonn:secret"):
+    def raw(self, method, path, data=None, headers=None, login="alex:secret"):
         """A request with [data] as it is (no JSON): (status, body bytes, headers)."""
         req = urllib.request.Request(self.base + path, method=method, data=data)
         if login:
@@ -921,7 +921,7 @@ class SyncServerTest(unittest.TestCase):
     def quoted(key):
         return urllib.parse.quote(key, safe="")
 
-    def icons_folder(self, user="sonn"):
+    def icons_folder(self, user="alex"):
         return os.path.join(srv.args.data, "users", user, "icons")
 
     def test_an_icon_sent_is_listed_and_served_as_the_image_it_is(self):
@@ -1017,7 +1017,7 @@ class SyncServerTest(unittest.TestCase):
 
     def test_a_key_that_isnt_one_is_refused_and_never_a_path(self):
         before = self.files_in_data()
-        bad_keys = ["../state.json", "..%2F..%2Fusers%2Fsonn%2Fstate.json", "%2e%2e%2fstate.json", "site:Reddit.com",
+        bad_keys = ["../state.json", "..%2F..%2Fusers%2Falex%2Fstate.json", "%2e%2e%2fstate.json", "site:Reddit.com",
                     "site:reddit.com%2F..%2F..%2Fstate.json", "site:a%00b", "site:a%2Fb", "web:reddit.com", "app:a%20b",
                     "app:com.x%2F..", "desk:", "desk:a%0Ab", "site:" + "a" * 254, "app:" + "a" * 201, "site:%E2%80%AEx.com",
                     "state.json", "", "%"]
@@ -1036,7 +1036,7 @@ class SyncServerTest(unittest.TestCase):
         for method, path, data in (("GET", "/icons", None), ("GET", "/icons/site%3Aprivate.example", None),
                                    ("PUT", "/icons/site%3Anew.example", self.PNG)):
             self.assertEqual(401, self.raw(method, path, data, guesser, login=None)[0], (method, path))
-            self.assertEqual(401, self.raw(method, path, data, guesser, login="sonn:nope")[0], (method, path))
+            self.assertEqual(401, self.raw(method, path, data, guesser, login="alex:nope")[0], (method, path))
         self.assertNotIn("site:new.example", json.loads(self.raw("GET", "/icons")[1]))
 
     def test_the_status_pages_images_sign_in_with_the_cookie_alone(self):
