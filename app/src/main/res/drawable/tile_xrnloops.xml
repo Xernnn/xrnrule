@@ -7,7 +7,7 @@
     android:viewportWidth="100"
     android:viewportHeight="100">
     <clip-path android:pathData="M24,0 H76 A24,24 0 0 1 100,24 V76 A24,24 0 0 1 76,100 H24 A24,24 0 0 1 0,76 V24 A24,24 0 0 1 24,0 Z" />
-    <path android:pathData="M0,0 H100 V100 H0 Z" android:fillColor="#2B9348" />
+    <path android:pathData="M0,0 H100 V100 H0 Z" android:fillColor="#037200" />
     <group android:pivotX="110" android:pivotY="118"
         android:scaleX="0.6" android:scaleY="0.6"
         android:translateX="-60" android:translateY="-68">
