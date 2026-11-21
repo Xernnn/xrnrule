@@ -323,6 +323,31 @@ class SyncServerTest(unittest.TestCase):
                 self.assertEqual(400, r.status, path)
             conn.close()
 
+    def test_a_document_too_deep_to_write_back_is_refused_before_anything_is_written(self):
+        # json.loads takes a few thousand levels (tens of thousands on Python 3.14), json.dump only
+        # about a thousand. A document in between was taken, the day's copy was kept in backups/,
+        # and then writing it raised RecursionError: the connection closed with no answer, after a
+        # write that never happened, with a half written state.json.tmp left beside it.
+        _, _, h = self.call("PUT", "/state", {"blocks": {"kept": {}}}, {"If-Match": "*"})
+        backups = os.path.join(os.path.dirname(self.state_file()), "backups")
+        shutil.rmtree(backups, ignore_errors=True)
+        deep = b'{"blocks":{"a":{"rules":' + b"[" * 2000 + b"]" * 2000 + b"}}}"
+        status, body, _ = self.raw("PUT", "/state", deep, {"If-Match": h["ETag"]})
+        self.assertEqual((400, True), (status, b"nested" in body))
+        status, body, headers = self.call("GET", "/state")
+        self.assertEqual((h["ETag"], {"blocks": {"kept": {}}}), (headers["ETag"], json.loads(body)))
+        self.assertFalse(os.path.exists(backups))
+        self.assertFalse(os.path.exists(self.state_file() + ".tmp"))
+
+    def test_a_document_nested_up_to_the_limit_is_taken(self):
+        def nested(depth):  # {"blocks": {"a": {"rules": [[...]]}}}: the outermost object is level 1
+            return b'{"blocks":{"a":{"rules":' + b"[" * (depth - 3) + b"]" * (depth - 3) + b"}}}"
+        status, _, h = self.raw("PUT", "/state", nested(srv.MAX_DEPTH), {"If-Match": "*"})
+        self.assertEqual(200, status)
+        status, _, _ = self.raw("PUT", "/state", nested(srv.MAX_DEPTH + 1), {"If-Match": h["ETag"]})
+        self.assertEqual(400, status)
+        self.assertEqual(h["ETag"], self.call("GET", "/state")[2]["ETag"])
+
     def test_a_broken_content_length_is_a_400(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         conn.putrequest("PUT", "/state")
