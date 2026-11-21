@@ -960,6 +960,29 @@ class SyncServerTest(unittest.TestCase):
         self.assertIn(b"Content-Type: image/png", answer)
         self.assertTrue(answer.endswith(b"\r\n\r\n"))
 
+    def test_every_answer_says_the_connection_closes_as_it_does(self):
+        # The server closes each connection after its answer but didn't say so. Java's HttpClient,
+        # the laptop daemon's, kept such a connection for its next request, and a PUT it sent down
+        # one this side had closed was lost: an icon pass ended part way.
+        self.raw("PUT", "/icons/site%3Aclose.example", self.PNG)
+        sent = {
+            "a page": b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n",
+            "a PUT": b"PUT /icons/site%3Aclose.example HTTP/1.1\r\nHost: x\r\n" + self.LOGIN +
+                     b"Content-Length: " + str(len(self.PNG)).encode() + b"\r\n\r\n" + self.PNG,
+            "an icon": b"GET /icons/site%3Aclose.example HTTP/1.1\r\nHost: x\r\n" + self.LOGIN + b"\r\n",
+            "an icon's 304": b"GET /icons/site%3Aclose.example HTTP/1.1\r\nHost: x\r\n" + self.LOGIN +
+                             b'If-None-Match: "' + hashlib.sha256(self.PNG).hexdigest()[:12].encode() + b'"\r\n\r\n',
+            "http.server's own error": b"BREW / HTTP/1.1\r\nHost: x\r\n\r\n",  # it says so itself: once
+        }
+        for what, request in sent.items():
+            with socket.create_connection(("127.0.0.1", self.httpd.server_address[1]), timeout=10) as s:
+                s.sendall(request)
+                answer = b"".join(iter(lambda: s.recv(4096), b""))
+            head = answer.split(b"\r\n\r\n", 1)[0].lower()
+            self.assertRegex(head, rb"^http/1\.[01] [2-5]\d\d ", what)
+            self.assertEqual(1, head.count(b"\r\nconnection:"), what)
+            self.assertIn(b"\r\nconnection: close\r\n", head + b"\r\n", what)
+
     def test_an_icon_the_server_hasnt_got_is_a_404_left_out_of_the_log(self):
         # The pages ask for every target's logo; xrnhub's log page counts each 404 as a warning.
         with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as log:
