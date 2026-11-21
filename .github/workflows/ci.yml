@@ -23,14 +23,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The sync server on the oldest and newest Python it may run on: how deep json.loads nests
+      # changed in 3.14, which the home server runs. Each runs even when the other fails.
       - uses: actions/setup-python@v5
+        id: py312
         with:
           python-version: "3.12"
+      - uses: actions/setup-python@v5
+        id: py314
+        with:
+          python-version: "3.14"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: pip install bcrypt
-      - run: python3 -m unittest server/test_xrnrule_sync.py
+      - name: Sync server tests, Python 3.12
+        run: |
+          py="${{ steps.py312.outputs.python-path }}"
+          "$py" -m pip install --quiet bcrypt
+          "$py" -m unittest server/test_xrnrule_sync.py
+      - name: Sync server tests, Python 3.14
+        if: ${{ !cancelled() }}
+        run: |
+          py="${{ steps.py314.outputs.python-path }}"
+          "$py" -m pip install --quiet bcrypt
+          "$py" -m unittest server/test_xrnrule_sync.py
       - run: for f in extension/*.js; do node --check "$f"; done
       - run: node --test extension/test/*.test.mjs
       - run: node --test server/*.test.mjs
