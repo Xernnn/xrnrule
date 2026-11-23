@@ -541,22 +541,20 @@ private fun HabitBody(
     val armed = block.state == BlockState.ARMED
     if (block.state == BlockState.EARNED) {
         when (store.engine.redeemRejection(world, block.id, store.clock)) {
-            RejectReason.HELD -> StatusPill("Done · it can open once it's no longer blocked")
-            RejectReason.CAP_REACHED -> StatusPill(
-                capReachedText(store.engine.unlockCommittedMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs),
-            )
-            else -> {
-                // The same moment to change your mind as on the block screen.
-                val settle = rememberSettleLeft(block.id)
-                StatusPill(
-                    if (settle > 0) "Steady… ${settle / 1000 + 1}" else "Open for ${formatDuration(block.reward.unlockDurationMs)}",
-                    container = if (settle > 0) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
-                    content = if (settle > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimary,
-                    onClick = if (settle > 0) null else ({ store.dispatch(BlockEvent.Redeem(block.id)) }),
-                )
+            RejectReason.HELD -> {
+                StatusPill("Done · it can open once it's no longer blocked")
+                Gap(6)
             }
+            RejectReason.CAP_REACHED -> {
+                StatusPill(
+                    capReachedText(store.engine.unlockCommittedMs(world, store.clock), world.settings.dailyCapMs, block.reward.unlockDurationMs),
+                )
+                Gap(6)
+            }
+            // It opens from the block screen over what it blocks, not from here: the card came
+            // back on screen with every scroll and visit, and its "Steady…" count began again each time.
+            else -> Unit
         }
-        Gap(6)
     }
     joinTag(block, parts)?.let { Tag(it); Gap(6) }
     if (parts.isEmpty()) {
@@ -631,8 +629,8 @@ private fun HabitBody(
 }
 
 /**
- * The wide pill under a block card's header, as in Habits First: "no unlocks available" on the
- * raised grey, the green "Open for 15 min" once it can be opened, the time left while open.
+ * The wide pill under a block card's header, as in Habits First: why a block that is done can't
+ * open yet, on the raised grey.
  */
 @Composable
 private fun StatusPill(
