@@ -31,14 +31,12 @@ class BlockDraftTest {
         apps = setOf("com.instagram"),
         sites = setOf("reddit.com"),
         exceptSites = setOf("old.reddit.com", "unrelated.com"),
-        manualOn = true,
-        habitIds = listOf("read"),
         tasks = listOf(TaskDraft("k1", null, " Stretch ")),
         focusOn = true,
         loopOn = true,
         links = listOf(LinkDraft(null, "gym", "gym", yesterday = true, goal = false, daily = false)),
         unlockMinutes = 20,
-    ).withHabit("run")
+    ).withHabit("read").withHabit("run")
 
     @Test
     fun aNewHabitBlockIsWhatTheFormSays() {
@@ -48,9 +46,10 @@ class BlockDraftTest {
         assertEquals("an exception outside the blocked sites is dropped", setOf("old.reddit.com"), block.exceptSites)
         assertEquals(TriggerType.CHECKLIST, block.trigger.type)
         assertEquals(20L * 60_000, block.reward.unlockDurationMs)
-        assertEquals(listOf("read", "run", null, "gym"), items.map { it.habitId })
+        assertEquals("ticked habits, the typed task, then timers", listOf("gym", "read", null, "run"), items.map { it.habitId })
         assertEquals("Stretch", items[2].text)
-        assertEquals(LinkedDay.YESTERDAY, items[3].linkedDay)
+        assertEquals(LinkedDay.YESTERDAY, items[0].linkedDay)
+        assertEquals("a habit added counts today's tick", LinkedDay.TODAY, items[1].linkedDay)
         assertEquals(Schedule.ALWAYS, block.schedule)
     }
 
@@ -59,7 +58,7 @@ class BlockDraftTest {
         val drafts = listOf(
             habitBlock,
             habitBlock.copy(appTimeOn = true, appTimeApps = setOf("com.duolingo"), appTimeMinutes = 10, combineMode = CombineMode.OR, selfPaced = true),
-            habitBlock.copy(manualOn = false, focusOn = false, loopOn = false, timerOn = true, timerMinutes = 5, hardcore = true),
+            habitBlock.copy(focusOn = false, loopOn = false, timerOn = true, timerMinutes = 5, hardcore = true),
             BlockDraft(name = "YouTube", sites = setOf("youtube.com")).withKind(FormKind.LIMIT, true)
                 .copy(dailyMinutes = 45, rowOn = true, rowMinutes = 20, rowBreakMinutes = 10, perDevice = true),
             BlockDraft(name = "Evenings", apps = setOf("com.x"), whenMode = WhenMode.SCHEDULE, scheduleDays = setOf(1, 2, 3), timeOn = true,
@@ -93,8 +92,10 @@ class BlockDraftTest {
         assertFalse("a shorter unlock", loosens { it.copy(unlockMinutes = 10) })
         assertTrue("self paced on (I41)", loosens { it.copy(selfPaced = true) })
         assertTrue("a task removed", loosens { it.copy(tasks = emptyList()) })
-        assertTrue("a habit removed", loosens { it.copy(habitIds = listOf("run")) })
-        assertFalse("a habit added", loosens { it.copy(habitIds = it.habitIds + "gym") })
+        assertTrue("a habit removed", loosens { it.withLinks(setOf("gym")) })
+        assertTrue("a timer removed", loosens { it.withTimers(emptySet()) })
+        assertFalse("a habit added", loosens { it.copy(habits = habits + habit("walk", HabitKind.CHECK)).withHabit("walk") })
+        assertFalse("a habit taken off and picked again", loosens { it.withLinks(setOf("gym")).withHabit("read") })
         assertTrue("a tracked habit counting another day", loosens { d -> d.copy(links = d.links.map { it.copy(yesterday = false) }) })
         assertTrue("a tracked habit counting goal days", loosens { d -> d.copy(links = d.links.map { it.copy(goal = true) }) })
         assertTrue("a schedule", loosens { it.copy(whenMode = WhenMode.SCHEDULE, scheduleDays = setOf(1)) })
@@ -136,14 +137,14 @@ class BlockDraftTest {
 
     @Test
     fun aBlockTakesAHabitALimitAndHoursTogether() {
-        val habit = BlockDraft(habits = habits, apps = setOf("a")).withKind(FormKind.MANUAL, true).withHabit("read")
+        val habit = BlockDraft(habits = habits, apps = setOf("a")).withKind(FormKind.LOOP, true).withHabit("read")
         assertEquals(BlockMode.HABIT, habit.mode)
         val both = habit.withKind(FormKind.LIMIT, true)
-        assertTrue("a limit keeps the habit", both.manualOn)
+        assertTrue("a limit keeps the habit", both.loopOn)
         assertTrue(both.limitOn)
         assertEquals(BlockMode.HABIT, both.mode)
         assertTrue(both.orderMatters)
-        assertTrue("and a habit keeps the limit", BlockDraft(apps = setOf("a")).withKind(FormKind.LIMIT, true).withKind(FormKind.MANUAL, true).limitOn)
+        assertTrue("and a habit keeps the limit", BlockDraft(apps = setOf("a")).withKind(FormKind.LIMIT, true).withKind(FormKind.LOOP, true).limitOn)
 
         val draft = both.copy(dailyMinutes = 20, habitFirst = true, hoursOn = true, hoursDays = (1..5).toSet(), hoursStart = 0, hoursEnd = 14 * 60)
         val (block, items) = made(draft)
@@ -176,7 +177,7 @@ class BlockDraftTest {
     @Test
     fun anEditCanAddAndDropRules() {
         val (limit, _) = made(BlockDraft(apps = setOf("a")).withKind(FormKind.LIMIT, true))
-        val withHabit = BlockDraft.of(limit, emptyList(), habits).withKind(FormKind.MANUAL, true).withHabit("read")
+        val withHabit = BlockDraft.of(limit, emptyList(), habits).withKind(FormKind.LOOP, true).withHabit("read")
         val (block, items) = withHabit.toBlock(limit.id, limit.name) to withHabit.toItems(limit.id, emptyList(), ids())
         assertEquals("a limit block gains a habit", BlockMode.HABIT, block.mode)
         assertTrue(block.hasLimit)
@@ -184,7 +185,7 @@ class BlockDraftTest {
         assertTrue("the habit is a way past the limit", withHabit.saveLoosens(emptyList()))
         assertFalse("not with the habit first", withHabit.copy(habitFirst = true).saveLoosens(emptyList()))
 
-        val dropped = BlockDraft.of(block, items, habits).withKind(FormKind.MANUAL, false)
+        val dropped = BlockDraft.of(block, items, habits).withKind(FormKind.LOOP, false)
         assertEquals(BlockMode.ALLOWANCE, dropped.mode)
         assertTrue("its items go with it", dropped.toItems(block.id, items).isEmpty())
         assertTrue(dropped.saveLoosens(items))
@@ -192,7 +193,7 @@ class BlockDraftTest {
 
     @Test
     fun hoursAndOrderOnlyStayWhileTheyMeanSomething() {
-        val habit = BlockDraft(apps = setOf("a"), habits = habits, habitFirst = true).withKind(FormKind.MANUAL, true).withHabit("read")
+        val habit = BlockDraft(apps = setOf("a"), habits = habits, habitFirst = true).withKind(FormKind.LOOP, true).withHabit("read")
         assertFalse("no limit, no order", made(habit).first.habitFirst)
         val strict = BlockDraft(apps = setOf("a"), hoursOn = true, whenMode = WhenMode.SCHEDULE)
         assertNull("a schedule's hours are its schedule", made(strict).first.blockedHours)
@@ -221,14 +222,14 @@ class BlockDraftTest {
 
     @Test
     fun anEditKeepsSomeThingsApart() {
-        val habit = BlockDraft(habits = habits, apps = setOf("a")).withKind(FormKind.MANUAL, true).withHabit("read")
+        val habit = BlockDraft(habits = habits, apps = setOf("a")).withKind(FormKind.LOOP, true).withHabit("read")
         val appTime = habit.withKind(FormKind.TIMER, true).withKind(FormKind.APP_TIME, true)
         assertTrue(appTime.appTimeOn)
         assertFalse("one timer per block", appTime.timerOn)
 
         val lockdown = BlockDraft(apps = setOf("a"), whenMode = WhenMode.FOR_A_WHILE)
         assertEquals(BlockMode.LOCKDOWN, lockdown.mode)
-        assertEquals("something to unlock it isn't a lockdown", WhenMode.ALWAYS, lockdown.withKind(FormKind.MANUAL, true).whenMode)
+        assertEquals("something to unlock it isn't a lockdown", WhenMode.ALWAYS, lockdown.withKind(FormKind.LOOP, true).whenMode)
         val keptLockdown = BlockDraft.of(made(lockdown).first, emptyList(), habits).withKind(FormKind.LIMIT, true)
         assertEquals("a lockdown stays one", BlockMode.LOCKDOWN, keptLockdown.mode)
     }
@@ -236,7 +237,7 @@ class BlockDraftTest {
     @Test
     fun theHintSaysWhatsMissing() {
         assertEquals("Pick an app or a website to block", BlockDraft().hint(60))
-        assertEquals("Pick or make a habit", BlockDraft(apps = setOf("a"), manualOn = true).hint(60))
+        assertEquals("Pick or make a habit", BlockDraft(apps = setOf("a"), loopOn = true).hint(60))
         assertEquals("Pick at least one day", BlockDraft(apps = setOf("a"), whenMode = WhenMode.SCHEDULE, scheduleDays = emptySet()).hint(60))
         assertEquals(
             "An unlock can't be longer than your daily unlock limit (60 min, in Settings)",
@@ -260,6 +261,46 @@ class BlockDraftTest {
         assertTrue("the kept one keeps yesterday", form.links[0].yesterday)
         assertFalse("a new one counts today", form.links[1].yesterday)
         assertTrue("an every-day habit has no goal-days choice", form.links[1].daily)
+    }
+
+    @Test
+    fun everyTickedHabitIsALink_whateverDayItCounts() {
+        // The form had two cards for the same thing: "Do a habit" for a habit counting today's
+        // tick and "Linked habit" for one counting yesterday's, so a block asking for both showed
+        // its habits in two places, and a link moved cards when its day changed.
+        val (block, items) = made(habitBlock)
+        val form = BlockDraft.of(block, items, habits)
+        assertEquals(listOf("gym", "read"), form.links.map { it.uuid })
+        assertEquals(listOf(true, false), form.links.map { it.yesterday })
+        assertEquals("timers stay the focus session's", listOf("run"), form.timerIds)
+        assertTrue(form.loopOn && form.focusOn)
+
+        val today = form.copy(links = form.links.map { it.copy(yesterday = false) })
+        val saved = today.toItems(block.id, items, ids())
+        assertEquals("the same items, counting today", items.take(2).map { it.id }, saved.take(2).map { it.id })
+        assertEquals(listOf("gym", "read"), BlockDraft.of(block, saved, habits).links.map { it.uuid })
+    }
+
+    @Test
+    fun aHabitPickedAgainIsStillItsItem() {
+        // I36: taking a habit off and picking it again in one edit made a new item, which had
+        // spent nothing, so today's tick opened the block a second time.
+        val (block, items) = made(habitBlock)
+        val spent = items.map { if (it.habitId == "read") it.copy(spentEpochDay = 7, spentAmount = 1) else it }
+        val again = BlockDraft.of(block, spent, habits).withLinks(setOf("gym")).withHabit("read")
+        val read = again.toItems(block.id, spent, ids()).single { it.habitId == "read" }
+        assertEquals(spent.single { it.habitId == "read" }.id, read.id)
+        assertEquals(1L, read.spentAmount)
+    }
+
+    @Test
+    fun typedTasksStayWithTheLinks() {
+        val (block, items) = made(BlockDraft(name = "Old", apps = setOf("a"), loopOn = true, tasks = listOf(TaskDraft("k", null, "Stretch"))))
+        assertEquals(BlockMode.HABIT, block.mode)
+        val form = BlockDraft.of(block, items, habits)
+        assertTrue(form.loopOn)
+        assertEquals(listOf("Stretch"), form.tasks.map { it.text })
+        assertTrue("turning the card off drops them", form.withKind(FormKind.LOOP, false).toItems(block.id, items).isEmpty())
     }
 
     @Test

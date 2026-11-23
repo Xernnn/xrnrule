@@ -94,6 +94,7 @@ import com.xern.xrnrule.domain.DayWindow
 import com.xern.xrnrule.domain.Devices
 import com.xern.xrnrule.domain.EnforcementTier
 import com.xern.xrnrule.domain.FormKind
+import com.xern.xrnrule.domain.Habit
 import com.xern.xrnrule.domain.HabitKind
 import com.xern.xrnrule.domain.LinkDraft
 import com.xern.xrnrule.domain.Schedule
@@ -221,7 +222,7 @@ private fun BlockPage(form: BlockFormState, apps: List<InstalledApp>, websites: 
 /** "Instagram", "Instagram + YouTube", "Instagram + 2 more": a name until you give it one. */
 private fun autoName(form: BlockFormState, apps: List<InstalledApp>): String {
     val labels = apps.associate { it.packageName to it.label }
-    val names = form.apps.map { labels[it] ?: it }.sortedBy { it.lowercase() } + form.sites.sorted()
+    val names = InstalledApps.onThisPhone(form.apps, labels).map(labels::getValue) + form.sites.sorted()
     return summarizeNames(names, empty = "Block")
 }
 
@@ -359,7 +360,7 @@ private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites
             )
             WGap(12)
             Text(
-                if (empty) "Choose apps and sites" else pickedSummary(form.apps.size, Sites.shown(form.sites).size),
+                if (empty) "Choose apps and sites" else pickedSummary(InstalledApps.onThisPhone(form.apps, labels).size, Sites.shown(form.sites).size),
                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp),
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -370,7 +371,7 @@ private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites
         if (!empty) {
             Gap(12)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                form.apps.sortedBy { labels[it]?.lowercase() ?: it }.forEach { AppIcon(it, size = 26.dp) }
+                InstalledApps.onThisPhone(form.apps, labels).forEach { AppIcon(it, size = 26.dp) }
                 Sites.shown(form.sites.sorted()).forEach { SiteIcon(it, size = 26.dp) }
             }
         }
@@ -418,7 +419,7 @@ private fun NameCard(form: BlockFormState, apps: List<InstalledApp>) {
     HFCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AppTile(
-                packages = form.apps.sortedBy { labels[it]?.lowercase() ?: it },
+                packages = InstalledApps.onThisPhone(form.apps, labels),
                 fallback = Icons.Filled.Shield,
                 sites = form.sites.sorted(),
             )
@@ -470,8 +471,8 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
     val labels = remember(apps) { apps.associate { it.packageName to it.label } }
     var pickingAppTime by remember { mutableStateOf(false) }
     var pickingLoop by remember { mutableStateOf(false) }
-    // A habit sheet open: picking timers (true) or other habits (false), or making one of those.
-    var pickingHabits by remember { mutableStateOf<Boolean?>(null) }
+    var pickingTimers by remember { mutableStateOf(false) }
+    // The new-habit sheet open: for a timer (true) or a habit to tick or count (false).
     var makingHabit by remember { mutableStateOf<Boolean?>(null) }
 
     KindCard(
@@ -503,15 +504,40 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
     }
 
     KindCard(
-        icon = Icons.Outlined.TaskAlt,
-        title = "Do a habit",
-        kind = kinds.habit,
-        selected = form.manualOn,
-        summary = andList(form.doHabits.mapNotNull { id -> form.knownHabits.firstOrNull { it.id == id }?.name } + form.tasks.filter { it.text.isNotBlank() }.map { it.text })
-            .ifEmpty { "no habit picked yet" },
-        onToggle = { form.setKind(FormKind.MANUAL, it) },
+        icon = Icons.Outlined.Timer,
+        title = "Focus session",
+        kind = kinds.timer,
+        selected = form.focusOn,
+        summary = andList(form.timerIds.mapNotNull { id -> form.knownHabits.firstOrNull { it.id == id }?.name }).ifEmpty { "no timer picked yet" },
+        onToggle = { form.setKind(FormKind.FOCUS, it) },
     ) {
-        HabitPicks(form, form.doHabits, onRemove = { id -> form.habitIds = form.habitIds - id })
+        HabitPicks(form, form.timerIds, onRemove = { id -> form.timerIds = form.timerIds - id })
+        if (form.knownHabits.any { it.kind == HabitKind.TIMER && it.id !in form.timerIds }) {
+            DashedButton("Choose a timer", kinds.timer) { pickingTimers = true }
+            Gap(8)
+        }
+        DashedButton("New timer", kinds.timer) { makingHabit = true }
+    }
+
+    KindCard(
+        icon = Icons.Outlined.Link,
+        // xrnloops' tile names the app.
+        title = "Linked habit",
+        tile = { LoopsTile(size = it) },
+        kind = kinds.loop,
+        selected = form.loopOn,
+        summary = andList(form.links.map { it.name } + form.tasks.filter { it.text.isNotBlank() }.map { it.text }).ifEmpty { "no habit linked yet" },
+        onToggle = { form.setKind(FormKind.LOOP, it) },
+    ) {
+        form.links.forEachIndexed { i, link ->
+            LinkRow(
+                link,
+                habit = form.knownHabits.firstOrNull { it.id == link.uuid },
+                onChange = { new -> form.links = form.links.toMutableList().also { it[i] = new } },
+                onRemove = { form.links = form.links.toMutableList().also { it.removeAt(i) } },
+            )
+        }
+        // Tasks typed into a block before habits were shared ones: kept until taken off.
         form.tasks.forEachIndexed { i, task ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FieldBox(
@@ -532,46 +558,12 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             }
             Gap(8)
         }
-        if (form.knownHabits.any { it.kind != HabitKind.TIMER && it.id !in form.habitIds }) {
-            DashedButton("Choose a habit", kinds.habit) { pickingHabits = false }
+        val linked = form.links.mapTo(mutableSetOf()) { it.uuid }
+        if (form.knownHabits.any { it.id !in linked && !it.archived && it.unlockUnit != null && it.kind != HabitKind.TIMER }) {
+            DashedButton("Choose a habit", kinds.loop) { pickingLoop = true }
             Gap(8)
         }
-        DashedButton("New habit", kinds.habit) { makingHabit = false }
-    }
-    KindCard(
-        icon = Icons.Outlined.Timer,
-        title = "Focus session",
-        kind = kinds.timer,
-        selected = form.focusOn,
-        summary = andList(form.timerHabits.mapNotNull { id -> form.knownHabits.firstOrNull { it.id == id }?.name }).ifEmpty { "no timer picked yet" },
-        onToggle = { form.setKind(FormKind.FOCUS, it) },
-    ) {
-        HabitPicks(form, form.timerHabits, onRemove = { id -> form.habitIds = form.habitIds - id })
-        if (form.knownHabits.any { it.kind == HabitKind.TIMER && it.id !in form.habitIds }) {
-            DashedButton("Choose a timer", kinds.timer) { pickingHabits = true }
-            Gap(8)
-        }
-        DashedButton("New timer", kinds.timer) { makingHabit = true }
-    }
-
-    KindCard(
-        icon = Icons.Outlined.Link,
-        // xrnloops' tile names the app.
-        title = "Linked habit",
-        tile = { LoopsTile(size = it) },
-        kind = kinds.loop,
-        selected = form.loopOn,
-        summary = if (form.links.isEmpty()) "no habit linked yet" else andList(form.links.map { it.name }),
-        onToggle = { form.setKind(FormKind.LOOP, it) },
-    ) {
-        form.links.forEachIndexed { i, link ->
-            LinkRow(
-                link,
-                onChange = { new -> form.links = form.links.toMutableList().also { it[i] = new } },
-                onRemove = { form.links = form.links.toMutableList().also { it.removeAt(i) } },
-            )
-        }
-        DashedButton("Pick habits", kinds.loop) { pickingLoop = true }
+        DashedButton("New habit", kinds.loop) { makingHabit = false }
     }
 
     // A phone without NFC isn't offered tags, but still shows the ones a block has.
@@ -589,16 +581,13 @@ private fun UnlockSections(form: BlockFormState, apps: List<InstalledApp>, store
             onDismiss = { pickingAppTime = false },
         )
     }
-    pickingHabits?.let { timers ->
+    if (pickingTimers) {
         HabitPickerSheet(
-            title = if (timers) "Timers" else "Habits",
-            // An "at most" habit can't open a block (I36), so it isn't offered.
-            habits = form.knownHabits.filter {
-                (it.kind == HabitKind.TIMER) == timers && (it.id in form.habitIds || (!it.archived && it.unlockUnit != null))
-            },
-            initial = form.habitIds.toSet(),
-            onDone = { ids -> form.setHabits(timers, ids); pickingHabits = null },
-            onDismiss = { pickingHabits = null },
+            title = "Timers",
+            habits = form.knownHabits.filter { it.kind == HabitKind.TIMER && (it.id in form.timerIds || (!it.archived && it.unlockUnit != null)) },
+            initial = form.timerIds.toSet(),
+            onDone = { ids -> form.setTimers(ids); pickingTimers = false },
+            onDismiss = { pickingTimers = false },
         )
     }
     makingHabit?.let { timers ->
@@ -721,35 +710,41 @@ private fun ToggleLine(label: String, checked: Boolean, onChange: (Boolean) -> U
     }
 }
 
-/** A linked xrnloops habit in the form, with its "which day" and "goal days" choices (I23). */
+/** A linked habit in the form: its tile and name, and which day's tick counts (I23). */
 @Composable
-private fun LinkRow(link: LinkDraft, onChange: (LinkDraft) -> Unit, onRemove: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.Top) {
-        Column(Modifier.weight(1f)) {
-            Text(link.name, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                when {
-                    link.goal -> "Counts on days its goal is met${if (link.yesterday) ", yesterday" else ""}"
-                    link.yesterday -> "Yesterday's tick counts"
-                    else -> "Today's tick counts"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = link.yesterday, onClick = { onChange(link.copy(yesterday = !link.yesterday)) }, label = { Text("Yesterday") })
-                if (!link.daily || link.goal) {
-                    FilterChip(selected = link.goal, onClick = { onChange(link.copy(goal = !link.goal)) }, label = { Text("Goal days") })
+private fun LinkRow(link: LinkDraft, habit: Habit?, onChange: (LinkDraft) -> Unit, onRemove: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.18f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HabitTile(habit, size = 34)
+            WGap(12)
+            Column(Modifier.weight(1f)) {
+                Text(habit?.name ?: link.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (habit != null) {
+                    Text(habitGoalText(habit), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Take ${link.name} off",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp).clickable(onClick = onRemove),
+            )
         }
-        Icon(
-            Icons.Filled.Close,
-            contentDescription = "Remove ${link.name}",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp).size(22.dp).clickable(onClick = onRemove),
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !link.yesterday, onClick = { onChange(link.copy(yesterday = false)) }, label = { Text("Today") })
+            FilterChip(selected = link.yesterday, onClick = { onChange(link.copy(yesterday = true)) }, label = { Text("Yesterday") })
+            if (!link.daily || link.goal) {
+                FilterChip(selected = link.goal, onClick = { onChange(link.copy(goal = !link.goal)) }, label = { Text("Goal days") })
+            }
+        }
     }
+    Gap(8)
 }
 
 /** All the time, at set hours, or (a block nothing unlocks) for a while. */

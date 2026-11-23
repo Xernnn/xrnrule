@@ -138,9 +138,12 @@ object LoopLinks {
             }
         }
 
-    /** "Instagram + youtube.com": the phone's apps by name, then sites, then laptop apps. */
+    /**
+     * "Instagram + youtube.com": the phone's apps by name, then sites, then laptop apps. An app
+     * this phone no longer has isn't named (it read as its package id).
+     */
     fun targets(context: Context, row: LinkRow): String = summarizeNames(
-        row.targetPackages.map { InstalledApps.labelFor(context, it) } + row.targetSites + row.targetDesktopApps,
+        row.targetPackages.map { InstalledApps.labelFor(context, it) }.filterNot { it in row.targetPackages } + row.targetSites + row.targetDesktopApps,
         empty = row.blockName,
     )
 

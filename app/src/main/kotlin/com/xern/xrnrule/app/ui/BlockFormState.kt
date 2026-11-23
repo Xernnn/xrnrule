@@ -43,8 +43,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     /** Every habit there is, kept current by the screen: picked habits' kinds are looked up here. */
     var knownHabits by mutableStateOf(start.habits)
     var tasks by mutableStateOf(start.tasks)
-    var habitIds by mutableStateOf(start.habitIds)
-    var manualOn by mutableStateOf(start.manualOn)
+    var timerIds by mutableStateOf(start.timerIds)
     var focusOn by mutableStateOf(start.focusOn)
     var links by mutableStateOf(start.links)
     var loopOn by mutableStateOf(start.loopOn)
@@ -94,7 +93,7 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
     fun draft() = BlockDraft(
         existing = existing, habits = knownHabits, name = name, apps = apps, sites = sites, exceptSites = exceptSites, devices = devices,
         appTimeOn = appTimeOn, appTimeApps = appTimeApps, appTimeMinutes = appTimeMinutes, timerOn = timerOn,
-        timerMinutes = timerMinutes, tasks = tasks, habitIds = habitIds, manualOn = manualOn, focusOn = focusOn,
+        timerMinutes = timerMinutes, tasks = tasks, timerIds = timerIds, focusOn = focusOn,
         links = links, loopOn = loopOn, combineMode = combineMode, tagOn = tagOn, tags = tags, limitOn = limitOn, dailyOn = dailyOn,
         dailyMinutes = dailyMinutes, rowOn = rowOn, rowMinutes = rowMinutes, rowBreakMinutes = rowBreakMinutes,
         opensOn = opensOn, opensPerDay = opensPerDay, openWaitS = openWaitS,
@@ -106,22 +105,20 @@ class BlockFormState(val existing: Block?, existingItems: List<ChecklistItem>, h
 
     /** Takes in what a [BlockDraft] edit changed (only the fields such edits touch). */
     private fun load(d: BlockDraft) {
-        appTimeOn = d.appTimeOn; timerOn = d.timerOn; manualOn = d.manualOn; focusOn = d.focusOn; loopOn = d.loopOn
-        limitOn = d.limitOn; whenMode = d.whenMode; habitIds = d.habitIds; links = d.links; tagOn = d.tagOn
+        appTimeOn = d.appTimeOn; timerOn = d.timerOn; focusOn = d.focusOn; loopOn = d.loopOn
+        limitOn = d.limitOn; whenMode = d.whenMode; timerIds = d.timerIds; links = d.links; tagOn = d.tagOn
         // Hours move between the schedule and the blocked hours as rules come and go (I44).
         scheduleDays = d.scheduleDays; timeOn = d.timeOn; startMinute = d.startMinute; endMinute = d.endMinute; moreWindows = d.moreWindows
         hoursOn = d.hoursOn; hoursDays = d.hoursDays; hoursTimeOn = d.hoursTimeOn; hoursStart = d.hoursStart; hoursEnd = d.hoursEnd
         hoursMore = d.hoursMore
     }
 
-    val doHabits get() = draft().doHabits
-    val timerHabits get() = draft().timerHabits
     val habitChosen get() = draft().habitChosen
     val mode: BlockMode get() = draft().mode
     val hasTargets get() = draft().hasTargets
 
     fun addHabit(id: String) = load(draft().withHabit(id))
-    fun setHabits(timers: Boolean, ids: Set<String>) = load(draft().withHabits(timers, ids))
+    fun setTimers(ids: Set<String>) = load(draft().withTimers(ids))
     fun setLinks(ids: Set<String>) = load(draft().withLinks(ids))
     fun setKind(kind: FormKind, on: Boolean) = load(draft().withKind(kind, on))
     fun newTask() = TaskDraft(UUID.randomUUID().toString(), null, "")

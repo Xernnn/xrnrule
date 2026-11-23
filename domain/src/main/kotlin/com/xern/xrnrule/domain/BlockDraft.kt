@@ -6,7 +6,7 @@ import java.util.UUID
 enum class WhenMode { ALWAYS, SCHEDULE, FOR_A_WHILE }
 
 /** The ways to unlock (or limit) a block that the phone's form offers. */
-enum class FormKind { APP_TIME, TIMER, MANUAL, FOCUS, LOOP, LIMIT, TAG }
+enum class FormKind { APP_TIME, TIMER, FOCUS, LOOP, LIMIT, TAG }
 
 /** A task row being edited; [id] is the checklist item it was, null for a new one. */
 data class TaskDraft(val key: String, val id: String?, val text: String)
@@ -15,8 +15,8 @@ data class TaskDraft(val key: String, val id: String?, val text: String)
 data class TagDraft(val key: String, val id: String?, val name: String, val tag: String)
 
 /**
- * A habit item with a day rule being edited (contract I23: yesterday's entry, or days its goal is
- * met); [itemId] is null for a new one.
+ * A habit you tick or count that the block asks for, being edited, with the day it counts
+ * (contract I23: today's entry, yesterday's, or days its goal is met); [itemId] is null for a new one.
  */
 data class LinkDraft(
     val itemId: String?,
@@ -54,16 +54,15 @@ data class BlockDraft(
     val appTimeMinutes: Long = 15,
     val timerOn: Boolean = false,
     val timerMinutes: Long = 30,
-    /** Tasks typed into a block before habits were shared ones; kept until removed. */
+    /** Tasks typed into a block before habits were shared ones; kept until removed, beside the links. */
     val tasks: List<TaskDraft> = emptyList(),
-    /** The habits the block asks for with no day rule (contract I36), in order. */
-    val habitIds: List<String> = emptyList(),
-    val manualOn: Boolean = false,
+    /** The timer habits the block asks for (contract I36), in order: the "Focus session" card. */
+    val timerIds: List<String> = emptyList(),
     /** I43: tags to scan. */
     val tagOn: Boolean = false,
     val tags: List<TagDraft> = emptyList(),
     val focusOn: Boolean = false,
-    /** Habit items with a day rule (yesterday's, or goal days): the "Tracked habit" card. */
+    /** The habits you tick or count, each with the day it counts (I23): the one "Linked habit" card. */
     val links: List<LinkDraft> = emptyList(),
     val loopOn: Boolean = false,
     val combineMode: CombineMode = CombineMode.AND,
@@ -109,15 +108,11 @@ data class BlockDraft(
 ) {
     private fun isTimer(habitId: String) = habits.firstOrNull { it.id == habitId }?.kind == HabitKind.TIMER
 
-    /** Picked habits you tick or count ("Manual habit"), and timer habits ("Manual timer"). */
-    val doHabits: List<String> get() = habitIds.filterNot(::isTimer)
-    val timerHabits: List<String> get() = habitIds.filter(::isTimer)
-
-    val habitChosen: Boolean get() = appTimeOn || timerOn || manualOn || focusOn || loopOn || tagOn
+    val habitChosen: Boolean get() = appTimeOn || timerOn || focusOn || loopOn || tagOn
     val hasTimer: Boolean get() = appTimeOn || timerOn
     val hasChecklist: Boolean
-        get() = (manualOn && (tasks.any { it.text.isNotBlank() } || doHabits.isNotEmpty())) ||
-            (focusOn && timerHabits.isNotEmpty()) || (loopOn && links.isNotEmpty()) || (tagOn && tags.isNotEmpty())
+        get() = (loopOn && (links.isNotEmpty() || tasks.any { it.text.isNotBlank() })) ||
+            (focusOn && timerIds.isNotEmpty()) || (tagOn && tags.isNotEmpty())
 
     /** The block's kind, from what's picked: a habit, a limit, or neither (a schedule or a lockdown). */
     val mode: BlockMode
@@ -146,7 +141,6 @@ data class BlockDraft(
         var d = when (kind) {
             FormKind.APP_TIME -> copy(appTimeOn = on, timerOn = if (on) false else timerOn)
             FormKind.TIMER -> copy(timerOn = on, appTimeOn = if (on) false else appTimeOn)
-            FormKind.MANUAL -> copy(manualOn = on)
             FormKind.FOCUS -> copy(focusOn = on)
             FormKind.LOOP -> copy(loopOn = on)
             FormKind.LIMIT -> copy(limitOn = on)
@@ -185,16 +179,16 @@ data class BlockDraft(
         else -> this
     }
 
-    /** One habit added to the block, unless it's there. */
-    fun withHabit(id: String): BlockDraft = if (id in habitIds) this else copy(habitIds = habitIds + id)
-
-    /** The habits of one card after its picker: the other card's stay as they are. */
-    fun withHabits(timers: Boolean, ids: Set<String>): BlockDraft {
-        val keep = habitIds.filter { isTimer(it) != timers || it in ids }
-        return copy(habitIds = keep + ids.filter { it !in keep })
+    /** One habit added to the block, unless it's there: a timer to the timers, any other as a link counting today's tick. */
+    fun withHabit(id: String): BlockDraft = when {
+        isTimer(id) -> if (id in timerIds) this else copy(timerIds = timerIds + id)
+        else -> withLinks(links.mapTo(linkedSetOf()) { it.uuid } + id)
     }
 
-    /** The "Tracked habit" card after its picker: kept ones keep their choices, new ones count today's tick. */
+    /** The "Focus session" card after its picker: kept timers keep their place. */
+    fun withTimers(ids: Set<String>): BlockDraft = copy(timerIds = timerIds.filter { it in ids } + ids.filter { it !in timerIds })
+
+    /** The "Linked habit" card after its picker: kept ones keep their choices, new ones count today's tick. */
     fun withLinks(ids: Set<String>): BlockDraft {
         val kept = links.filter { it.uuid in ids }
         val added = ids.filter { id -> kept.none { it.uuid == id } }.mapNotNull { id ->
@@ -226,9 +220,8 @@ data class BlockDraft(
     /** Why step 2 (what unlocks it) can't go on yet. */
     fun unlockHint(): String? = when {
         appTimeOn && appTimeApps.isEmpty() -> "Pick the apps whose time counts"
-        manualOn && tasks.none { it.text.isNotBlank() } && doHabits.isEmpty() -> "Pick or make a habit"
-        focusOn && timerHabits.isEmpty() -> "Pick or make a timer"
-        loopOn && links.isEmpty() -> "Pick at least one habit"
+        loopOn && links.isEmpty() && tasks.none { it.text.isNotBlank() } -> "Pick or make a habit"
+        focusOn && timerIds.isEmpty() -> "Pick or make a timer"
         tagOn && tags.isEmpty() -> "Scan a tag"
         limitOn && !dailyOn && !rowOn && !opensOn -> "Set minutes a day, minutes in a row, or opens a day"
         existing?.mode == BlockMode.HABIT && !hasRules -> "Pick at least one way to unlock it"
@@ -318,41 +311,34 @@ data class BlockDraft(
     fun toItems(blockId: String, old: List<ChecklistItem>, newId: () -> String = { UUID.randomUUID().toString() }): List<ChecklistItem> {
         if (mode != BlockMode.HABIT) return if (existing?.mode == BlockMode.HABIT) emptyList() else old
         val byId = old.associateBy { it.id }
-        val taskItems = if (manualOn) tasks.filter { it.text.isNotBlank() } else emptyList()
         val linkItems = if (loopOn) links else emptyList()
+        val taskItems = if (loopOn) tasks.filter { it.text.isNotBlank() } else emptyList()
         val linkedIds = linkItems.mapNotNull { it.itemId }.toSet()
+        // A habit taken off and picked again in one edit is still its old item, with what this
+        // block spent of it today (I36): a new one would let the same tick open the block twice.
         val byHabit = old.filter { it.habitId != null && it.id !in linkedIds }.associateBy { it.habitId }
-        val picked = (if (manualOn) doHabits else emptyList()) + (if (focusOn) timerHabits else emptyList())
-        val habitItems = picked.mapIndexed { i, id ->
-            val name = habits.firstOrNull { it.id == id }?.name ?: ""
-            // A kept habit keeps what this block spent of it today (I36).
-            byHabit[id]?.copy(text = name, order = i)
-                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = name, order = i, habitId = id)
-        }
-        val plain = habitItems + taskItems.mapIndexed { i, t ->
-            byId[t.id]?.copy(text = t.text.trim(), order = habitItems.size + i)
-                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = t.text.trim(), order = habitItems.size + i)
-        }
         val linked = linkItems.mapIndexed { i, l ->
             val day = if (l.yesterday) LinkedDay.YESTERDAY else LinkedDay.TODAY
-            // Unticking both choices keeps the item: it then counts today's tick, like a plain one.
-            byId[l.itemId]?.copy(order = plain.size + i, habitId = l.uuid, externalHabitId = null, linkedDay = day, countsGoal = l.goal)
-                ?: ChecklistItem(
-                    id = "$blockId-${newId()}",
-                    blockId = blockId,
-                    text = l.name,
-                    order = plain.size + i,
-                    habitId = l.uuid,
-                    linkedDay = day,
-                    countsGoal = l.goal,
-                )
+            (byId[l.itemId] ?: byHabit[l.uuid])?.copy(order = i, habitId = l.uuid, externalHabitId = null, linkedDay = day, countsGoal = l.goal)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = l.name, order = i, habitId = l.uuid, linkedDay = day, countsGoal = l.goal)
         }
+        val typed = taskItems.mapIndexed { i, t ->
+            byId[t.id]?.copy(text = t.text.trim(), order = linked.size + i)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = t.text.trim(), order = linked.size + i)
+        }
+        val taken = linked.mapTo(mutableSetOf()) { it.id }
+        val timers = (if (focusOn) timerIds else emptyList()).mapIndexed { i, id ->
+            val name = habits.firstOrNull { it.id == id }?.name ?: ""
+            byHabit[id]?.takeIf { it.id !in taken }?.copy(text = name, order = linked.size + typed.size + i)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = name, order = linked.size + typed.size + i, habitId = id)
+        }
+        val plain = linked + typed + timers
         val tagItems = (if (tagOn) tags else emptyList()).mapIndexed { i, t ->
             val name = t.name.trim().ifEmpty { "the tag" }
-            byId[t.id]?.copy(text = name, order = plain.size + linked.size + i, tag = t.tag)
-                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = name, order = plain.size + linked.size + i, tag = t.tag)
+            byId[t.id]?.copy(text = name, order = plain.size + i, tag = t.tag)
+                ?: ChecklistItem(id = "$blockId-${newId()}", blockId = blockId, text = name, order = plain.size + i, tag = t.tag)
         }
-        return plain + linked + tagItems
+        return plain + tagItems
     }
 
     /**
@@ -386,9 +372,12 @@ data class BlockDraft(
             val timerOn = hadTimer && trigger.habitPackages.isEmpty()
             val tasks = items.filter { !it.derived && it.tag == null }.sortedBy { it.order }.map { TaskDraft(it.id, it.id, it.text) }
             val tags = items.filter { it.tag != null }.sortedBy { it.order }.map { TagDraft(it.id, it.id, it.text, it.tag!!) }
-            fun hasDayRule(item: ChecklistItem) = item.linkedDay == LinkedDay.YESTERDAY || item.countsGoal
-            val habitIds = items.filter { it.derived && !hasDayRule(it) }.sortedBy { it.order }.map { it.habitId ?: it.externalHabitId!! }
-            val links = items.filter { it.derived && hasDayRule(it) }.sortedBy { it.order }.map {
+            fun habitOf(item: ChecklistItem) = (item.habitId ?: item.externalHabitId).let { id -> habits.firstOrNull { it.id == id } }
+            // A timer is the Focus session card's, unless it counts another day: only a link shows that.
+            fun isTimer(item: ChecklistItem) =
+                habitOf(item)?.kind == HabitKind.TIMER && item.linkedDay != LinkedDay.YESTERDAY && !item.countsGoal
+            val timerIds = items.filter { it.derived && isTimer(it) }.sortedBy { it.order }.map { it.habitId ?: it.externalHabitId!! }
+            val links = items.filter { it.derived && !isTimer(it) }.sortedBy { it.order }.map {
                 val id = it.habitId ?: it.externalHabitId!!
                 val habit = habits.firstOrNull { h -> h.id == id }
                 LinkDraft(it.id, id, habit?.name ?: it.text, it.linkedDay == LinkedDay.YESTERDAY, it.countsGoal, daily = habit?.let(::isDaily) ?: !it.countsGoal)
@@ -415,9 +404,9 @@ data class BlockDraft(
                 timerOn = timerOn,
                 timerMinutes = if (timerOn) timerMinutes else 30,
                 tasks = tasks,
-                habitIds = habitIds,
+                timerIds = timerIds,
                 links = links,
-                loopOn = links.isNotEmpty(),
+                loopOn = links.isNotEmpty() || tasks.isNotEmpty(),
                 combineMode = trigger.combineMode,
                 limitOn = limit != null,
                 dailyOn = limit == null || limit.dailyAllowanceMs > 0,
@@ -448,8 +437,7 @@ data class BlockDraft(
                 hardcore = existing.enforcementTier == EnforcementTier.HARDCORE,
             )
             return draft.copy(
-                manualOn = tasks.isNotEmpty() || draft.doHabits.isNotEmpty(),
-                focusOn = draft.timerHabits.isNotEmpty(),
+                focusOn = draft.timerIds.isNotEmpty(),
                 tagOn = tags.isNotEmpty(),
                 tags = tags,
             )

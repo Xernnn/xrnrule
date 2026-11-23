@@ -38,4 +38,19 @@ object InstalledApps {
             .sortedBy { it.label.lowercase() }
             .toList()
     }
+
+    /**
+     * The [packages] this phone has, in the order of their names in [labels] (the launchable apps
+     * by package). An app that was uninstalled stays in its block, so installing it again doesn't
+     * open it (contract §2.3: taking an app off a block is a loosening edit), but the block isn't
+     * drawn with it.
+     */
+    fun onThisPhone(packages: Collection<String>, labels: Map<String, String>): List<String> =
+        packages.filter { it in labels }.sortedBy { labels.getValue(it).lowercase() }
+
+    /** The [picked] packages that aren't among [apps]: uninstalled since, or only on another phone. */
+    fun notOnThisPhone(picked: Collection<String>, apps: List<InstalledApp>): List<String> {
+        val here = apps.mapTo(mutableSetOf()) { it.packageName }
+        return picked.filter { it !in here }.sorted()
+    }
 }
