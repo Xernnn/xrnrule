@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xern.xrnrule.app.data.InstalledApp
+import com.xern.xrnrule.app.data.InstalledApps
 import com.xern.xrnrule.app.web.WebsiteMonitor
 import com.xern.xrnrule.app.web.WebsiteTracking
 import com.xern.xrnrule.app.web.tracking
@@ -86,6 +87,10 @@ fun AppPickerSheet(
     var sites by remember { mutableStateOf(initial.sites) }
     var excepts by remember { mutableStateOf(initial.exceptSites) }
     var tab by remember { mutableIntStateOf(0) }
+    // What the block still holds of apps this phone no longer has, as the sheet opened: listed,
+    // so one can be taken off (and put back before Done). They were picked, counted and nowhere
+    // in the list.
+    val gone = remember(apps) { InstalledApps.notOnThisPhone(initial.apps, apps) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -128,7 +133,7 @@ fun AppPickerSheet(
                 Gap(12)
             }
             if (tab == 0) {
-                AppList(apps, picked, onToggle = { pkg -> picked = if (pkg in picked) picked - pkg else picked + pkg })
+                AppList(apps, gone, picked, onToggle = { pkg -> picked = if (pkg in picked) picked - pkg else picked + pkg })
             } else {
                 WebsitesTab(
                     sites = sites,
@@ -188,13 +193,14 @@ private val Categories = listOf(
 private fun categoryName(category: Int): String? = Categories.firstOrNull { it.first == category }?.second?.second
 
 @Composable
-private fun AppList(apps: List<InstalledApp>, picked: Set<String>, onToggle: (String) -> Unit) {
+private fun AppList(apps: List<InstalledApp>, gone: List<String>, picked: Set<String>, onToggle: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<Int?>(null) }
     val present = remember(apps) { apps.map { it.category }.toSet() }
     val shown = remember(query, category, apps) {
         apps.filter { (category == null || it.category == category) && (query.isBlank() || it.label.contains(query, ignoreCase = true)) }
     }
+    val shownGone = gone.filter { category == null && (query.isBlank() || it.contains(query, ignoreCase = true)) }
     SearchField(query, onChange = { query = it }, placeholder = "Search apps", modifier = Modifier.padding(horizontal = 20.dp))
     Gap(10)
     Row(
@@ -208,6 +214,23 @@ private fun AppList(apps: List<InstalledApp>, picked: Set<String>, onToggle: (St
     }
     Gap(6)
     LazyColumn(Modifier.fillMaxWidth()) {
+        items(shownGone, key = { it }) { pkg ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggle(pkg) }
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AppIcon(pkg, size = 36.dp)
+                WGap(14)
+                Column(Modifier.weight(1f)) {
+                    Text(pkg, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("Not installed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                CheckCircle(pkg in picked)
+            }
+        }
         items(shown, key = { it.packageName }) { app ->
             val on = app.packageName in picked
             Row(

@@ -222,7 +222,7 @@ private fun BlockPage(form: BlockFormState, apps: List<InstalledApp>, websites: 
 /** "Instagram", "Instagram + YouTube", "Instagram + 2 more": a name until you give it one. */
 private fun autoName(form: BlockFormState, apps: List<InstalledApp>): String {
     val labels = apps.associate { it.packageName to it.label }
-    val names = form.apps.map { labels[it] ?: it }.sortedBy { it.lowercase() } + form.sites.sorted()
+    val names = InstalledApps.onThisPhone(form.apps, labels).map(labels::getValue) + form.sites.sorted()
     return summarizeNames(names, empty = "Block")
 }
 
@@ -360,7 +360,7 @@ private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites
             )
             WGap(12)
             Text(
-                if (empty) "Choose apps and sites" else pickedSummary(form.apps.size, Sites.shown(form.sites).size),
+                if (empty) "Choose apps and sites" else pickedSummary(InstalledApps.onThisPhone(form.apps, labels).size, Sites.shown(form.sites).size),
                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp),
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
@@ -371,7 +371,7 @@ private fun TargetsCard(form: BlockFormState, apps: List<InstalledApp>, websites
         if (!empty) {
             Gap(12)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                form.apps.sortedBy { labels[it]?.lowercase() ?: it }.forEach { AppIcon(it, size = 26.dp) }
+                InstalledApps.onThisPhone(form.apps, labels).forEach { AppIcon(it, size = 26.dp) }
                 Sites.shown(form.sites.sorted()).forEach { SiteIcon(it, size = 26.dp) }
             }
         }
@@ -419,7 +419,7 @@ private fun NameCard(form: BlockFormState, apps: List<InstalledApp>) {
     HFCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AppTile(
-                packages = form.apps.sortedBy { labels[it]?.lowercase() ?: it },
+                packages = InstalledApps.onThisPhone(form.apps, labels),
                 fallback = Icons.Filled.Shield,
                 sites = form.sites.sorted(),
             )

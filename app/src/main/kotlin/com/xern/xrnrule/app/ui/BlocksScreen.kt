@@ -447,7 +447,7 @@ private fun BlockCard(
             val headline = BlockTexts.headline(store.engine, world, block, store.clock)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AppTile(
-                    packages = block.targetPackages.sortedBy { appLabels[it]?.lowercase() ?: it },
+                    packages = InstalledApps.onThisPhone(block.targetPackages, appLabels),
                     fallback = Icons.Filled.Shield,
                     sites = Companions.withoutPaired(block.targetSites.sorted(), block.targetPackages),
                     size = 46.dp,
