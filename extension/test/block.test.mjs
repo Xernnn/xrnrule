@@ -7,8 +7,11 @@ import vm from "node:vm";
 
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
 
-/** block.js opened at [url], with xrnrule answering every beat with [verdict]. */
-function blockPage(url, verdict) {
+/**
+ * block.js opened at [url], with xrnrule answering every beat with [verdict]. [android]: in the
+ * phone's browser; [answer]: xrnrule's own answer to the served page (null: it doesn't answer).
+ */
+function blockPage(url, verdict, { android = false, answer = verdict } = {}) {
   const u = new URL(url);
   const elements = {};
   const element = (id) => (elements[id] ??= {
@@ -17,10 +20,12 @@ function blockPage(url, verdict) {
     addEventListener() {},
   });
   const replaced = [];
+  const bodyClasses = new Set();
   const sandbox = {
     URL, URLSearchParams, console,
-    navigator: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" },
+    navigator: { userAgent: android ? "Mozilla/5.0 (Linux; Android 15) Mobile" : "Mozilla/5.0 (X11; Linux x86_64)" },
     document: {
+      body: { classList: { toggle: (c, on) => (on ? bodyClasses.add(c) : bodyClasses.delete(c)) } },
       title: "", visibilityState: "visible", hasFocus: () => true,
       getElementById: element, addEventListener() {},
     },
@@ -29,11 +34,13 @@ function blockPage(url, verdict) {
     location: { href: url, protocol: u.protocol, search: u.search, hash: u.hash, replace: (to) => { replaced.push(to); } },
     setInterval: () => 0, setTimeout: () => 0, clearTimeout() {},
     chrome: { runtime: { sendMessage: (_msg, reply) => reply(verdict), lastError: undefined } },
+    // Answered at once, as a then() chain: what follows runs in the same turn as the await below.
+    fetch: () => (answer ? { then: (f) => ({ then: (g) => g(f({ ok: true, json: () => answer })) }) } : { then: () => ({ then: (_g, h) => h(new Error("refused")) }) }),
   };
   sandbox.self = sandbox;
   vm.runInNewContext(read("shared.js"), sandbox);
   vm.runInNewContext(read("block.js"), sandbox);
-  return { replaced, elements };
+  return { replaced, elements, bodyClasses };
 }
 
 const PAGE = "chrome-extension://test/block.html";
@@ -65,4 +72,17 @@ test("the letter's square is xrnrule's tile, and its white letter reaches 3:1 fo
     .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
   assert.match(read("page.css"), /\.shield \.pic \{[^}]*font-size: 34px[^}]*color: #fff|\.shield \.pic \{[^}]*color: #fff[^}]*font-size: 34px/);
   assert.ok(1.05 / (lum(brand) + 0.05) >= 3);
+});
+
+test("on the phone, under xrnrule's own block screen, the page is only a backdrop", () => {
+  // 2026-11-24: Quetta showed the overlay and, behind it, this page saying it all again in
+  // another look. Served by xrnrule on Android, it now shows only its tile while xrnrule answers.
+  const served = "http://127.0.0.1:47321/block?site=youtube.com#https://m.youtube.com/";
+  const blocked = { site: "youtube.com", blocked: true, back: "Back at 14:00", why: "Blocked hours" };
+  assert.ok(blockPage(served, blocked, { android: true }).bodyClasses.has("backdrop"));
+  const unanswered = blockPage(served, blocked, { android: true, answer: null });
+  assert.ok(!unanswered.bodyClasses.has("backdrop"), "with no block screen over it, it says so itself");
+  assert.equal(unanswered.elements.why.textContent, "xrnrule offline");
+  assert.ok(!blockPage(`${PAGE}?site=youtube.com`, blocked, { android: true }).bodyClasses.has("backdrop"), "the extension's own copy is for when xrnrule doesn't answer");
+  assert.ok(!blockPage(served, blocked).bodyClasses.has("backdrop"), "the laptop has no block screen over it");
 });

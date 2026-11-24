@@ -99,7 +99,7 @@ val blockPage = tasks.register<BlockPage>("blockPage") {
     page.from(
         rootProject.fileTree("extension") {
             // manifest.json only for its version: the extension this build was made with (not served).
-            include("block.html", "block.js", "shared.js", "page.css", "icons/icon-48.png", "manifest.json")
+            include("block.html", "block.js", "shared.js", "page.css", "icons/icon.svg", "icons/icon-48.png", "fonts/MiSansLatinVF.woff2", "manifest.json")
         },
     )
 }

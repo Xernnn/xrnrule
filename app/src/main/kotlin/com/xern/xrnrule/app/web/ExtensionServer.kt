@@ -261,6 +261,9 @@ class ExtensionServer(
             "/shared.js" to ("web/shared.js" to "text/javascript; charset=utf-8"),
             "/page.css" to ("web/page.css" to "text/css; charset=utf-8"),
             "/icons/icon-48.png" to ("web/icons/icon-48.png" to "image/png"),
+            // The page asked for these and got a 404: a broken image for its tile, and a stand-in font.
+            "/icons/icon.svg" to ("web/icons/icon.svg" to "image/svg+xml"),
+            "/fonts/MiSansLatinVF.woff2" to ("web/fonts/MiSansLatinVF.woff2" to "font/woff2"),
         )
 
         /** On every answer: the block page runs only its own files and can't be framed. */
