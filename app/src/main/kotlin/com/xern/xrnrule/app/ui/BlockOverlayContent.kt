@@ -148,6 +148,7 @@ fun BlockOverlayContent(
                             when {
                                 ui?.useBrowser != null -> "$subject can't block sites"
                                 earned -> "Nice work!\n$subject is ready to open"
+                                ui?.usedToday == true -> "$subject is done\nfor today"
                                 ui?.reason == BlockReason.WAIT -> "$subject is opening"
                                 block == null || strict -> "$subject is blocked"
                                 else -> "To unlock $subject,\nfinish your habits first!"
@@ -167,7 +168,7 @@ fun BlockOverlayContent(
                             ui?.useBrowser != null -> "Your site blocks only work in ${ui.useBrowser.label}, so $subject stays closed while you have any."
                             block == null -> null
                             strict -> back?.why
-                            earned -> null
+                            earned || ui?.usedToday == true -> null
                             else -> whatsLeft(block, parts)
                         }
                         if (!sentence.isNullOrEmpty()) {

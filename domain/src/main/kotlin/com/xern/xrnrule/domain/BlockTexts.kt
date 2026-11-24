@@ -196,6 +196,7 @@ object BlockTexts {
             BlockReason.WAIT -> open("Opening in ${waitSeconds(engine, world, block, clock)} s")
             BlockReason.HABIT -> when {
                 block.state == BlockState.EARNED -> Headline("Ready to open", Tone.READY)
+                engine.usedToday(world, block, clock) -> blocked("Done for today")
                 block.hasLimit && block.limitComesFirst && engine.dailyLimitReached(world, block, clock) ->
                     blocked("Time's up · do the habit to open it")
                 block.hasLimit && block.limitComesFirst -> blocked("Opens used up · do the habit to open it")

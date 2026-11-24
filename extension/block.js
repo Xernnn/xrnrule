@@ -23,6 +23,14 @@
   const served = location.protocol === "http:";
   /** Faster than a web page's beat: "Leave" on the overlay should land within a second. */
   const BEAT_MS = 1000;
+  /**
+   * On the phone, served by xrnrule: its own block screen lies over this page and says it all, so
+   * while it answers this page is only a backdrop with its tile. Two block screens, one over the
+   * other in two different looks (2026-11-24), only read as something gone wrong. Unanswered, the
+   * page says so itself, since then no block screen is over it.
+   */
+  const backdrop = served && android;
+  document.body?.classList.toggle("backdrop", backdrop);
 
   document.getElementById("title").textContent = site ? `${site} is blocked` : "Blocked";
   // The site's letter, as the laptop's block page shows one without the site's icon.
@@ -49,6 +57,7 @@
     const why = document.getElementById("why");
     why.textContent = off ? offline : v.why ?? "";
     why.hidden = !why.textContent;
+    document.body?.classList.toggle("backdrop", backdrop && !off);
     // Leaving is the point of this page, unless opening xrnrule is what gets it going again.
     leaveButton.classList.toggle("primary", !(off && android));
     open.classList.toggle("primary", off && android);

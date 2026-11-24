@@ -1676,6 +1676,46 @@ class InvariantTests {
     }
 
     @Test
+    fun i24_aBlockWhoseChecksAllPaidIsDoneForToday() {
+        // 2026-11-24: a game block asking for two checks opened once, its 15 minutes ran out, and
+        // its screen asked to "finish your habits first" over two habits that showed done.
+        val clock = FakeClock()
+        val habits = listOf(habit("photo", HabitKind.CHECK), habit("scale", HabitKind.CHECK))
+        var world = habitWorld(clock, habits, "c1" to listOf("photo", "scale"))
+        val block = { world.block("c1")!! }
+        assertFalse("nothing done yet", engine.usedToday(world, block(), clock))
+        assertEquals("Blocked until you do the habit", BlockTexts.headline(engine, world, block(), clock).text)
+
+        world = log(world, clock, "photo", 1)
+        world = log(world, clock, "scale", 1)
+        assertFalse("ready, not used", engine.usedToday(world, block(), clock))
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        assertFalse("open", engine.usedToday(world, block(), clock))
+        clock.advance(block().reward.unlockDurationMs + 1)
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        assertTrue(engine.usedToday(world, block(), clock))
+        assertEquals(BlockTexts.Headline("Done for today", BlockTexts.Tone.BLOCKED), BlockTexts.headline(engine, world, block(), clock))
+
+        clock.advance(day)
+        world = on(world, clock, BlockEvent.Tick)
+        assertFalse("a new day asks for the habits again", engine.usedToday(world, block(), clock))
+        assertEquals("Blocked until you do the habit", BlockTexts.headline(engine, world, block(), clock).text)
+    }
+
+    @Test
+    fun i24_aCountCanStillOpenItAgain_soItIsNeverDoneForToday() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("pushups", HabitKind.COUNT, goal = 10)), "c1" to listOf("pushups"))
+        world = log(world, clock, "pushups", units(10))
+        world = on(world, clock, BlockEvent.Redeem("c1"))
+        clock.advance(world.block("c1")!!.reward.unlockDurationMs + 1)
+        world = on(world, clock, BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        assertFalse(engine.usedToday(world, world.block("c1")!!, clock))
+    }
+
+    @Test
     fun i24_expiredCreditDoesNotSpend() {
         val clock = FakeClock(wall = at("2026-01-15T08:00:00Z"))
         var world = habitWorld(clock, listOf(habit("meditate", HabitKind.CHECK)), "c1" to listOf("meditate"))

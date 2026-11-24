@@ -23,7 +23,8 @@ interface ForegroundAppDetector {
 
 /**
  * Tracks the foreground app by consuming `UsageEvents` incrementally from a moving cursor and
- * updating a single retained `current` value on every RESUMED / MOVE_TO_FOREGROUND.
+ * updating a single retained `current` value from every RESUMED / MOVE_TO_FOREGROUND and PAUSED
+ * (see [ForegroundTracker] for why the pauses matter).
  *
  * The retained value is the whole point: an earlier version re-queried a fixed 10 s window each
  * tick and returned `null` whenever that window happened to contain no resume events — which is
@@ -47,7 +48,7 @@ class UsageStatsDetector(
 ) : ForegroundAppDetector {
 
     private val usm = context.getSystemService(UsageStatsManager::class.java)
-    private val tracker = ForegroundTracker(::resumes)
+    private val tracker = ForegroundTracker(::moves)
 
     override val foregroundPackage: Flow<String?> = flow {
         while (true) {
@@ -62,26 +63,41 @@ class UsageStatsDetector(
      */
     val customTab: Boolean get() = tracker.customTab
 
-    private fun resumes(from: Long, to: Long): List<ForegroundTracker.Resume> {
+    private fun moves(from: Long, to: Long): List<ForegroundTracker.Move> {
         val events = usm.queryEvents(from, to)
         val event = UsageEvents.Event()
-        val out = mutableListOf<ForegroundTracker.Resume>()
+        val out = mutableListOf<ForegroundTracker.Move>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            // Same value: ACTIVITY_RESUMED (API 29) renamed MOVE_TO_FOREGROUND, which minSdk 26 still needs.
-            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                event.eventType == @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_FOREGROUND
-            ) {
-                out += ForegroundTracker.Resume(event.packageName, event.className)
+            // Same values: ACTIVITY_RESUMED and ACTIVITY_PAUSED (API 29) renamed MOVE_TO_FOREGROUND
+            // and MOVE_TO_BACKGROUND, which minSdk 26 still needs.
+            val front = when (event.eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED, @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_FOREGROUND -> true
+                UsageEvents.Event.ACTIVITY_PAUSED, @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_BACKGROUND, ACTIVITY_STOPPED -> false
+                else -> continue
             }
+            out += ForegroundTracker.Move(event.packageName, event.className, front)
         }
         return out
+    }
+
+    private companion object {
+        /** UsageEvents.Event.ACTIVITY_STOPPED, API 29; earlier phones never send it. */
+        const val ACTIVITY_STOPPED = 23
     }
 }
 
 /**
  * [UsageStatsDetector]'s reading of the events, pure so it can be tested without a phone:
- * [resumes] gives the apps brought to the front in a span of wall time, oldest first.
+ * [moves] gives the activities brought to the front ([Move.front]) or paused or stopped in a span
+ * of wall time, oldest first.
+ *
+ * The app in front is the one most lately resumed that hasn't paused since. A resume alone isn't
+ * enough: on HyperOS a swipe to the home screen and straight back (2026-11-24) brought the
+ * launcher up for a second without pausing the browser under it, so the browser never resumed
+ * again. Taking the last resume, the launcher stayed "in front" for the next 36 minutes of
+ * YouTube in Quetta: nothing counted, and the corner clock went back to 15:00 at every answer.
+ * With the pauses, the launcher's pause hands the front back to the browser.
  *
  * The first look finds the app in front however long ago it came there. It may well be hours:
  * an OEM battery killer stops xrnrule in the middle of a video, and when it starts again the
@@ -90,13 +106,17 @@ class UsageStatsDetector(
  * usual start still reads a minute of events. After that, each look reads what came since the last.
  */
 class ForegroundTracker(
-    private val resumes: (from: Long, to: Long) -> List<Resume>,
+    private val moves: (from: Long, to: Long) -> List<Move>,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
-    data class Resume(val pkg: String, val className: String?)
+    /** [pkg]'s activity [className] came to the front ([front]), or paused or stopped. */
+    data class Move(val pkg: String, val className: String?, val front: Boolean = true)
 
     private var cursor: Long? = null
     private var current: String? = null
+
+    /** Activities resumed and not paused since, the latest last. */
+    private val resumed = LinkedHashMap<Pair<String, String?>, Unit>()
 
     @Volatile
     var customTab: Boolean = false
@@ -107,18 +127,38 @@ class ForegroundTracker(
         val now = now()
         val since = cursor
         if (since == null) {
-            FIRST_LOOK_MS.firstNotNullOfOrNull { span -> resumes((now - span).coerceAtLeast(0L), now).lastOrNull() }?.let(::take)
+            // The shortest span that shows something resumed and still in front; failing that, the
+            // last resume any of them shows (an app whose pause came after it in the same span).
+            var fallback: Move? = null
+            for (span in FIRST_LOOK_MS) {
+                resumed.clear()
+                val seen = moves((now - span).coerceAtLeast(0L), now)
+                seen.forEach(::apply)
+                if (resumed.isNotEmpty()) break
+                fallback = fallback ?: seen.lastOrNull { it.front }
+            }
+            if (resumed.isEmpty()) fallback?.let { take(it.pkg, it.className) }
         } else {
             // Overlap the previous window slightly so an event landing between polls is not lost.
-            resumes((since - 1_000L).coerceAtLeast(0L), now).forEach(::take)
+            // Applying an event twice changes nothing: each activity's state is its last event's.
+            moves((since - 1_000L).coerceAtLeast(0L), now).forEach(::apply)
         }
         cursor = now
         return current
     }
 
-    private fun take(r: Resume) {
-        current = r.pkg
-        customTab = r.className?.contains("customtabs", ignoreCase = true) == true
+    private fun apply(move: Move) {
+        val key = move.pkg to move.className
+        resumed.remove(key)
+        if (move.front) resumed[key] = Unit
+        // With nothing resumed (between one app's pause and the next one's resume) the last app
+        // stays in front: `current` only ever moves to another app, it is never cleared.
+        resumed.keys.lastOrNull()?.let { (pkg, className) -> take(pkg, className) }
+    }
+
+    private fun take(pkg: String, className: String?) {
+        current = pkg
+        customTab = className?.contains("customtabs", ignoreCase = true) == true
     }
 
     private companion object {
