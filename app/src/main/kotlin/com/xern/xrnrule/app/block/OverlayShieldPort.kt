@@ -155,6 +155,7 @@ class OverlayShieldPort(
             isSite = siteBlocked,
             block = block,
             reason = block?.let { engine.blockReason(world, it, clock) },
+            usedToday = block?.let { engine.usedToday(world, it, clock) } == true,
             items = block?.let { world.items(it.id) }.orEmpty(),
             habitAppLabel = block?.trigger?.habitPackages
                 ?.takeIf { it.isNotEmpty() }
@@ -353,6 +354,8 @@ class OverlayShieldPort(
         val block: Block?,
         /** Why [block] is blocking: a habit shows its habits, the rest say when it lets go (I44). */
         val reason: BlockReason? = null,
+        /** Its habits are done and already opened it on their day (I24): nothing to do till the next. */
+        val usedToday: Boolean = false,
         val items: List<ChecklistItem>,
         /** Set when [Block.trigger] has `habitPackages` — the app(s) the timer actually counts in. */
         val habitAppLabel: String? = null,

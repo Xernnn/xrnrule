@@ -416,6 +416,21 @@ class BlockEngine {
     fun habitAvailable(world: World, item: ChecklistItem, clock: Clock): Long =
         (itemAmount(world, item, clock) - item.spentOn(itemDay(world, item, clock))).coerceAtLeast(0)
 
+    /**
+     * I24: every habit of HABIT [block] has paid for an unlock on the day it counts and can't pay
+     * again that day: each is a check, done once a day (a count or a timer can still add up to
+     * another unlock). Blocked by its habits, but nothing left to do about it until the next
+     * habit day: the block screen and card say so rather than asking for habits that show done.
+     */
+    fun usedToday(world: World, block: Block, clock: Clock): Boolean {
+        if (block.mode != BlockMode.HABIT || block.state != BlockState.ARMED) return false
+        val items = world.items(block.id)
+        return items.isNotEmpty() && items.all { item ->
+            val habit = item.habitId?.let(world::habit) ?: return@all false
+            habit.kind == HabitKind.CHECK && !itemReady(world, item, clock) && item.spentOn(itemDay(world, item, clock)) > 0
+        }
+    }
+
     /** I36: whether a habit item has an unlock's worth of its habit; never for an "at most" habit. */
     fun itemReady(world: World, item: ChecklistItem, clock: Clock): Boolean {
         val unit = item.habitId?.let(world::habit)?.unlockUnit ?: return false
