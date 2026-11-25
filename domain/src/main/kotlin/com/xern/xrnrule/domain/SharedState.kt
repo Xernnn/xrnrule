@@ -330,9 +330,12 @@ data class SharedState(
                 allowance = (local.allowance.keys + remote.allowance.keys).associateWith { blockId ->
                     val l = local.allowance[blockId].orEmpty()
                     val r = remote.allowance[blockId].orEmpty()
-                    (l.keys + r.keys).associateWith { device ->
-                        listOfNotNull(l[device], r[device]).maxWith(newer)
-                    }
+                    withoutGoneDevices(
+                        (l.keys + r.keys).associateWith { device ->
+                            listOfNotNull(l[device], r[device]).maxWith(newer)
+                        },
+                        nowWall,
+                    )
                 },
                 overrides = mergeMaps(b.overrides, local.overrides, remote.overrides) { l, r ->
                     when {
@@ -354,6 +357,19 @@ data class SharedState(
                     listOfNotNull(local.zones[device], remote.zones[device]).maxBy { it.atWall }
                 },
             )
+        }
+
+        /**
+         * §2.4: a block's use reports without those of devices that are gone (an earlier install, a
+         * new id), whose day is more than [Defaults.GONE_DEVICE_MS] behind the newest report's. A
+         * device in use reports every day, even unused, so it's never that far behind; a gone
+         * one's report counts for nothing, only today's do (I19). Judged by the reports alone (a
+         * day that hasn't begun here isn't the newest), every device drops the same ones, and the
+         * server's copy loses them for good instead of growing with every reinstall.
+         */
+        private fun withoutGoneDevices(rows: Map<String, AllowanceUse>, nowWall: Long): Map<String, AllowanceUse> {
+            val newest = rows.values.filter { it.dayStartWall <= nowWall }.maxOfOrNull { it.dayStartWall } ?: return rows
+            return rows.filterValues { it.dayStartWall >= newest - Defaults.GONE_DEVICE_MS }
         }
 
         /**

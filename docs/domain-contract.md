@@ -253,7 +253,7 @@ lấy bên đó (kể cả xóa — nên credit đã dùng ở máy kia không s
 | `emergencyLog` | hợp, không bao giờ bớt (I40) |
 | `zones` | theo thiết bị: `atWall` muộn hơn; không bao giờ bớt, nên máy mất world lấy lại múi giờ của nó (I54) |
 
-Bản ghi allowance chỉ được thêm, không bị xóa khi trộn, nên máy chủ của bản ghi phải tự thay nó: mỗi
+Bản ghi allowance chỉ được thêm, không bị xóa khi trộn (trừ bản ghi của một máy đã đi, xem dưới), nên máy chủ của bản ghi phải tự thay nó: mỗi
 máy **luôn** chiếu bản ghi của chính nó cho mọi block `hasLimit` có `progress`, kể cả khi chưa dùng
 (0 ms), để ngày mới của nó thắng bản của hôm trước mà máy kia còn giữ. Khi nhận, bản ghi của chính
 máy này trên server mà "lớn hơn" bản của nó (cùng thứ tự như bảng trên: ngày, `ms`, `atWall`; ví dụ
@@ -263,6 +263,13 @@ thống nhất được: không bao giờ có một bản ghi mà một máy c�
 lại mãi (đã xảy ra ngày 2026-11-05 với bản ghi 0 ms của laptop; và với bản ghi "ngày mai" của một
 laptop khởi động với đồng hồ nhanh 11 giờ, thắng mọi vòng tới tận ngày đó, nên phần đã dùng hôm nay
 không bao giờ được tính).
+
+**Máy đã đi** (cài lại, id mới): bản ghi của một máy mà ngày (`dayStartWall`) sau ngày mới nhất của
+block đó quá 30 ngày (`Defaults.GONE_DEVICE_MS`) thì bỏ khi trộn. Ngày mới nhất chỉ tính trong những
+ngày đã bắt đầu theo đồng hồ máy đang trộn, như bảng trên. Máy còn dùng thì ngày nào cũng chiếu bản ghi
+của nó (kể cả 0 ms), nên không bao giờ sau xa thế; bản ghi đã bỏ cũng không còn tính gì: chỉ ngày hôm nay
+mới tính (I19), lượt liên tục và nghỉ bắt buộc của nó đã qua lâu. Xét theo chính các bản ghi, nên mọi
+máy bỏ như nhau và không đẩy qua lại. Test: `SharedStateTest.allowance_aGone*`.
 
 Cũng vậy với `unlockLog` và `overrideLog`: khi nhận, ngày của bản đã trộn mà chưa bắt đầu ở đây
 (`unlockEpochDay`/`overrideEpochDay` lớn hơn hôm nay theo đồng hồ máy này) thì máy này giữ ngày và
