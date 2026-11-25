@@ -42,6 +42,8 @@ class Notifications(private val context: Context) {
         val sinceMs: Long? = null,
         /** Tapping it opens this habit's focus timer instead of the app's first screen. */
         val focusHabitId: String? = null,
+        /** Tapping it opens the first of these apps that can be opened: a block's, onto its block screen. */
+        val launch: List<String> = emptyList(),
     )
 
     /** What the ongoing notification says now; [front] is the app in front when no block screen is over it. */
@@ -91,8 +93,9 @@ class Notifications(private val context: Context) {
                 return Status("$name is open", "Locks again at ${clockText(left)}", left)
             }
 
+            // Nothing in the app opens it any more (71d7112): its block screen does, so the tap goes there.
             world.blocks.firstOrNull { it.state == BlockState.EARNED }?.let { block ->
-                return Status("${block.name}: habit done", "Open it from the block screen or the app")
+                return Status("${block.name}: habit done", "Open it from its block screen", launch = block.targetPackages.sorted())
             }
 
             val active = world.blocks.count { engine.isBlocking(world, it, clock) }
@@ -142,7 +145,7 @@ class Notifications(private val context: Context) {
             .setSmallIcon(R.drawable.ic_stat_xrnrule)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setContentIntent(status.focusHabitId?.let(::openFocus) ?: openApp())
+            .setContentIntent(status.focusHabitId?.let(::openFocus) ?: launch(status.launch) ?: openApp())
         status.sinceMs?.let { since ->
             builder.setUsesChronometer(true)
                 .setShowWhen(true)
@@ -205,6 +208,17 @@ class Notifications(private val context: Context) {
     )
 
     fun cancel(id: Int) = nm.cancel(id)
+
+    /** Opens the first of [packages] that can be: a blocked app comes up under its block screen. */
+    private fun launch(packages: List<String>): PendingIntent? {
+        val intent = packages.firstNotNullOfOrNull { context.packageManager.getLaunchIntentForPackage(it) } ?: return null
+        return PendingIntent.getActivity(
+            context,
+            3,
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
 
     private fun openFocus(habitId: String): PendingIntent = PendingIntent.getActivity(
         context,

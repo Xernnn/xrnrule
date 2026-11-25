@@ -3,6 +3,7 @@ package com.xern.xrnrule.app.block
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockState
 import com.xern.xrnrule.domain.BlockTexts
 import com.xern.xrnrule.domain.Clock
 import com.xern.xrnrule.domain.Schedule
@@ -59,5 +60,14 @@ class StatusLineTest {
     fun withNothingInFrontItSaysWhatHolds() {
         assertEquals("Nothing is blocked right now", line(at(17, 50), front = null).text)
         assertEquals("1 block active", line(at(19, 0), front = null).text)
+    }
+
+    @Test
+    fun aHabitDoneSendsYouToItsBlockScreen() {
+        // It said "Open it from the block screen or the app", and tapped it opened the app, where
+        // nothing opens a block any more.
+        val puzzles = videos.copy(id = "g", name = "Puzzles", targetPackages = setOf("com.example.puzzles"), mode = BlockMode.HABIT, state = BlockState.EARNED, dailyAllowanceMs = 0, blockedHours = null)
+        val status = Notifications.statusOf(World(blocks = listOf(puzzles)), engine, at(12, 0), "xrnrule")
+        assertEquals(Notifications.Status("Puzzles: habit done", "Open it from its block screen", launch = listOf("com.example.puzzles")), status)
     }
 }
