@@ -24,8 +24,10 @@ android {
         applicationId = "com.xern.xrnrule"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "0.2.$versionCode"
+        // The phone and the self-update channel go by versionCode alone; the name is for people.
+        // scripts/release.mjs may raise the code past what the server has, and leaves the name.
+        versionCode = 26
+        versionName = "0.7.0"
     }
 
     buildFeatures {
