@@ -55,6 +55,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,7 +63,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -77,7 +77,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.drawable.toBitmap
+import com.xern.xrnrule.app.data.AppIcons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -674,14 +676,17 @@ private const val HOLD_TICK_MS = 700
 
 // ---- app icons ----------------------------------------------------------------------
 
+/**
+ * An app's own icon: at once if it was drawn lately, else drawn off the main thread (N6) with the
+ * fallback meanwhile. Each row used to decode its icon on the main thread as it came into view.
+ */
 @Composable
 fun AppIcon(packageName: String, modifier: Modifier = Modifier, size: Dp = 32.dp, fallback: (@Composable () -> Unit)? = null) {
     val context = LocalContext.current
-    val icon = remember(packageName) {
-        runCatching {
-            context.packageManager.getApplicationIcon(packageName).toBitmap(width = 144, height = 144).asImageBitmap()
-        }.getOrNull()
+    val loaded by produceState(AppIcons.cached(packageName), packageName) {
+        if (value == null) value = withContext(Dispatchers.IO) { AppIcons.load(context, packageName) }
     }
+    val icon = loaded
     if (icon != null) {
         Image(bitmap = icon, contentDescription = null, modifier = modifier.size(size))
     } else if (fallback != null) {

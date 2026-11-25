@@ -1,6 +1,10 @@
 package com.xern.xrnrule.app.data
 
 import android.content.Context
+import android.graphics.Bitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 
 /**
  * The [max] most lately used values, safe from any thread. A value [getOrLoad] can't load isn't
@@ -41,4 +45,20 @@ object AppLabels {
             pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
         }.getOrNull()
     } ?: pkg
+}
+
+/**
+ * App icons, drawn once at [SIDE] px and kept for the most lately shown: each row of the app
+ * picker and each card decoded its icon on the main thread as it came into view (N6). [load] is
+ * for a background thread; [cached] is what a screen can show at once.
+ */
+object AppIcons {
+    const val SIDE = 144
+    private val icons = Lru<String, ImageBitmap>(80)
+
+    fun cached(pkg: String): ImageBitmap? = icons[pkg]
+
+    fun load(context: Context, pkg: String): ImageBitmap? = icons.getOrLoad(pkg) {
+        runCatching { context.packageManager.getApplicationIcon(it).toBitmap(SIDE, SIDE, Bitmap.Config.ARGB_8888).asImageBitmap() }.getOrNull()
+    }
 }

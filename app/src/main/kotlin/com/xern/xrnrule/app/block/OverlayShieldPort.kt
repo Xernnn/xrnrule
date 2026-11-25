@@ -27,6 +27,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.xern.xrnrule.app.data.AppIcons
 import com.xern.xrnrule.app.data.AppLabels
 import com.xern.xrnrule.app.data.HabitSync
 import com.xern.xrnrule.app.data.OemAutostart
@@ -165,12 +166,15 @@ class OverlayShieldPort(
         val browser = otherBrowser?.takeIf { it == foregroundPkg && !appBlocked && !siteBlocked }
         if (!appBlocked && !siteBlocked && browser == null) return null
         if (browser != null) {
+            AppIcons.load(context, browser)
             return Screenful(OverlayUi(subject = appLabel(browser), pkg = browser, isSite = false, block = null, items = emptyList(), useBrowser = homeBrowser()), ofABlock = false)
         }
         val engine = store.engine
         val clock = store.clock
         // Read once a showing: Close and Focus can't open anything while HyperOS's switch is off (S4).
         if (!visible.value) popupsOff = OemAutostart.backgroundPopups(context) == false
+        // Drawn now, off the main thread, so the screen has it the moment it shows (N6).
+        if (appBlocked) AppIcons.load(context, foregroundPkg)
         val blockers = engine.blockersOf(world, foregroundPkg.takeIf { appBlocked }, foregroundSite.takeIf { !appBlocked }, clock)
         val blockerIds = blockers.map { it.id }.toSet()
         val block = BlockTexts.leading(engine, world, blockers, clock)
