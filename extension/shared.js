@@ -184,7 +184,7 @@ self.Xrn = (() => {
   }
 
   /** The corner clock's label for a kind of "left". */
-  const CLOCK_LABEL = { LIMIT: "left today", ROW: "until a break", UNLOCK: "open", OVERRIDE: "bought", BREAK: "break" };
+  const CLOCK_LABEL = { LIMIT: "left today", ROW: "until a break", UNLOCK: "open", OVERRIDE: "bought", BREAK: "break", HOURS: "until blocked" };
 
   const strongClock = (left) => left <= LAST_MS ||
     WARN_AT_MIN.some((min) => left <= min * 60_000 && left > min * 60_000 - STRONG_MS);
@@ -198,6 +198,7 @@ self.Xrn = (() => {
       case "UNLOCK": return `${what} locks again in ${mins}`;
       case "OVERRIDE": return `Your bought time on ${what} ends in ${mins}`;
       case "BREAK": return `Your break ends in ${mins}`;
+      case "HOURS": return `${mins} until ${what} is blocked`;
       default: return `${mins} left on ${what} today`;
     }
   }

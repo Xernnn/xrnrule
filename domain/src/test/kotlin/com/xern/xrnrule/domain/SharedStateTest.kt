@@ -297,6 +297,47 @@ class SharedStateTest {
     }
 
     @Test
+    fun allowance_aGoneDevicesReportsAreDropped() {
+        // Each block kept the reports of two earlier installs, and every reinstall added another.
+        val day = 86_400_000L
+        val today = t - t % day
+        val rows = mapOf(
+            "phone" to AllowanceUse(today, 5),
+            "old-phone" to AllowanceUse(today - 31 * day, 9),
+            "tablet" to AllowanceUse(today - 29 * day, 3),
+        )
+        val merged = merge(null, SharedState(allowance = mapOf("a1" to rows)), SharedState()).allowance.getValue("a1")
+        assertEquals(setOf("phone", "tablet"), merged.keys)
+    }
+
+    @Test
+    fun allowance_aClockAheadDoesntDropTheOthers() {
+        val day = 86_400_000L
+        val today = t - t % day
+        val rows = mapOf("phone" to AllowanceUse(today - 29 * day, 5), "laptop" to AllowanceUse(today + 5 * day, 9))
+        val merged = merge(null, SharedState(allowance = mapOf("a1" to rows)), SharedState()).allowance.getValue("a1")
+        assertEquals(setOf("phone", "laptop"), merged.keys)
+    }
+
+    @Test
+    fun allowance_aGoneDeviceIsDroppedOnceAndForAll() {
+        val server = FakeServer()
+        val clock = FakeClock()
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30L * 60_000)
+        val phone = Device("phone", buildWorld(listOf(block), clock = clock), clock)
+        val laptop = Device("laptop", buildWorld(listOf(block), clock = clock), clock)
+        val gone = clock.startOfLocalDayMs() - 40 * 86_400_000L
+        server.write(SharedState.of(phone.world).let { it.copy(allowance = mapOf("a1" to mapOf("old-phone" to AllowanceUse(gone, 60_000)))) })
+        repeat(2) {
+            phone.sync(server)
+            laptop.sync(server)
+        }
+        assertEquals(setOf("phone", "laptop"), server.state.allowance.getValue("a1").keys)
+        assertFalse("settled", phone.sync(server))
+        assertFalse("settled", laptop.sync(server))
+    }
+
+    @Test
     fun roundTripsThroughJson() {
         val json = Json { encodeDefaults = true }
         val state = SharedState(

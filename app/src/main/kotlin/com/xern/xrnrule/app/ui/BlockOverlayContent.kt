@@ -228,11 +228,29 @@ fun BlockOverlayContent(
                     container = MaterialTheme.colorScheme.onSurface,
                     content = MaterialTheme.colorScheme.surface,
                 )
+                leaveHint(ui)?.let { hint ->
+                    Gap(8)
+                    Text(
+                        hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 if (ui != null && strict) OverrideOffer(ui, onBeginOverride)
             }
         }
     }
 }
+
+/**
+ * Under Close on an app's block screen when HyperOS refuses the screens started from it (S4):
+ * Close can't go home then, but the phone's own home gesture still can. A site's Close doesn't
+ * open anything (the extension steps the tab back), so it says nothing there.
+ */
+internal fun leaveHint(ui: OverlayShieldPort.OverlayUi?): String? =
+    if (ui?.popupsOff == true && !ui.isSite) "Pop-ups off · swipe home" else null
 
 /** The way round, under the way out: quiet on purpose, and it still costs the wait and the sentence. */
 @Composable

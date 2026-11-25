@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.QueryStats
+import androidx.compose.material.icons.outlined.WebAsset
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Security
@@ -98,6 +99,7 @@ import com.xern.xrnrule.app.data.BlocksBackups
 import com.xern.xrnrule.app.data.ClockGuard
 import com.xern.xrnrule.app.data.HabitSync
 import com.xern.xrnrule.app.data.OemAutostart
+import com.xern.xrnrule.app.data.RestartLog
 import com.xern.xrnrule.app.data.SharedSync
 import com.xern.xrnrule.app.data.SharedSyncStatus
 import com.xern.xrnrule.app.data.WorldStore
@@ -193,14 +195,30 @@ data class SettingsSummary(
 fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
     val context = LocalContext.current
     val resume = rememberResumeSignal()
-    val permissions = remember(resume) {
-        AppPermission.entries.map { PermissionState(it.label, permissionIcon(it), it.isGranted(context)) } +
-            listOfNotNull(
-                if (OemAutostart.isKnownOem()) PermissionState("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, OemAutostart.enabled(context)) else null,
-                PermissionState("Automatic date & time", Icons.Outlined.AccessTime, deps.clockGuard.automaticTime()),
-            )
+    // Each row and what tapping it opens.
+    val permissionRows = remember(resume) {
+        AppPermission.entries.map { perm ->
+            PermissionState(perm.label, permissionIcon(perm), perm.isGranted(context)) to { runCatching { context.startActivity(perm.settingsIntent(context)) }; Unit }
+        } + listOfNotNull(
+            if (OemAutostart.isKnownOem()) {
+                PermissionState("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, OemAutostart.enabled(context)) to { OemAutostart.open(context) }
+            } else {
+                null
+            },
+            // HyperOS: without it nothing on a block screen can open a screen (Close, Focus).
+            OemAutostart.backgroundPopups(context)?.let { on ->
+                PermissionState("Pop-ups in the background", Icons.Outlined.WebAsset, on) to { OemAutostart.openOtherPermissions(context) }
+            },
+            PermissionState("Automatic date & time", Icons.Outlined.AccessTime, deps.clockGuard.automaticTime()) to {
+                runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
+                Unit
+            },
+        )
     }
+    val permissions = permissionRows.map { it.first }
     val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
+    // The trace a refused restart leaves (S1): when Android last wouldn't bring the service back.
+    val refused = remember(resume) { RestartLog(context).last() }
     val handPickedZone = remember(resume) { deps.clockGuard.handPickedZone }
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
     val loopStatus = remember(resume) { deps.loop.status() }
@@ -224,6 +242,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
         clockWarnings = listOfNotNull(
             if (clockSkew != 0L) "Clock set ${formatDuration(kotlin.math.abs(clockSkew))} ${if (clockSkew > 0) "ahead" else "back"} by hand" else null,
             handPickedZone?.let { "Time zone ${it.id} picked by hand: blocks use ${deps.clockGuard.zone().id}" },
+            refused?.let { r -> "Restart refused ${formatClockTime(r.atWall)}" + if (r.inARow > 1) " · ${r.inARow}×" else "" },
         ),
         unlocks = RowValue(formatDuration(world.settings.dailyCapMs)),
         habits = RowValue(world.habits.count { !it.archived }.toString()),
@@ -248,14 +267,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
     SettingsContent(
         summary,
         onOpen = onOpen,
-        onPermission = { i ->
-            val perm = AppPermission.entries.getOrNull(i)
-            when {
-                perm != null -> runCatching { context.startActivity(perm.settingsIntent(context)) }
-                OemAutostart.isKnownOem() && i == AppPermission.entries.size -> OemAutostart.open(context)
-                else -> runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
-            }
-        },
+        onPermission = { i -> permissionRows.getOrNull(i)?.second?.invoke() },
         onLoop = { deps.loop.launchIntent()?.let { runCatching { context.startActivity(it) } } },
     )
 }

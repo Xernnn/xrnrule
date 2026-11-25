@@ -139,6 +139,14 @@ test("mmss and warnings read well", () => {
   assert.equal(X.warning("ROW", 5, "YouTube"), "5 minutes until a break from YouTube");
 });
 
+test("blocked hours coming up have a label and a warning of their own, and run down by the clock", () => {
+  // Blocked hours used to be no kind at all: the clock and the warnings counted to the limit instead.
+  assert.equal(X.CLOCK_LABEL.HOURS, "until blocked");
+  assert.equal(X.warning("HOURS", 10, "Videos"), "10 minutes until Videos is blocked");
+  assert.equal(X.warning("HOURS", 1), "1 minute until this site is blocked");
+  assert.ok(!X.USE_KINDS.includes("HOURS"));
+});
+
 test("the manifest loads shared.js before content.js and exposes the block page", () => {
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.content_scripts[0].js, ["shared.js", "content.js"]);

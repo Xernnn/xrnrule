@@ -3,12 +3,21 @@ package com.xern.xrnrule.app.block
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import com.xern.xrnrule.domain.BlockMode
+import com.xern.xrnrule.domain.BlockState
+import com.xern.xrnrule.domain.EnforcementTier
+import com.xern.xrnrule.domain.World
+import com.xern.xrnrule.domain.appliesHere
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Strategy behind the foreground-app signal. Phase A ships [UsageStatsDetector] only (Option C
@@ -37,14 +46,15 @@ interface ForegroundAppDetector {
  * stops collecting while the screen is off (polling then is pure battery drain) and the next
  * collection carries on from where the last one stopped, catching up on everything in between.
  *
- * It polls every [fastPollMs] while [fast] says a block could need covering at once, and only
- * every [slowPollMs] otherwise (no block yet: the site-time log is all that listens).
+ * It polls every [fastPollMs] while [fast] says an app coming to the front could be met by a
+ * block here ([foregroundMatters]), and only every [slowPollMs] otherwise; [fast] turning true
+ * cuts the slow wait short, so nothing that can be blocked waits longer than before (N7).
  */
 class UsageStatsDetector(
     context: Context,
     private val fastPollMs: Long = 300L,
     private val slowPollMs: Long = 2_000L,
-    private val fast: () -> Boolean = { true },
+    private val fast: StateFlow<Boolean> = MutableStateFlow(true),
 ) : ForegroundAppDetector {
 
     private val usm = context.getSystemService(UsageStatsManager::class.java)
@@ -53,7 +63,7 @@ class UsageStatsDetector(
     override val foregroundPackage: Flow<String?> = flow {
         while (true) {
             emit(tracker.poll())
-            delay(if (fast()) fastPollMs else slowPollMs)
+            pollPause(fast, fastPollMs, slowPollMs)
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
@@ -69,22 +79,36 @@ class UsageStatsDetector(
         val out = mutableListOf<ForegroundTracker.Move>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            // Same values: ACTIVITY_RESUMED and ACTIVITY_PAUSED (API 29) renamed MOVE_TO_FOREGROUND
-            // and MOVE_TO_BACKGROUND, which minSdk 26 still needs.
-            val front = when (event.eventType) {
-                UsageEvents.Event.ACTIVITY_RESUMED, @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_FOREGROUND -> true
-                UsageEvents.Event.ACTIVITY_PAUSED, @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_BACKGROUND, ACTIVITY_STOPPED -> false
-                else -> continue
-            }
-            out += ForegroundTracker.Move(event.packageName, event.className, front)
+            ForegroundTracker.moveOf(event.packageName, event.className, event.eventType)?.let(out::add)
         }
         return out
     }
+}
 
-    private companion object {
-        /** UsageEvents.Event.ACTIVITY_STOPPED, API 29; earlier phones never send it. */
-        const val ACTIVITY_STOPPED = 23
-    }
+/**
+ * The wait between two looks at the foreground: [fastMs] while [fast], else up to [slowMs], ended
+ * the moment [fast] turns true (a block enabled, a lockdown started, one arriving from the laptop).
+ */
+suspend fun pollPause(fast: StateFlow<Boolean>, fastMs: Long, slowMs: Long) {
+    if (fast.value) delay(fastMs) else withTimeoutOrNull(slowMs) { fast.first { it } }
+}
+
+/**
+ * N7: whether an app coming to the front could meet a block here, which is when the foreground is
+ * looked at every 300 ms. A block that holds on this phone (I42) with an app or a site to block or
+ * count, unless it's a lockdown that isn't running (only a change to the world starts one); a
+ * habit timer counting in other apps, which counts on any device (I16, I42); or a hardcore block,
+ * which guards the phone's Settings whether it's on or off. With none of these, a look every 2 s
+ * changes nothing that anything here does: the site-time log is all that listens.
+ */
+fun World.foregroundMatters(): Boolean = blocks.any { b ->
+    val here = appliesHere(b)
+    (here && b.enforcementTier == EnforcementTier.HARDCORE && b.state != BlockState.UNLOCKED) ||
+        (b.enabled && b.mode == BlockMode.HABIT && b.trigger.habitPackages.isNotEmpty()) ||
+        (
+            here && b.enabled && (b.mode != BlockMode.LOCKDOWN || b.id in lockdowns) &&
+                (b.targetPackages.isNotEmpty() || b.targetSites.isNotEmpty())
+            )
 }
 
 /**
@@ -161,8 +185,31 @@ class ForegroundTracker(
         customTab = className?.contains("customtabs", ignoreCase = true) == true
     }
 
-    private companion object {
+    companion object {
         /** A minute, then ten, an hour, six, a day, a week. */
-        val FIRST_LOOK_MS = listOf(60_000L, 600_000L, 3_600_000L, 21_600_000L, 86_400_000L, 604_800_000L)
+        private val FIRST_LOOK_MS = listOf(60_000L, 600_000L, 3_600_000L, 21_600_000L, 86_400_000L, 604_800_000L)
+
+        /** UsageEvents.Event.ACTIVITY_RESUMED (API 29), the value MOVE_TO_FOREGROUND had before it. */
+        const val ACTIVITY_RESUMED = 1
+
+        /** UsageEvents.Event.ACTIVITY_PAUSED (API 29), the value MOVE_TO_BACKGROUND had before it. */
+        const val ACTIVITY_PAUSED = 2
+
+        /** UsageEvents.Event.ACTIVITY_STOPPED, API 29; earlier phones never send it. */
+        const val ACTIVITY_STOPPED = 23
+
+        /** UsageEvents.Event.ACTIVITY_DESTROYED (API 29, hidden): sent for an app killed or crashed in front. */
+        const val ACTIVITY_DESTROYED = 24
+
+        /**
+         * One UsageStats event as a move, or null for the kinds that say nothing about the front. An
+         * activity destroyed in front may never send a pause: taken as nothing, it stayed "resumed",
+         * and any look between one app's pause and the next one's resume found it in front again.
+         */
+        fun moveOf(pkg: String, className: String?, eventType: Int): Move? = when (eventType) {
+            ACTIVITY_RESUMED -> Move(pkg, className, front = true)
+            ACTIVITY_PAUSED, ACTIVITY_STOPPED, ACTIVITY_DESTROYED -> Move(pkg, className, front = false)
+            else -> null
+        }
     }
 }

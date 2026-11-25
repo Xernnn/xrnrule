@@ -15,7 +15,7 @@ xrnrule was called xrnhabit until 24 Oct 2026, when it took in
 [xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension that put time limits on
 sites. One set of rules now covers apps and sites on both devices.
 
-Phone app 0.2.20 (build 20), browser extension 2.3.8.
+Phone app 0.7.0 (build 26), browser extension 2.3.11.
 
 ## Screenshots
 

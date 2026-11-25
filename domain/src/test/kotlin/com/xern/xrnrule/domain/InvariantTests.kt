@@ -1320,6 +1320,25 @@ class InvariantTests {
     }
 
     @Test
+    fun i32_aRowInUseIsOnlyBookkeepingUntilItsBreak() {
+        // The row's use was saved every tick: world.json rewritten, with an fsync, once a second.
+        val clock = FakeClock()
+        var world = buildWorld(listOf(rowBlock()), clock = clock, foregroundPkg = "com.target")
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        val before = world.withoutBookkeeping()
+        repeat(30) {
+            clock.advance(1_000)
+            world = engine.reduce(world, BlockEvent.Tick, clock).world
+        }
+        assertEquals(30_000L, world.runs["r1"]!!.ms)
+        assertEquals(before, world.withoutBookkeeping())
+
+        world = ticks(world, clock, 15) // the break starts: that saves at once
+        assertTrue(world.runs["r1"]!!.breakUntilWall > clock.nowWallMs())
+        assertNotEquals(before, world.withoutBookkeeping())
+    }
+
+    @Test
     fun i32_rowCountsAcrossDevices() {
         val block = rowBlock().copy(targetSites = setOf("youtube.com"))
         val (phone, laptop, server) = twoDevices(listOf(block))
@@ -3051,6 +3070,73 @@ class InvariantTests {
         val taken = engine.reduce(world, BlockEvent.StartPause(), clock)
         assertEquals(listOf("break ${Defaults.PAUSE_MS}"), logged(taken, clock))
         assertTrue(logged(engine.reduce(taken.world, BlockEvent.StartPause(), clock), clock).isEmpty())
+    }
+
+    @Test
+    fun i51_aHabitIsLoggedOncePerTickNotAtEveryReEarn() {
+        // Insights counted one habit three to seven times a day: the same unspent tick earned again,
+        // and was logged again, each time its credit's two hours ran out and at midnight.
+        val clock = FakeClock() // 12:00
+        var world = habitWorld(clock, listOf(habit("walk", kind = HabitKind.CHECK)), "c1" to listOf("walk")).copy(habitDayStartHour = 3)
+        var logged = 0
+        fun on(event: BlockEvent) {
+            val out = engine.reduce(world, event, clock)
+            world = out.world
+            logged += out.effects.count { it is Effect.HabitCompleted }
+        }
+        on(BlockEvent.LogHabit("walk", 1))
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        assertEquals(1, logged)
+
+        clock.advance(Defaults.CREDIT_TTL_MS) // 14:00: the credit runs out, the tick earns it again
+        on(BlockEvent.Tick)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        clock.advance(10L * 60 * 60_000) // midnight, still the same habit day (it starts at 3)
+        on(BlockEvent.Tick)
+        on(BlockEvent.UserResetEarned("c1")) // a cancel: the same tick earns it straight back
+        on(BlockEvent.LogHabit("walk", -1)) // unticked and ticked again: the same day's habit
+        on(BlockEvent.LogHabit("walk", 1))
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        assertEquals(1, logged)
+
+        clock.advance(4L * 60 * 60_000) // 04:00: a new habit day, and a new tick
+        on(BlockEvent.Tick)
+        assertEquals(BlockState.ARMED, world.state("c1"))
+        on(BlockEvent.LogHabit("walk", 1))
+        assertEquals(2, logged)
+    }
+
+    @Test
+    fun i51_anotherUnlocksWorthOfAHabitIsLoggedAgain() {
+        val clock = FakeClock()
+        var world = habitWorld(clock, listOf(habit("push", goal = 20)), "c1" to listOf("push"))
+        var logged = 0
+        fun on(event: BlockEvent) {
+            val out = engine.reduce(world, event, clock)
+            world = out.world
+            logged += out.effects.count { it is Effect.HabitCompleted }
+        }
+        on(BlockEvent.LogHabit("push", units(40)))
+        on(BlockEvent.Redeem("c1"))
+        clock.advance(5L * 60_000) // the unlock ends; the second 20 earn the next one
+        on(BlockEvent.Tick)
+        assertEquals(BlockState.EARNED, world.state("c1"))
+        assertEquals(2, logged)
+    }
+
+    @Test
+    fun i51_aTimerOrATaskEarnsAndIsLoggedEveryTime() {
+        val clock = FakeClock()
+        var world = buildWorld(listOf(checklistBlock("c1", ttlMs = 60_000)), mapOf("c1" to items("c1", 1)), clock)
+        var logged = 0
+        repeat(2) {
+            val out = engine.reduce(world, BlockEvent.ToggleChecklistItem("c1-i0", true), clock)
+            world = out.world
+            logged += out.effects.count { it is Effect.HabitCompleted }
+            clock.advance(60_000)
+            world = engine.reduce(world, BlockEvent.Tick, clock).world // runs out: the task is unticked (I10)
+        }
+        assertEquals(2, logged)
     }
 
     // ---- opens and the wait before them (I52, I53) -------------------------------------------

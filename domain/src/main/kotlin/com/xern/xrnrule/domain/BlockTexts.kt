@@ -3,7 +3,6 @@ package com.xern.xrnrule.domain
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
-import java.time.ZoneId
 
 /**
  * A block in words, the same on the phone's card and the laptop's page: how it stands right now,
@@ -87,17 +86,42 @@ object BlockTexts {
             .takeIf { engine.limitHolds(world, block, clock) && engine.overrideRemainingMs(world, block.id, clock) == 0L }
         // Hours are asked about from when the rest lets go: a limit over at midnight frees nothing if hours start then.
         val after = listOfNotNull(breakEnd, limitEnd).maxOrNull() ?: clock.nowWallMs()
-        val hoursEnd = if (engine.inBlockedHours(block, AtClock(after, zone))) {
-            // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
-            val start = Instant.ofEpochMilli(after).atZone(zone).withSecond(0).withNano(0)
-            (1..7 * 24 * 60).asSequence()
-                .map { start.plusMinutes(it.toLong()) }
-                .firstOrNull { t -> !engine.inBlockedHours(block, AtClock(t.toInstant().toEpochMilli(), zone)) }
-                ?.toInstant()?.toEpochMilli()
-        } else {
-            null
-        }
+        val hoursEnd = if (engine.inBlockedHours(block, FixedClock(after, zone))) hoursOverAt(engine, block, after, zone) else null
         return listOfNotNull(hoursEnd, breakEnd, limitEnd).maxOrNull()
+    }
+
+    /**
+     * When blocked hours that hold at [after] are over: the first whole minute after it, up to a
+     * week on, outside them. Windows may follow one another (I30). Only a window's start or end
+     * (at either of a doubled hour's times), a midnight or a clock change can end them, so those
+     * are all it tries; it used to try every minute of the week, up to 10,080 of them, on every
+     * redraw of a block screen.
+     */
+    private fun hoursOverAt(engine: BlockEngine, block: Block, after: Long, zone: java.time.ZoneId): Long? {
+        val hours = block.blockedHours ?: block.schedule.takeIf { block.mode == BlockMode.SCHEDULE } ?: return null
+        val start = Instant.ofEpochMilli(after).atZone(zone).withSecond(0).withNano(0)
+        val from = start.toInstant().toEpochMilli()
+        val to = start.plusMinutes(7L * 24 * 60).toInstant().toEpochMilli()
+        val windows = listOf(hours.activeWindow) + hours.moreWindows.map { it.window }
+        val minutes = (windows.flatMap { listOfNotNull(it?.startMinuteOfDay, it?.endMinuteOfDay) } + 0).toSortedSet()
+        val edges = sortedSetOf<Long>()
+        var date = start.toLocalDate().minusDays(1)
+        val lastDate = Instant.ofEpochMilli(to).atZone(zone).toLocalDate().plusDays(1)
+        while (!date.isAfter(lastDate)) {
+            val midnight = date.atStartOfDay()
+            for (m in minutes) {
+                val local = midnight.plusMinutes(m.toLong()).atZone(zone)
+                edges += local.withEarlierOffsetAtOverlap().toInstant().toEpochMilli()
+                edges += local.withLaterOffsetAtOverlap().toInstant().toEpochMilli()
+            }
+            date = date.plusDays(1)
+        }
+        var change = zone.rules.nextTransition(start.toInstant())
+        while (change != null && change.instant.toEpochMilli() <= to) {
+            edges += change.instant.toEpochMilli()
+            change = zone.rules.nextTransition(change.instant)
+        }
+        return edges.subSet(from + 1, to + 1).firstOrNull { !engine.inBlockedHours(block, FixedClock(it, zone)) }
     }
 
     /** What a block screen leads with for a block held by time: when it's back, and why it isn't now. */
@@ -160,13 +184,6 @@ object BlockTexts {
             .maxByOrNull { freeAtWall(engine, world, it, clock) ?: Long.MAX_VALUE }
             ?: blockers.firstOrNull { it.mode == BlockMode.HABIT && it.state != BlockState.UNLOCKED }
 
-    /** A clock stopped at [wall], to ask the engine about another moment. */
-    private class AtClock(private val wall: Long, private val zone: ZoneId) : Clock {
-        override fun nowMonotonicMs() = 0L
-        override fun nowWallMs() = wall
-        override fun zone() = zone
-    }
-
     /** When a block's hours next begin, from the windows themselves: this runs on every redraw of a card. */
     fun nextHoursAtWall(block: Block, clock: Clock): Long? {
         val hours = block.blockedHours ?: block.schedule.takeIf { block.mode == BlockMode.SCHEDULE } ?: return null
@@ -211,10 +228,18 @@ object BlockTexts {
         val session = world.sessions[block.id]
         // A block the break doesn't lift is open for its own reason, not because of the break.
         val pause = if (engine.pausable(block, clock)) engine.pauseRemainingMs(world, clock) else 0
+        // Blocked hours coming before the unlock, the limit or the row runs out are what closes it.
+        val hoursIn = engine.hoursBeginInMs(world, block, clock)
+        val runsOutIn = listOfNotNull(
+            session?.leftMs(clock),
+            block.dailyAllowanceMs.takeIf { block.hasLimit && it > 0 }?.let { (it - engine.allowanceUsedMs(world, block, clock)).coerceAtLeast(0) },
+            block.sessionMs.takeIf { block.hasRowRule }?.let { (it - engine.rowUsedMs(world, block, clock)).coerceAtLeast(0) },
+        ).minOrNull()
         return when {
             block.mode == BlockMode.LOCKDOWN -> Headline("Lockdown over", Tone.OFF)
             pause > 0 -> open("Open · break ends in ${duration(pause)}")
             bought > 0 -> open("Open · ${duration(bought)} bought")
+            hoursIn != null && (runsOutIn == null || hoursIn <= runsOutIn) -> open("Open · blocks at ${clockTime(clock.nowWallMs() + hoursIn, clock)}")
             session != null && session.selfPaced -> open("Open · ${duration(session.leftMs(clock))} of use left")
             session != null -> open("Open · ${duration(session.leftMs(clock))} left")
             block.hasLimit && limitLeft(engine, world, block, clock) != null -> open("Open · ${limitLeft(engine, world, block, clock)}")

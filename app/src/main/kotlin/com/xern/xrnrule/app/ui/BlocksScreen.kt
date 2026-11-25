@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Check
@@ -71,6 +72,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.InstalledApps
+import com.xern.xrnrule.app.data.OemAutostart
+import com.xern.xrnrule.app.data.RestartIssue
+import com.xern.xrnrule.app.data.RestartLog
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
@@ -120,6 +124,14 @@ fun BlocksScreen(
     }
     // With nothing to block yet, the first-run page lists these calmly instead.
     val bannerShown = missing.isNotEmpty() && world.blocks.isNotEmpty()
+    // What keeps xrnrule from coming back by itself after a kill or a reboot (S1): HyperOS turns
+    // Autostart off at every update. And the last time Android refused to bring it back.
+    val hasBlocks = world.blocks.isNotEmpty()
+    val restartIssues = remember(resume, hasBlocks) {
+        RestartIssue.of(hasBlocks, OemAutostart.enabled(context), AppPermission.BATTERY_OPTIMIZATION.isGranted(context))
+    }
+    val refused = remember(resume) { RestartLog(context).recent(System.currentTimeMillis()) }
+    val restartShown = hasBlocks && (restartIssues.isNotEmpty() || refused != null)
     var loosen by remember { mutableStateOf<LoosenRequest?>(null) }
     var confirmDelete by remember { mutableStateOf<Block?>(null) }
     var breakUsed by remember { mutableStateOf(false) }
@@ -138,7 +150,7 @@ fun BlocksScreen(
         val id = linked ?: return@LaunchedEffect
         val index = world.blocks.indexOfFirst { it.id == id }
         if (index >= 0) {
-            val at = index + 1 + listOf(bannerShown, pauseLeft > 0, updateReady != null).count { it }
+            val at = index + 1 + listOf(bannerShown, restartShown, pauseLeft > 0, updateReady != null).count { it }
             // Just opened, the list hasn't been laid out yet, and a scroll then goes nowhere.
             snapshotFlow { list.layoutInfo.totalItemsCount }.first { it > at }
             list.animateScrollToItem(at)
@@ -194,6 +206,17 @@ fun BlocksScreen(
                 item {
                     PermissionBanner(missing) {
                         runCatching { context.startActivity(missing.first().settingsIntent(context)) }
+                    }
+                }
+            }
+            if (restartShown) {
+                item {
+                    RestartBanner(restartIssues, refused) { issue ->
+                        when (issue) {
+                            RestartIssue.AUTOSTART_OFF -> runCatching { OemAutostart.open(context) }
+                            RestartIssue.BATTERY_OPTIMISED ->
+                                runCatching { context.startActivity(AppPermission.BATTERY_OPTIMIZATION.settingsIntent(context)) }
+                        }
                     }
                 }
             }
@@ -294,6 +317,36 @@ private fun PermissionBanner(missing: List<AppPermission>, onClick: () -> Unit) 
                 "Your blocks can't block anything until it's back on. Tap to fix.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.88f),
+            )
+        }
+    }
+}
+
+/** Amber, near the top: blocking works now, but won't come back by itself if xrnrule is stopped. */
+@Composable
+private fun RestartBanner(issues: List<RestartIssue>, refused: RestartLog.Refusal?, onFix: (RestartIssue) -> Unit) {
+    val amber = LocalKinds.current.limit
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(amber.fill)
+            .padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+    ) {
+        issues.forEach { issue ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.RocketLaunch, contentDescription = null, tint = amber.color, modifier = Modifier.size(20.dp))
+                WGap(12)
+                Text(issue.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { onFix(issue) }) { Text(issue.action) }
+            }
+        }
+        refused?.let { r ->
+            Text(
+                "Restart refused ${formatClockTime(r.atWall)}" + if (r.inARow > 1) " · ${r.inARow}×" else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 10.dp),
             )
         }
     }

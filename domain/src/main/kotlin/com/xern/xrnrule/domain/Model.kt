@@ -107,6 +107,8 @@ object Defaults {
     const val OVERRIDE_CLAIM_WINDOW_MS = 10L * 60 * 1000
     /** I37: the focus timer's "Break" button. */
     const val FOCUS_BREAK_MS = 5L * 60 * 1000
+    /** §2.4: a device whose use reports are this far behind the newest is gone, and they're dropped. */
+    const val GONE_DEVICE_MS = 30L * 24 * 60 * 60 * 1000
 }
 
 /** When a habit reminds: [days] packs Monday..Sunday into bits 0..6, as Loop does (127 = every day). */
@@ -611,6 +613,11 @@ data class World(
     val emergencyLog: Map<String, Long> = emptyMap(),
     /** I51: the last target the shield met here, so a flicker is logged once. Device-local. */
     val lastBlocked: LastBlocked? = null,
+    /**
+     * I51: by block, the unspent habit entries its last logged habit came from, so earning again
+     * from the same ones (a credit run out, midnight, a cancel) isn't logged again. Device-local.
+     */
+    val habitsReported: Map<String, String> = emptyMap(),
     /** I52, I53: what's open here, by block. Device-local. */
     val openRuns: Map<String, OpenRun> = emptyMap(),
     /** An override waiting out its delay here (I34). */
