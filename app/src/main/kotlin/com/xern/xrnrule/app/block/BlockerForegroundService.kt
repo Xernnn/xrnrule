@@ -39,6 +39,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
@@ -48,6 +49,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -166,9 +168,10 @@ class BlockerForegroundService : LifecycleService() {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
 
-        val detector = UsageStatsDetector(this) {
-            container.store.world.value.blocks.any { it.enabled }
-        }
+        // Every 300 ms while an app coming to the front could meet a block here, else every 2 s (N7).
+        val fast = container.store.world.map { it.foregroundMatters() }
+            .stateIn(lifecycleScope, SharingStarted.Eagerly, container.store.world.value.foregroundMatters())
+        val detector = UsageStatsDetector(this, fast = fast)
         usageDetector = detector
 
         // 1. cold-start rebuild (I8), done before anything feeds the engine (see WorldStore.coldStart);
