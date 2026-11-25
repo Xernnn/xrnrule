@@ -86,17 +86,42 @@ object BlockTexts {
             .takeIf { engine.limitHolds(world, block, clock) && engine.overrideRemainingMs(world, block.id, clock) == 0L }
         // Hours are asked about from when the rest lets go: a limit over at midnight frees nothing if hours start then.
         val after = listOfNotNull(breakEnd, limitEnd).maxOrNull() ?: clock.nowWallMs()
-        val hoursEnd = if (engine.inBlockedHours(block, FixedClock(after, zone))) {
-            // Windows may follow one another (I30): walk forward a minute at a time, up to a week.
-            val start = Instant.ofEpochMilli(after).atZone(zone).withSecond(0).withNano(0)
-            (1..7 * 24 * 60).asSequence()
-                .map { start.plusMinutes(it.toLong()) }
-                .firstOrNull { t -> !engine.inBlockedHours(block, FixedClock(t.toInstant().toEpochMilli(), zone)) }
-                ?.toInstant()?.toEpochMilli()
-        } else {
-            null
-        }
+        val hoursEnd = if (engine.inBlockedHours(block, FixedClock(after, zone))) hoursOverAt(engine, block, after, zone) else null
         return listOfNotNull(hoursEnd, breakEnd, limitEnd).maxOrNull()
+    }
+
+    /**
+     * When blocked hours that hold at [after] are over: the first whole minute after it, up to a
+     * week on, outside them. Windows may follow one another (I30). Only a window's start or end
+     * (at either of a doubled hour's times), a midnight or a clock change can end them, so those
+     * are all it tries; it used to try every minute of the week, up to 10,080 of them, on every
+     * redraw of a block screen.
+     */
+    private fun hoursOverAt(engine: BlockEngine, block: Block, after: Long, zone: java.time.ZoneId): Long? {
+        val hours = block.blockedHours ?: block.schedule.takeIf { block.mode == BlockMode.SCHEDULE } ?: return null
+        val start = Instant.ofEpochMilli(after).atZone(zone).withSecond(0).withNano(0)
+        val from = start.toInstant().toEpochMilli()
+        val to = start.plusMinutes(7L * 24 * 60).toInstant().toEpochMilli()
+        val windows = listOf(hours.activeWindow) + hours.moreWindows.map { it.window }
+        val minutes = (windows.flatMap { listOfNotNull(it?.startMinuteOfDay, it?.endMinuteOfDay) } + 0).toSortedSet()
+        val edges = sortedSetOf<Long>()
+        var date = start.toLocalDate().minusDays(1)
+        val lastDate = Instant.ofEpochMilli(to).atZone(zone).toLocalDate().plusDays(1)
+        while (!date.isAfter(lastDate)) {
+            val midnight = date.atStartOfDay()
+            for (m in minutes) {
+                val local = midnight.plusMinutes(m.toLong()).atZone(zone)
+                edges += local.withEarlierOffsetAtOverlap().toInstant().toEpochMilli()
+                edges += local.withLaterOffsetAtOverlap().toInstant().toEpochMilli()
+            }
+            date = date.plusDays(1)
+        }
+        var change = zone.rules.nextTransition(start.toInstant())
+        while (change != null && change.instant.toEpochMilli() <= to) {
+            edges += change.instant.toEpochMilli()
+            change = zone.rules.nextTransition(change.instant)
+        }
+        return edges.subSet(from + 1, to + 1).firstOrNull { !engine.inBlockedHours(block, FixedClock(it, zone)) }
     }
 
     /** What a block screen leads with for a block held by time: when it's back, and why it isn't now. */

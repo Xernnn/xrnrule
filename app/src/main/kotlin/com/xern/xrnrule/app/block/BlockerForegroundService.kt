@@ -17,6 +17,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.data.AppContainer
+import com.xern.xrnrule.app.data.AppLabels
 import com.xern.xrnrule.app.data.OemAutostart
 import com.xern.xrnrule.app.data.RestartLog
 import com.xern.xrnrule.app.data.AppPermission
@@ -40,10 +41,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -196,15 +200,23 @@ class BlockerForegroundService : LifecycleService() {
 
         // 4. re-render the overlay (and the hardcore Settings guard) whenever the world or the
         //    foreground changes; keep the status notification in step
+        //    The block screen and the status line are worked out off the main thread (N5): this ran
+        //    once a second while anything was in use. Only putting them up is left to it.
         lifecycleScope.launch {
             combine(container.store.world, foreground, shieldFront, otherBrowser) { world, fg, shown, other -> Render(world, fg, shown, other) }
-                .collect { (world, fg, shown, other) ->
-                    overlay.render(world, shown.pkg, shown.site, other, awake = awake.value)
-                    settingsGuard.render(fg.pkg, world)
-                    updateCornerClock()
+                .conflate()
+                .map { r ->
+                    val screen = overlay.model(r.world, r.shown.pkg, r.shown.site, r.other, awake = awake.value)
                     // The app in front with no block screen over it: what runs out on it leads the line.
-                    val front = fg.pkg?.takeIf { !overlay.visible.value }
-                    notifications.updateStatus(notifications.status(world, container.engine, container.clock, front))
+                    val front = r.fg.pkg?.takeIf { screen == null }
+                    Triple(r, screen, notifications.status(r.world, container.engine, container.clock, front))
+                }
+                .flowOn(Dispatchers.Default)
+                .collect { (r, screen, status) ->
+                    overlay.show(screen)
+                    settingsGuard.render(r.fg.pkg, r.world)
+                    updateCornerClock()
+                    notifications.updateStatus(status)
                 }
         }
 
@@ -418,9 +430,7 @@ class BlockerForegroundService : LifecycleService() {
         super.onDestroy()
     }
 
-    private fun appLabel(pkg: String): String = runCatching {
-        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-    }.getOrDefault(pkg)
+    private fun appLabel(pkg: String): String = AppLabels.of(this, pkg)
 
     private fun overrideText(reason: OverrideRejection): String = when (reason) {
         OverrideRejection.WRONG_PHRASE -> "That isn't the sentence. Type it exactly."

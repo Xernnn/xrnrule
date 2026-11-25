@@ -27,6 +27,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.xern.xrnrule.app.data.AppLabels
 import com.xern.xrnrule.app.data.HabitSync
 import com.xern.xrnrule.app.data.OemAutostart
 import com.xern.xrnrule.app.data.SharedSync
@@ -130,6 +131,8 @@ class OverlayShieldPort(
         lost = { s -> s.detached },
     )
     private var audioFocus: AudioFocusRequest? = null
+
+    @Volatile
     private var popupsOff = false
     private val tries = TriesToday(context)
 
@@ -146,46 +149,46 @@ class OverlayShieldPort(
         this.plan = plan
     }
 
+    /** What [show] puts up: the screen, and whether it's a block's (one a sync can lift). */
+    data class Screenful(val ui: OverlayUi, val ofABlock: Boolean)
+
     /**
+     * What the block screen shows for this front, or null for none. Worked out off the main thread
+     * (N5): it asks the engine which blocks hold and until when, and PackageManager for names.
      * [otherBrowser]: a browser in front that can't block sites (I49). [awake]: false while the
      * screen is off and the block screen is only held up for when it comes back on, which isn't a try.
      */
-    fun render(world: World, foregroundPkg: String?, foregroundSite: String?, otherBrowser: String? = null, awake: Boolean = true) {
+    fun model(world: World, foregroundPkg: String?, foregroundSite: String?, otherBrowser: String? = null, awake: Boolean = true): Screenful? {
         val current = plan
         val appBlocked = foregroundPkg != null && foregroundPkg in current.blockedPackages
         val siteBlocked = !appBlocked && current.covers(null, foregroundSite)
         val browser = otherBrowser?.takeIf { it == foregroundPkg && !appBlocked && !siteBlocked }
-        if (!appBlocked && !siteBlocked && browser == null) {
-            hide()
-            return
-        }
+        if (!appBlocked && !siteBlocked && browser == null) return null
         if (browser != null) {
-            uiState.value = OverlayUi(subject = appLabel(browser), pkg = browser, isSite = false, block = null, items = emptyList(), useBrowser = homeBrowser())
-            show()
-            keepScreenOn(false)
-            return
+            return Screenful(OverlayUi(subject = appLabel(browser), pkg = browser, isSite = false, block = null, items = emptyList(), useBrowser = homeBrowser()), ofABlock = false)
         }
         val engine = store.engine
         val clock = store.clock
         // Read once a showing: Close and Focus can't open anything while HyperOS's switch is off (S4).
-        if (!window.shown) popupsOff = OemAutostart.backgroundPopups(context) == false
+        if (!visible.value) popupsOff = OemAutostart.backgroundPopups(context) == false
         val blockers = engine.blockersOf(world, foregroundPkg.takeIf { appBlocked }, foregroundSite.takeIf { !appBlocked }, clock)
         val blockerIds = blockers.map { it.id }.toSet()
         val block = BlockTexts.leading(engine, world, blockers, clock)
         val pending = world.pendingOverride?.takeIf { it.blockIds == blockerIds }
-        val subject = if (appBlocked) appLabel(foregroundPkg!!) else Sites.hostOf(foregroundSite!!)
-        uiState.value = OverlayUi(
+        val subject = if (appBlocked) appLabel(foregroundPkg) else Sites.hostOf(foregroundSite!!)
+        val reason = block?.let { engine.blockReason(world, it, clock) }
+        val ui = OverlayUi(
             subject = subject,
             // I53: the pause before an app opens isn't a try at getting past a block.
             triesToday = when {
-                block?.let { engine.blockReason(world, it, clock) } == BlockReason.WAIT -> 0
+                reason == BlockReason.WAIT -> 0
                 awake -> tries.count(subject)
                 else -> tries.peek(subject)
             },
             pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,
-            reason = block?.let { engine.blockReason(world, it, clock) },
+            reason = reason,
             usedToday = block?.let { engine.usedToday(world, it, clock) } == true,
             items = block?.let { world.items(it.id) }.orEmpty(),
             habitAppLabel = block?.trigger?.habitPackages
@@ -209,14 +212,31 @@ class OverlayShieldPort(
             overrideWaitMs = world.settings.overrideWaitMs,
             popupsOff = popupsOff,
         )
-        // Hitting the shield asks the habit server, so a tick made elsewhere is caught now rather
-        // than at the next minute's check.
-        if (!window.shown && showsHabitItem) habits.request()
-        // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
-        if (!window.shown) shared.request()
-        show()
-        keepScreenOn(uiState.value?.let { it.timerRunning || it.overrideReadyAtElapsed != null } == true)
+        return Screenful(ui, ofABlock = true)
     }
+
+    /** On the main thread: puts [screen] up, or takes the block screen down for null. */
+    fun show(screen: Screenful?) {
+        if (screen == null) {
+            hide()
+            return
+        }
+        val ui = screen.ui
+        uiState.value = ui
+        if (screen.ofABlock) {
+            // Hitting the shield asks the habit server, so a tick made elsewhere is caught now rather
+            // than at the next minute's check.
+            if (!window.shown && showsHabitItem) habits.request()
+            // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
+            if (!window.shown) shared.request()
+        }
+        show()
+        keepScreenOn(ui.timerRunning || ui.overrideReadyAtElapsed != null)
+    }
+
+    /** [model] and [show] in one, on the main thread. */
+    fun render(world: World, foregroundPkg: String?, foregroundSite: String?, otherBrowser: String? = null, awake: Boolean = true) =
+        show(model(world, foregroundPkg, foregroundSite, otherBrowser, awake))
 
     /**
      * The screen stays on only while something is counting on it: a wait timer stops with the
@@ -384,10 +404,7 @@ class OverlayShieldPort(
         _visible.value = false
     }
 
-    private fun appLabel(pkg: String): String = runCatching {
-        val pm = context.packageManager
-        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-    }.getOrDefault(pkg)
+    private fun appLabel(pkg: String): String = AppLabels.of(context, pkg)
 
     private fun overlayType(): Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
