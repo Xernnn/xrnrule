@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.xern.xrnrule.app.R
+import com.xern.xrnrule.app.data.OemAutostart
 import com.xern.xrnrule.app.ui.AppLinks
 import com.xern.xrnrule.app.ui.MainActivity
 import com.xern.xrnrule.app.ui.formatClockTime
@@ -170,9 +171,12 @@ class Notifications(private val context: Context) {
         nm.notify(STATUS_ID, buildStatus(status))
     }
 
-    /** [tap] opens the app unless it says otherwise (an update's install confirmation). */
-    /** [gone]: takes itself away after this long, for what's only true for a moment. */
-    fun alert(id: Int, title: String, text: String, tap: PendingIntent = openApp(), gone: Long = 0) {
+    /**
+     * [tap] opens the app unless it says otherwise (an update's install confirmation). [gone]: takes
+     * itself away after this long, for what's only true for a moment. [ongoing]: stays until it's
+     * cancelled, for what has to be fixed.
+     */
+    fun alert(id: Int, title: String, text: String, tap: PendingIntent = openApp(), gone: Long = 0, ongoing: Boolean = false) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setTimeoutAfter(gone)
             .setContentTitle(title)
@@ -181,11 +185,24 @@ class Notifications(private val context: Context) {
             .setSmallIcon(R.drawable.ic_stat_xrnrule)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
+            .setAutoCancel(!ongoing)
+            .setOngoing(ongoing)
             .setContentIntent(tap)
             .build()
         nm.notify(id, notification)
     }
+
+    /**
+     * HyperOS turns Autostart off at every install, a self-update included, and then nothing brings
+     * xrnrule back after a kill or a reboot. Stays until it's back on (S1).
+     */
+    fun autostartOff() = alert(
+        ALERT_AUTOSTART_OFF,
+        "Autostart off",
+        "xrnrule can't come back by itself after a restart. Tap to turn it on.",
+        tap = OemAutostart.fixIt(context),
+        ongoing = true,
+    )
 
     fun cancel(id: Int) = nm.cancel(id)
 

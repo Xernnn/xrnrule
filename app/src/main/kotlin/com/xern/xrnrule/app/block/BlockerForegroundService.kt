@@ -18,6 +18,7 @@ import androidx.work.WorkManager
 import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.data.AppContainer
 import com.xern.xrnrule.app.data.OemAutostart
+import com.xern.xrnrule.app.data.RestartLog
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.isGranted
 import android.os.SystemClock
@@ -127,6 +128,8 @@ class BlockerForegroundService : LifecycleService() {
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
+        running = true
+        RestartLog(this).started()
         val container = (application as XrnruleApp).container
         notifications = Notifications(this).also { it.createChannels() }
 
@@ -364,12 +367,7 @@ class BlockerForegroundService : LifecycleService() {
         }
 
         if (autostartOff) {
-            notifications.alert(
-                Notifications.ALERT_AUTOSTART_OFF,
-                "Autostart is off",
-                "The phone turned it off, so xrnrule may not come back if it's stopped. Tap to turn it on.",
-                tap = OemAutostart.fixIt(this),
-            )
+            notifications.autostartOff()
         } else {
             notifications.cancel(Notifications.ALERT_AUTOSTART_OFF)
         }
@@ -410,6 +408,7 @@ class BlockerForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        running = false
         cornerClock.hide()
         overlay.dispose()
         unregisterReceiver(screenReceiver)
@@ -502,8 +501,15 @@ class BlockerForegroundService : LifecycleService() {
                 context.startForegroundService(intent)
                 true
             } catch (e: IllegalStateException) {
+                // Only a refusal while it's down matters: then nothing blocks until the app is opened (S1).
+                if (!running) RestartLog(context).refused(System.currentTimeMillis())
                 false
             }
         }
+
+        /** The service is up in this process. */
+        @Volatile
+        var running = false
+            private set
     }
 }

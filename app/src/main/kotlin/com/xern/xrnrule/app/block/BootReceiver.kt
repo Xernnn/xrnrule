@@ -17,6 +17,8 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             -> BlockerForegroundService.start(context)
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                // HyperOS turned it off with this install: say so now, whether or not the service gets going (S1).
+                if (OemAutostart.enabled(context) == false) Notifications(context).also { it.createChannels() }.autostartOff()
                 // Where the service can't see autostart for itself, one reminder per update.
                 if (OemAutostart.isKnownOem() && OemAutostart.enabled(context) == null) {
                     Notifications(context).alert(

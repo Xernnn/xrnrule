@@ -99,6 +99,7 @@ import com.xern.xrnrule.app.data.BlocksBackups
 import com.xern.xrnrule.app.data.ClockGuard
 import com.xern.xrnrule.app.data.HabitSync
 import com.xern.xrnrule.app.data.OemAutostart
+import com.xern.xrnrule.app.data.RestartLog
 import com.xern.xrnrule.app.data.SharedSync
 import com.xern.xrnrule.app.data.SharedSyncStatus
 import com.xern.xrnrule.app.data.WorldStore
@@ -216,6 +217,8 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
     }
     val permissions = permissionRows.map { it.first }
     val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
+    // The trace a refused restart leaves (S1): when Android last wouldn't bring the service back.
+    val refused = remember(resume) { RestartLog(context).last() }
     val handPickedZone = remember(resume) { deps.clockGuard.handPickedZone }
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
     val loopStatus = remember(resume) { deps.loop.status() }
@@ -239,6 +242,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
         clockWarnings = listOfNotNull(
             if (clockSkew != 0L) "Clock set ${formatDuration(kotlin.math.abs(clockSkew))} ${if (clockSkew > 0) "ahead" else "back"} by hand" else null,
             handPickedZone?.let { "Time zone ${it.id} picked by hand: blocks use ${deps.clockGuard.zone().id}" },
+            refused?.let { r -> "Restart refused ${formatClockTime(r.atWall)}" + if (r.inARow > 1) " · ${r.inARow}×" else "" },
         ),
         unlocks = RowValue(formatDuration(world.settings.dailyCapMs)),
         habits = RowValue(world.habits.count { !it.archived }.toString()),
