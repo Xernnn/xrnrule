@@ -611,6 +611,11 @@ data class World(
     val emergencyLog: Map<String, Long> = emptyMap(),
     /** I51: the last target the shield met here, so a flicker is logged once. Device-local. */
     val lastBlocked: LastBlocked? = null,
+    /**
+     * I51: by block, the unspent habit entries its last logged habit came from, so earning again
+     * from the same ones (a credit run out, midnight, a cancel) isn't logged again. Device-local.
+     */
+    val habitsReported: Map<String, String> = emptyMap(),
     /** I52, I53: what's open here, by block. Device-local. */
     val openRuns: Map<String, OpenRun> = emptyMap(),
     /** An override waiting out its delay here (I34). */

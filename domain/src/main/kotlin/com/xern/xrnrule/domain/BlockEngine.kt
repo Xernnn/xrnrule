@@ -953,11 +953,28 @@ class BlockEngine {
             expiresAtWall = nowWall + block.reward.creditTtlMs, // I1 (wall clock, survives reboot)
             amountMs = block.reward.unlockDurationMs,
         )
-        effects += Effect.HabitCompleted(block.id)
+        // I51: a habit is logged once per tick, not again each time the same unspent entries earn.
+        val from = habitsEarnedFrom(world, block, clock)
+        if (from == null || world.habitsReported[block.id] != from) effects += Effect.HabitCompleted(block.id)
         return world.copy(
             blocks = world.blocks.replace(block.id) { it.copy(state = BlockState.EARNED) },
             credits = world.credits + (block.id to credit),
+            habitsReported = if (from == null) world.habitsReported else world.habitsReported + (block.id to from),
         )
+    }
+
+    /**
+     * I51: what earned [block], when it was its habit items alone: each done one with its day and
+     * what of that day it had spent. The same again is a re-earn from entries already logged; a new
+     * tick, a new day or a spent unlock make it differ. Null when a timer or an item ticked here
+     * earned it: those reset on the way back to ARMED (I10), so each earn is new work.
+     */
+    private fun habitsEarnedFrom(world: World, block: Block, clock: Clock): String? {
+        val type = block.trigger.type
+        if (type == TriggerType.TIMER || (type == TriggerType.COMBINED && timerMet(world.progress[block.id], block))) return null
+        val done = world.items(block.id).filter { it.done }
+        if (done.isEmpty() || done.any { it.habitId == null }) return null
+        return done.map { item -> itemDay(world, item, clock).let { day -> "${item.id}@$day+${item.spentOn(day)}" } }.sorted().joinToString(",")
     }
 
     /** Every path back to ARMED resets the habit window and the checklist (I10). */
@@ -1011,6 +1028,8 @@ class BlockEngine {
         }
         val liveRuns = w.runs.filterKeys { w.block(it)?.hasRowRule == true }
         if (liveRuns.size != w.runs.size) w = w.copy(runs = liveRuns)
+        val reported = w.habitsReported.filterKeys { w.block(it) != null }
+        if (reported.size != w.habitsReported.size) w = w.copy(habitsReported = reported)
 
         // I23: linked items from before the habit list moved here are habit items now.
         if (w.checklist.values.any { items -> items.any { it.externalHabitId != null } }) {
