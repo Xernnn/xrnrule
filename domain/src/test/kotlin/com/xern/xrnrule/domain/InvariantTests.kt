@@ -1320,6 +1320,25 @@ class InvariantTests {
     }
 
     @Test
+    fun i32_aRowInUseIsOnlyBookkeepingUntilItsBreak() {
+        // The row's use was saved every tick: world.json rewritten, with an fsync, once a second.
+        val clock = FakeClock()
+        var world = buildWorld(listOf(rowBlock()), clock = clock, foregroundPkg = "com.target")
+        world = engine.reduce(world, BlockEvent.Tick, clock).world
+        val before = world.withoutBookkeeping()
+        repeat(30) {
+            clock.advance(1_000)
+            world = engine.reduce(world, BlockEvent.Tick, clock).world
+        }
+        assertEquals(30_000L, world.runs["r1"]!!.ms)
+        assertEquals(before, world.withoutBookkeeping())
+
+        world = ticks(world, clock, 15) // the break starts: that saves at once
+        assertTrue(world.runs["r1"]!!.breakUntilWall > clock.nowWallMs())
+        assertNotEquals(before, world.withoutBookkeeping())
+    }
+
+    @Test
     fun i32_rowCountsAcrossDevices() {
         val block = rowBlock().copy(targetSites = setOf("youtube.com"))
         val (phone, laptop, server) = twoDevices(listOf(block))

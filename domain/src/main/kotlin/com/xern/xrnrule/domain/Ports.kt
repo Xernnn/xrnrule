@@ -182,4 +182,6 @@ fun World.withoutBookkeeping(): World = copy(
     foregroundSite = null,
     backgroundSites = emptySet(),
     openRuns = emptyMap(), // moves every tick; the opens they add up to stay, and save at once
+    // I32: a row's use moves every tick too; the break it starts must save at once, so it stays.
+    runs = runs.mapValues { (_, r) -> r.copy(ms = 0, lastActiveWall = 0) },
 )
