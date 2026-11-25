@@ -21,6 +21,13 @@ interface Clock {
     fun zone(): ZoneId
 }
 
+/** A clock stopped at [wall], to ask the engine about another moment. */
+internal class FixedClock(private val wall: Long, private val zone: ZoneId) : Clock {
+    override fun nowMonotonicMs() = 0L
+    override fun nowWallMs() = wall
+    override fun zone() = zone
+}
+
 fun Clock.localDate(): LocalDate = Instant.ofEpochMilli(nowWallMs()).atZone(zone()).toLocalDate()
 
 fun Clock.epochDay(): Long = localDate().toEpochDay()
@@ -105,6 +112,8 @@ enum class ClockKind {
     OVERRIDE,
     /** The daily break (I25); runs down by the clock. */
     BREAK,
+    /** Blocked hours, or a SCHEDULE block's schedule, beginning; comes by the clock. */
+    HOURS,
 }
 
 /** [blockId]: the block it runs out on (null for the daily break, which is everyone's). */

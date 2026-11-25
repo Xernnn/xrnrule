@@ -12,6 +12,11 @@ import java.time.Instant
  */
 class BlockEngine {
 
+    companion object {
+        /** How far ahead [timeLeft] counts down to blocked hours: a clock of days says nothing. */
+        const val HOURS_AHEAD_MS = 24L * 60 * 60 * 1000
+    }
+
     fun reduce(world: World, event: BlockEvent, clock: Clock): Outcome {
         val effects = mutableListOf<Effect>()
 
@@ -283,8 +288,9 @@ class BlockEngine {
         }
 
     /**
-     * What runs out first on an open app or site, for the browser's corner clock: today's limit,
-     * the row rule, a habit unlock, bought minutes or the daily break. Null when nothing meters it.
+     * What runs out first on an open app or site, for the corner clocks and their warnings: today's
+     * limit, the row rule, a habit unlock, bought minutes, the daily break, or the time before
+     * blocked hours (a SCHEDULE block's schedule) begin. Null when nothing meters it.
      */
     fun timeLeft(world: World, pkg: String?, site: String?, clock: Clock): TimeLeft? {
         val covering = world.blocks.filter { it.enabled && world.appliesHere(it) && covers(it, pkg, site) }
@@ -292,6 +298,7 @@ class BlockEngine {
         val left = mutableListOf<TimeLeft>()
         for (b in covering) {
             val bought = overrideRemainingMs(world, b.id, clock)
+            hoursBeginInMs(world, b, clock)?.let { left += TimeLeft(it, ClockKind.HOURS, b.id) }
             if (bought > 0 && inBlockedHours(b, clock)) left += TimeLeft(bought, ClockKind.OVERRIDE, b.id)
             if (b.hasLimit && scheduleActive(b, clock)) {
                 val spent = dailyLimitReached(world, b, clock)
@@ -312,6 +319,22 @@ class BlockEngine {
         val pause = pauseRemainingMs(world, clock)
         if (pause > 0 && blockers(world.copy(pause = null), covering, clock).any { pausable(it, clock) }) left += TimeLeft(pause, ClockKind.BREAK)
         return left.minByOrNull { it.ms }
+    }
+
+    /**
+     * How long until [block]'s blocked hours (a SCHEDULE block's schedule) begin and close what is
+     * open now; null inside them (bought minutes have their own clock there), or when they're more
+     * than [HOURS_AHEAD_MS] off. A break the block is under (I25) or minutes bought past it (I34)
+     * hold them off until they end, so it counts to whichever is later.
+     */
+    fun hoursBeginInMs(world: World, block: Block, clock: Clock): Long? {
+        if (block.mode == BlockMode.LOCKDOWN || inBlockedHours(block, clock)) return null
+        val at = BlockTexts.nextHoursAtWall(block, clock) ?: return null
+        val now = clock.nowWallMs()
+        // A window that never holds (start and end the same) begins nothing.
+        if (at - now > HOURS_AHEAD_MS || !inBlockedHours(block, FixedClock(at, clock.zone()))) return null
+        val pause = if (pausable(block, clock)) pauseRemainingMs(world, clock) else 0
+        return maxOf(at - now, pause, overrideRemainingMs(world, block.id, clock))
     }
 
     /** I21: monotonic countdown, so moving the wall clock can't shorten it. */

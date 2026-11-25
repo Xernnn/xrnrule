@@ -188,7 +188,9 @@ class BlockerForegroundService : LifecycleService() {
                     overlay.render(world, fg.pkg, fg.site, other)
                     settingsGuard.render(fg.pkg, world)
                     updateCornerClock()
-                    notifications.updateStatus(notifications.status(world, container.engine, container.clock))
+                    // The app in front with no block screen over it: what runs out on it leads the line.
+                    val front = fg.pkg?.takeIf { !overlay.visible.value }
+                    notifications.updateStatus(notifications.status(world, container.engine, container.clock, front))
                 }
         }
 
