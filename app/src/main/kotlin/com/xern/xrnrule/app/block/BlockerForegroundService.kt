@@ -57,7 +57,17 @@ class BlockerForegroundService : LifecycleService() {
     /** What the user is looking at: an app, plus the site when that app is a browser. */
     private data class Foreground(val pkg: String?, val site: String?)
 
+    private data class Render(val world: World, val fg: Foreground, val shown: Foreground, val other: String?)
+
     private val foreground = MutableStateFlow(Foreground(null, null))
+
+    /**
+     * What the block screen goes by: [foreground], except that while the screen is off it stays
+     * what was in front when it went off (S5). The block screen stays up behind the lock screen,
+     * so unlocking onto a blocked app doesn't show it until the next look finds it again.
+     */
+    private val shieldFront = MutableStateFlow(Foreground(null, null))
+    private val held = HeldWhileAsleep(Foreground(null, null))
 
     /** I49: the browser in front, if it's one that can't block sites and has to stay closed. */
     private val otherBrowser = MutableStateFlow<String?>(null)
@@ -133,6 +143,7 @@ class BlockerForegroundService : LifecycleService() {
         cornerClock = CornerClockOverlay(this)
 
         startAsForeground()
+        overlay.prepare() // made and composed now, so the first block screen only has to show
 
         awake.value = getSystemService(PowerManager::class.java).isInteractive && !keyguardLocked()
         ContextCompat.registerReceiver(
@@ -183,9 +194,9 @@ class BlockerForegroundService : LifecycleService() {
         // 4. re-render the overlay (and the hardcore Settings guard) whenever the world or the
         //    foreground changes; keep the status notification in step
         lifecycleScope.launch {
-            combine(container.store.world, foreground, otherBrowser) { world, fg, other -> Triple(world, fg, other) }
-                .collect { (world, fg, other) ->
-                    overlay.render(world, fg.pkg, fg.site, other)
+            combine(container.store.world, foreground, shieldFront, otherBrowser) { world, fg, shown, other -> Render(world, fg, shown, other) }
+                .collect { (world, fg, shown, other) ->
+                    overlay.render(world, shown.pkg, shown.site, other, awake = awake.value)
                     settingsGuard.render(fg.pkg, world)
                     updateCornerClock()
                     // The app in front with no block screen over it: what runs out on it leads the line.
@@ -202,7 +213,8 @@ class BlockerForegroundService : LifecycleService() {
         // 6. while a block screen is up, hear about the laptop and the web app within a second or
         //    two: long-polls on the shared state and on the habit server
         lifecycleScope.launch {
-            overlay.visible.collectLatest { up ->
+            // Not while the screen is off: the block screen held up behind the lock screen isn't being looked at.
+            combine(overlay.visible, awake) { up, on -> up && on }.distinctUntilChanged().collectLatest { up ->
                 if (!up) return@collectLatest
                 // Scoped to this showing: both stop when the shield goes (collectLatest cancels).
                 coroutineScope {
@@ -222,6 +234,7 @@ class BlockerForegroundService : LifecycleService() {
             if (!isAwake) Foreground(null, null) else Foreground(pkg, host?.takeIf { browser != null })
         }.distinctUntilChanged().collect { fg ->
             foreground.value = fg
+            shieldFront.value = held.of(awake.value, fg)
             val browser = fg.pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
             if (browser == null) browserInFront = null
             else if (browserInFront?.first != browser) browserInFront = browser to SystemClock.elapsedRealtime()
@@ -398,6 +411,7 @@ class BlockerForegroundService : LifecycleService() {
 
     override fun onDestroy() {
         cornerClock.hide()
+        overlay.dispose()
         unregisterReceiver(screenReceiver)
         val container = (application as XrnruleApp).container
         container.siteUsage.onSite(null)

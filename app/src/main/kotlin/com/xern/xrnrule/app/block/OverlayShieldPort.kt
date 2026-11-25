@@ -72,6 +72,10 @@ private class TriesToday(context: Context) {
     private val prefs = context.getSharedPreferences("tries", Context.MODE_PRIVATE)
     private var last: Pair<String, Long>? = null
 
+    /** The count so far, without counting a try: a block screen held up while the screen is off. */
+    fun peek(subject: String): Int =
+        if (prefs.getString(KEY_DAY, null) != LocalDate.now().toString()) 0 else prefs.getInt(subject, 0)
+
     /** The count, with this try in it. Called on every redraw, so one visit counts once. */
     fun count(subject: String): Int {
         val now = SystemClock.elapsedRealtime()
@@ -105,8 +109,25 @@ class OverlayShieldPort(
     @Volatile
     private var plan = ShieldPlan(emptySet())
 
-    private var view: View? = null
-    private var layout: WindowManager.LayoutParams? = null
+    /** One block screen's window, its layout and its lifecycle; [detached] once the OS took it away. */
+    private class Screen(val host: FrameLayout, val params: WindowManager.LayoutParams, val owner: OverlayWindowOwner) {
+        @Volatile
+        var detached = false
+    }
+
+    private val window = ShieldWindow(
+        make = ::makeScreen,
+        add = { s -> wm.addView(s.host, s.params) },
+        remove = { s -> wm.removeView(s.host) },
+        release = { s -> s.owner.onDestroy() },
+        reveal = { s, on ->
+            // Started before it shows, so what it draws first is this showing's, not the last one's.
+            if (on) s.owner.onStart()
+            s.host.visibility = if (on) View.VISIBLE else View.GONE
+            if (!on) s.owner.onStop() // nothing recomposes or ticks behind a hidden screen
+        },
+        lost = { s -> s.detached },
+    )
     private var audioFocus: AudioFocusRequest? = null
     private val tries = TriesToday(context)
 
@@ -117,15 +138,17 @@ class OverlayShieldPort(
 
     /** Whether the block screen shows a habit item: a tick anywhere can lift it (I36). */
     val showsHabitItem: Boolean get() = uiState.value?.items?.any { it.derived } == true
-    private var windowOwner: OverlayWindowOwner? = null
     private val uiState = mutableStateOf<OverlayUi?>(null)
 
     override fun apply(plan: ShieldPlan) {
         this.plan = plan
     }
 
-    /** [otherBrowser]: a browser in front that can't block sites (I49). */
-    fun render(world: World, foregroundPkg: String?, foregroundSite: String?, otherBrowser: String? = null) {
+    /**
+     * [otherBrowser]: a browser in front that can't block sites (I49). [awake]: false while the
+     * screen is off and the block screen is only held up for when it comes back on, which isn't a try.
+     */
+    fun render(world: World, foregroundPkg: String?, foregroundSite: String?, otherBrowser: String? = null, awake: Boolean = true) {
         val current = plan
         val appBlocked = foregroundPkg != null && foregroundPkg in current.blockedPackages
         val siteBlocked = !appBlocked && current.covers(null, foregroundSite)
@@ -150,7 +173,11 @@ class OverlayShieldPort(
         uiState.value = OverlayUi(
             subject = subject,
             // I53: the pause before an app opens isn't a try at getting past a block.
-            triesToday = if (block?.let { engine.blockReason(world, it, clock) } == BlockReason.WAIT) 0 else tries.count(subject),
+            triesToday = when {
+                block?.let { engine.blockReason(world, it, clock) } == BlockReason.WAIT -> 0
+                awake -> tries.count(subject)
+                else -> tries.peek(subject)
+            },
             pkg = foregroundPkg.takeIf { appBlocked },
             isSite = siteBlocked,
             block = block,
@@ -177,13 +204,11 @@ class OverlayShieldPort(
             overrideGrantMs = world.settings.overrideGrantMs,
             overrideWaitMs = world.settings.overrideWaitMs,
         )
-        // If the OS dropped our window out from under us, rebuild it.
-        if (view != null && view?.isAttachedToWindow != true) hide()
         // Hitting the shield asks the habit server, so a tick made elsewhere is caught now rather
         // than at the next minute's check.
-        if (view == null && showsHabitItem) habits.request()
+        if (!window.shown && showsHabitItem) habits.request()
         // Likewise the laptop: an unlock redeemed there lifts this shield a moment later.
-        if (view == null) shared.request()
+        if (!window.shown) shared.request()
         show()
         keepScreenOn(uiState.value?.let { it.timerRunning || it.overrideReadyAtElapsed != null } == true)
     }
@@ -194,8 +219,9 @@ class OverlayShieldPort(
      * Otherwise a block screen left on a table would keep the phone awake until the battery ran out.
      */
     private fun keepScreenOn(on: Boolean) {
-        val host = view ?: return
-        val params = layout ?: return
+        val screen = window.window ?: return
+        val host = screen.host
+        val params = screen.params
         val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         if ((params.flags and flag != 0) == on) return
         params.flags = if (on) params.flags or flag else params.flags and flag.inv()
@@ -225,9 +251,31 @@ class OverlayShieldPort(
 
     private fun homeBrowser(): UseBrowser? = websites.extensionBrowser?.let { UseBrowser(it, appLabel(it)) }
 
+    /** Puts the block screen up: a window already made is only shown, so nothing has to be made or composed first (S5). */
     private fun show() {
-        if (view != null) return
+        val wasShown = window.shown
+        if (!window.show()) return
+        if (wasShown) return
+        if (uiState.value?.pkg != null) takeAudio() // a blocked app's sound stops with it
+        _visible.value = true
+    }
 
+    /**
+     * Makes and adds the block screen's window, hidden, before it's first needed: the first showing
+     * then only draws. Without "Display over other apps" it can't go up; the next showing asks again.
+     */
+    fun prepare() {
+        window.prepare()
+    }
+
+    /** Stops for good with the service. */
+    fun dispose() {
+        releaseAudio()
+        window.dispose()
+        _visible.value = false
+    }
+
+    private fun makeScreen(): Screen {
         val owner = OverlayWindowOwner().also { it.onCreate() }
         val composeView = ComposeView(context).apply {
             setContent {
@@ -291,13 +339,15 @@ class OverlayShieldPort(
             }
         }
 
-        runCatching { wm.addView(host, params) }
-        view = host
-        layout = params
-        if (uiState.value?.pkg != null) takeAudio() // a blocked app's sound stops with it
-        _visible.value = true
-        windowOwner = owner
-        owner.onStart()
+        host.visibility = View.GONE // shown by ShieldWindow's reveal
+        val screen = Screen(host, params, owner)
+        host.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = Unit
+            override fun onViewDetachedFromWindow(v: View) {
+                screen.detached = true // some OEM task killers drop it: the next showing makes another
+            }
+        })
+        return screen
     }
 
     /**
@@ -322,13 +372,11 @@ class OverlayShieldPort(
     }
 
     private fun hide() {
+        if (!window.shown) return
         releaseAudio()
-        view?.let { v -> runCatching { wm.removeView(v) } }
-        view = null
-        layout = null
+        keepScreenOn(false)
+        window.hide()
         _visible.value = false
-        windowOwner?.onDestroy()
-        windowOwner = null
     }
 
     private fun appLabel(pkg: String): String = runCatching {
@@ -391,8 +439,8 @@ class OverlayShieldPort(
 /**
  * Minimal Lifecycle / ViewModelStore / SavedStateRegistry owner for a `ComposeView` attached
  * directly to a [WindowManager] window, which has no Activity to supply these. Scoped to one
- * overlay window: [onCreate] before the view is attached, [onStart] right after, [onDestroy]
- * when the window is removed.
+ * overlay window: [onCreate] before the view is attached, [onStart] while it shows, [onStop]
+ * while it's hidden, [onDestroy] when the window is removed.
  */
 internal class OverlayWindowOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -409,14 +457,16 @@ internal class OverlayWindowOwner : LifecycleOwner, ViewModelStoreOwner, SavedSt
     }
 
     fun onStart() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+    }
+
+    /** Hidden: Compose stops drawing frames for it until [onStart] again. */
+    fun onStop() {
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
     }
 
     fun onDestroy() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         viewModelStore.clear()
     }
 }
