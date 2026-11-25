@@ -127,4 +127,39 @@ class ForegroundTrackerTest {
         tracker.poll()
         assertFalse(tracker.customTab)
     }
+
+    @Test
+    fun anAppKilledInFrontIsNotInFrontAgainLater() {
+        // An app destroyed while resumed sent no pause, and its destroy (24) was read as nothing:
+        // it stayed "resumed", so a look between the next app's pause and the one after's resume
+        // found the dead app in front, and its block screen came up over the launcher.
+        val raw = mutableListOf<Pair<Long, Triple<String, String?, Int>>>()
+        var now = 10 * hour
+        val tracker = ForegroundTracker({ from, to ->
+            raw.filter { it.first in from..to }.mapNotNull { (_, e) -> ForegroundTracker.moveOf(e.first, e.second, e.third) }
+        }) { now }
+        val game = "com.example.game"
+        val notes = "com.example.notes"
+        raw += now - 10 to Triple(game, "Main", ForegroundTracker.ACTIVITY_RESUMED)
+        assertEquals(game, tracker.poll())
+        now += 1_000
+        raw += now - 10 to Triple(game, "Main", ForegroundTracker.ACTIVITY_DESTROYED)
+        raw += now - 5 to Triple(home, "Launcher", ForegroundTracker.ACTIVITY_RESUMED)
+        assertEquals(home, tracker.poll())
+        now += 1_000
+        raw += now - 10 to Triple(home, "Launcher", ForegroundTracker.ACTIVITY_PAUSED) // on its way to the notes app
+        assertEquals("the launcher until the next app resumes", home, tracker.poll())
+        now += 1_000
+        raw += now - 10 to Triple(notes, "Main", ForegroundTracker.ACTIVITY_RESUMED)
+        assertEquals(notes, tracker.poll())
+    }
+
+    @Test
+    fun onlyResumesPausesStopsAndDestroysAreMoves() {
+        assertEquals(true, ForegroundTracker.moveOf("a", null, ForegroundTracker.ACTIVITY_RESUMED)?.front)
+        assertEquals(false, ForegroundTracker.moveOf("a", null, ForegroundTracker.ACTIVITY_PAUSED)?.front)
+        assertEquals(false, ForegroundTracker.moveOf("a", null, ForegroundTracker.ACTIVITY_STOPPED)?.front)
+        assertEquals(false, ForegroundTracker.moveOf("a", null, ForegroundTracker.ACTIVITY_DESTROYED)?.front)
+        assertNull(ForegroundTracker.moveOf("a", null, 5)) // CONFIGURATION_CHANGE
+    }
 }

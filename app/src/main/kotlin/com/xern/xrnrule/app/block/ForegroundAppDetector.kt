@@ -69,21 +69,9 @@ class UsageStatsDetector(
         val out = mutableListOf<ForegroundTracker.Move>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            // Same values: ACTIVITY_RESUMED and ACTIVITY_PAUSED (API 29) renamed MOVE_TO_FOREGROUND
-            // and MOVE_TO_BACKGROUND, which minSdk 26 still needs.
-            val front = when (event.eventType) {
-                UsageEvents.Event.ACTIVITY_RESUMED, @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_FOREGROUND -> true
-                UsageEvents.Event.ACTIVITY_PAUSED, @Suppress("DEPRECATION") UsageEvents.Event.MOVE_TO_BACKGROUND, ACTIVITY_STOPPED -> false
-                else -> continue
-            }
-            out += ForegroundTracker.Move(event.packageName, event.className, front)
+            ForegroundTracker.moveOf(event.packageName, event.className, event.eventType)?.let(out::add)
         }
         return out
-    }
-
-    private companion object {
-        /** UsageEvents.Event.ACTIVITY_STOPPED, API 29; earlier phones never send it. */
-        const val ACTIVITY_STOPPED = 23
     }
 }
 
@@ -161,8 +149,31 @@ class ForegroundTracker(
         customTab = className?.contains("customtabs", ignoreCase = true) == true
     }
 
-    private companion object {
+    companion object {
         /** A minute, then ten, an hour, six, a day, a week. */
-        val FIRST_LOOK_MS = listOf(60_000L, 600_000L, 3_600_000L, 21_600_000L, 86_400_000L, 604_800_000L)
+        private val FIRST_LOOK_MS = listOf(60_000L, 600_000L, 3_600_000L, 21_600_000L, 86_400_000L, 604_800_000L)
+
+        /** UsageEvents.Event.ACTIVITY_RESUMED (API 29), the value MOVE_TO_FOREGROUND had before it. */
+        const val ACTIVITY_RESUMED = 1
+
+        /** UsageEvents.Event.ACTIVITY_PAUSED (API 29), the value MOVE_TO_BACKGROUND had before it. */
+        const val ACTIVITY_PAUSED = 2
+
+        /** UsageEvents.Event.ACTIVITY_STOPPED, API 29; earlier phones never send it. */
+        const val ACTIVITY_STOPPED = 23
+
+        /** UsageEvents.Event.ACTIVITY_DESTROYED (API 29, hidden): sent for an app killed or crashed in front. */
+        const val ACTIVITY_DESTROYED = 24
+
+        /**
+         * One UsageStats event as a move, or null for the kinds that say nothing about the front. An
+         * activity destroyed in front may never send a pause: taken as nothing, it stayed "resumed",
+         * and any look between one app's pause and the next one's resume found it in front again.
+         */
+        fun moveOf(pkg: String, className: String?, eventType: Int): Move? = when (eventType) {
+            ACTIVITY_RESUMED -> Move(pkg, className, front = true)
+            ACTIVITY_PAUSED, ACTIVITY_STOPPED, ACTIVITY_DESTROYED -> Move(pkg, className, front = false)
+            else -> null
+        }
     }
 }
