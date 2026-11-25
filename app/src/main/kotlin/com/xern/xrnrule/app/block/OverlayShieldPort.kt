@@ -28,6 +28,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.xern.xrnrule.app.data.HabitSync
+import com.xern.xrnrule.app.data.OemAutostart
 import com.xern.xrnrule.app.data.SharedSync
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.ui.AppLinks
@@ -129,6 +130,7 @@ class OverlayShieldPort(
         lost = { s -> s.detached },
     )
     private var audioFocus: AudioFocusRequest? = null
+    private var popupsOff = false
     private val tries = TriesToday(context)
 
     private val _visible = MutableStateFlow(false)
@@ -165,6 +167,8 @@ class OverlayShieldPort(
         }
         val engine = store.engine
         val clock = store.clock
+        // Read once a showing: Close and Focus can't open anything while HyperOS's switch is off (S4).
+        if (!window.shown) popupsOff = OemAutostart.backgroundPopups(context) == false
         val blockers = engine.blockersOf(world, foregroundPkg.takeIf { appBlocked }, foregroundSite.takeIf { !appBlocked }, clock)
         val blockerIds = blockers.map { it.id }.toSet()
         val block = BlockTexts.leading(engine, world, blockers, clock)
@@ -203,6 +207,7 @@ class OverlayShieldPort(
             overridePhrase = world.settings.overridePhrase,
             overrideGrantMs = world.settings.overrideGrantMs,
             overrideWaitMs = world.settings.overrideWaitMs,
+            popupsOff = popupsOff,
         )
         // Hitting the shield asks the habit server, so a tick made elsewhere is caught now rather
         // than at the next minute's check.
@@ -433,6 +438,8 @@ class OverlayShieldPort(
         val goals: Map<String, GoalInfo> = emptyMap(),
         /** The habit the focus timer is running for, if any (I37). */
         val focusHabitId: String? = null,
+        /** HyperOS refuses screens started from here (Close going home, Focus): its pop-up switch is off. */
+        val popupsOff: Boolean = false,
     )
 }
 

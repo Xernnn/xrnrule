@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.QueryStats
+import androidx.compose.material.icons.outlined.WebAsset
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Security
@@ -193,13 +194,27 @@ data class SettingsSummary(
 fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> Unit) {
     val context = LocalContext.current
     val resume = rememberResumeSignal()
-    val permissions = remember(resume) {
-        AppPermission.entries.map { PermissionState(it.label, permissionIcon(it), it.isGranted(context)) } +
-            listOfNotNull(
-                if (OemAutostart.isKnownOem()) PermissionState("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, OemAutostart.enabled(context)) else null,
-                PermissionState("Automatic date & time", Icons.Outlined.AccessTime, deps.clockGuard.automaticTime()),
-            )
+    // Each row and what tapping it opens.
+    val permissionRows = remember(resume) {
+        AppPermission.entries.map { perm ->
+            PermissionState(perm.label, permissionIcon(perm), perm.isGranted(context)) to { runCatching { context.startActivity(perm.settingsIntent(context)) }; Unit }
+        } + listOfNotNull(
+            if (OemAutostart.isKnownOem()) {
+                PermissionState("Autostart (${Build.MANUFACTURER})", Icons.Outlined.RocketLaunch, OemAutostart.enabled(context)) to { OemAutostart.open(context) }
+            } else {
+                null
+            },
+            // HyperOS: without it nothing on a block screen can open a screen (Close, Focus).
+            OemAutostart.backgroundPopups(context)?.let { on ->
+                PermissionState("Pop-ups in the background", Icons.Outlined.WebAsset, on) to { OemAutostart.openOtherPermissions(context) }
+            },
+            PermissionState("Automatic date & time", Icons.Outlined.AccessTime, deps.clockGuard.automaticTime()) to {
+                runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
+                Unit
+            },
+        )
     }
+    val permissions = permissionRows.map { it.first }
     val clockSkew = remember(resume) { deps.clockGuard.check(); deps.clockGuard.skewMs }
     val handPickedZone = remember(resume) { deps.clockGuard.handPickedZone }
     val websiteTracking = remember(resume) { deps.websites.tracking(context) }
@@ -248,14 +263,7 @@ fun SettingsScreen(world: World, deps: SettingsDeps, onOpen: (SettingsPage) -> U
     SettingsContent(
         summary,
         onOpen = onOpen,
-        onPermission = { i ->
-            val perm = AppPermission.entries.getOrNull(i)
-            when {
-                perm != null -> runCatching { context.startActivity(perm.settingsIntent(context)) }
-                OemAutostart.isKnownOem() && i == AppPermission.entries.size -> OemAutostart.open(context)
-                else -> runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_DATE_SETTINGS)) }
-            }
-        },
+        onPermission = { i -> permissionRows.getOrNull(i)?.second?.invoke() },
         onLoop = { deps.loop.launchIntent()?.let { runCatching { context.startActivity(it) } } },
     )
 }

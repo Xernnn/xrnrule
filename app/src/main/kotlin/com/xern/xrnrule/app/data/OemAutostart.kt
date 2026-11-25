@@ -30,16 +30,45 @@ object OemAutostart {
      * and HyperOS keep it as an app op of their own, which Android's public API has no name for.
      * They turn it off at every install, a self-update included.
      */
-    fun enabled(context: Context): Boolean? {
+    fun enabled(context: Context): Boolean? = miuiOp(context, MIUI_AUTOSTART_OP)
+
+    /**
+     * HyperOS's "Display pop-up windows while running in the background", or null where the phone
+     * won't say. Another app op of its own (10021): off, it silently refuses every screen started
+     * from the block screen, so Close can't go home and Focus can't open the timer.
+     */
+    fun backgroundPopups(context: Context): Boolean? = miuiOp(context, MIUI_BACKGROUND_START_OP)
+
+    private fun miuiOp(context: Context, op: Int): Boolean? {
         if ("xiaomi" !in Build.MANUFACTURER.lowercase()) return null
         return runCatching {
             val check = AppOpsManager::class.java.getMethod("checkOpNoThrow", Int::class.java, Int::class.java, String::class.java)
-            when (check.invoke(context.getSystemService(AppOpsManager::class.java), MIUI_AUTOSTART_OP, Process.myUid(), context.packageName)) {
-                AppOpsManager.MODE_ALLOWED -> true
-                AppOpsManager.MODE_IGNORED, AppOpsManager.MODE_ERRORED -> false
-                else -> null
-            }
+            opAllows(check.invoke(context.getSystemService(AppOpsManager::class.java), op, Process.myUid(), context.packageName) as? Int)
         }.getOrNull()
+    }
+
+    /** An app op's mode as on or off; null for one that leaves it to something else. */
+    fun opAllows(mode: Int?): Boolean? = when (mode) {
+        AppOpsManager.MODE_ALLOWED -> true
+        AppOpsManager.MODE_IGNORED, AppOpsManager.MODE_ERRORED -> false
+        else -> null
+    }
+
+    /** The page with HyperOS's own switches for this app ("Other permissions"), pop-ups in the background among them. */
+    fun openOtherPermissions(context: Context) {
+        val editor = Intent("miui.intent.action.APP_PERM_EDITOR")
+            .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+            .putExtra("extra_pkgname", context.packageName)
+        for (intent in listOf(editor, appDetailsIntent(context))) {
+            try {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            } catch (_: ActivityNotFoundException) {
+                // The next page.
+            } catch (_: SecurityException) {
+                // Not exported on this build: the app's details page has the same switches a tap further.
+            }
+        }
     }
 
     /** For a notification: the page where autostart is turned on. */
@@ -86,6 +115,7 @@ object OemAutostart {
     private fun component(pkg: String, cls: String) = Intent().apply { component = ComponentName(pkg, cls) }
 
     private const val MIUI_AUTOSTART_OP = 10008
+    private const val MIUI_BACKGROUND_START_OP = 10021
 }
 
 /** A notification can only name one page; this tries each known page in turn ([OemAutostart.open]). */
