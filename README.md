@@ -364,7 +364,8 @@ the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`. The server ne
 ./gradlew :app:assembleSideloadDebug   # full build, with hardcore mode
 ./gradlew :app:assemblePlayDebug       # Play-safe build: no Device Admin
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
-./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
+./gradlew :app:installSideloadRelease  # the build to live with: not debuggable, shrunk by R8
+./gradlew :app:checkReleaseKeeps       # R8 still keeps what reflection and the serializers need
 python3 -m unittest server/test_xrnrule_sync.py   # the sync server
 node --test extension/test/*.test.mjs  # the extension's helpers and its signed .crx
 node --test server/*.test.mjs          # the status page's reading of the shared state, Insights
@@ -376,8 +377,8 @@ node scripts/release.mjs               # publish the extension and the app; see 
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
 ```
 
-CI (`.github/workflows/ci.yml`) runs the three Gradle test tasks, the server's tests and the
-extension's and status page's Node tests on every push.
+CI (`.github/workflows/ci.yml`) runs the three Gradle test tasks, `checkReleaseKeeps`, the
+server's tests and the extension's and status page's Node tests on every push.
 
 The phone app's screens can be drawn without a phone:
 `app/src/debug/kotlin/com/xern/xrnrule/app/ui/Previews.kt` holds Compose previews on made-up data

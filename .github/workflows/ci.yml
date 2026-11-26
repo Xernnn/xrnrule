@@ -17,7 +17,7 @@ jobs:
       # The end-to-end test needs python3 + bcrypt and the sibling xrnloops repo; without them it
       # skips itself. Nothing here needs the Android SDK beyond what the runner ships.
       - run: pip install bcrypt
-      - run: ./gradlew :domain:test :desktop:test :app:testSideloadDebugUnitTest --console=plain
+      - run: ./gradlew :domain:test :desktop:test :app:testSideloadDebugUnitTest :app:checkReleaseKeeps --console=plain
 
   server-and-extension:
     runs-on: ubuntu-latest
