@@ -63,7 +63,7 @@ fun main() = runBlocking {
         store.world, { world -> ServerIcons.owned(world, siteIcons, laptopIcons) }, scope,
     )
 
-    store.coldStart {
+    store.coldStart(locks = shared::holdLocks) {
         windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
         LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons, usage = usage).start()
     }
@@ -95,7 +95,7 @@ fun main() = runBlocking {
     }
 
     System.err.println(
-        "xrnrule-desktop on ${config.localUrl}, data in ${config.dataDir}" +
+        "xrnrule-desktop ${LocalServer.DAEMON_VERSION ?: "(no version)"} on ${config.localUrl}, data in ${config.dataDir}" +
             if (config.syncConfigured) ", syncing with ${config.ruleUrl} and ${config.loopUrl}" else ", not syncing" + config.syncRefusal?.let { ": $it" }.orEmpty(),
     )
     for (file in config.exposedFiles(Config.file())) System.err.println("xrnrule-desktop: other users can read $file, which holds the sync password (chmod 600 it)")
@@ -113,7 +113,7 @@ fun main() = runBlocking {
         if (now - lastMono > 10_000) {
             withContext(Dispatchers.IO) { clock.check() } // the clock may have been set while it slept
             store.dispatch(BlockEvent.BootOrColdStart)
-            foreground.heardExtension() // a sleeping laptop isn't a silent extension (I49)
+            foreground.woke(lastMono) // a sleeping laptop isn't a silent extension (I49)
         }
         lastMono = now
         usage.tick() // a sleep isn't screen time either

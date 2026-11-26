@@ -30,8 +30,25 @@ application {
     applicationDefaultJvmArgs = listOf("-Xmx96m", "-XX:+UseSerialGC", "-XX:TieredStopAtLevel=1", "-Xss512k")
 }
 
+// This build's version, for the page and /api/state: `git describe` of the checkout it was built
+// from (install.sh builds from one), so whether the installed daemon is behind main can be told.
+val daemonVersion: Provider<String> = providers.exec {
+    commandLine("git", "describe", "--tags", "--always", "--dirty")
+    workingDir = rootProject.projectDir
+    isIgnoreExitValue = true
+}.standardOutput.asText.map { it.trim() }
+
+val versionFile = tasks.register("daemonVersion") {
+    val version = daemonVersion
+    val out = layout.buildDirectory.file("generated/version/xrnrule-desktop.version")
+    inputs.property("version", version)
+    outputs.file(out)
+    doLast { out.get().asFile.apply { parentFile.mkdirs() }.writeText(version.get()) }
+}
+
 // The extension this build was made with, to tell an out-of-date one (see Foreground.extensionVersion).
 tasks.processResources {
+    from(versionFile)
     from(rootProject.file("extension/manifest.json")) { rename { "extension-manifest.json" } }
     // What the local page shares with the sync server's status page (server/web): the look, the
     // icons, the Insights page, the font and xrnloops' tile. One copy of each, kept there.

@@ -12,7 +12,7 @@ import android.os.Process
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 
-/** The permissions the core loop depends on (brainstorm §4.4 "onboarding is a live checklist"). */
+/** The permissions the core loop depends on (onboarding is a live checklist). */
 enum class AppPermission(val label: String) {
     USAGE_ACCESS("Usage access"),
     OVERLAY("Draw over other apps"),

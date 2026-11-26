@@ -5,7 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 
 /**
- * Phase B watchdog (brainstorm §4.4): if [BlockerForegroundService] died for any reason — an
+ * Watchdog: if [BlockerForegroundService] died for any reason — an
  * OEM battery killer, a crash, a swipe from recents that [BlockerForegroundService.onTaskRemoved]
  * didn't catch in time — this brings it back. Starting an already-running service is a harmless
  * no-op (`onCreate` only runs once per process; `onStartCommand` just returns `START_STICKY`).

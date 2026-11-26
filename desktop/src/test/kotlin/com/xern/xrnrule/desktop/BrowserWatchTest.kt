@@ -42,11 +42,42 @@ class BrowserWatchTest {
     }
 
     @Test
-    fun i49_comingToTheFrontStartsTheSilenceAgain() {
+    fun i49_timeWithTheBrowserBehindIsntSilence() {
         val watch = BrowserWatch(known = setOf("helium"))
         watch.front("konsole", browser = false, nowMs = 0)
         watch.front("helium", browser = true, nowMs = 10L * 60_000)
         assertNull(watch.toClose(10L * 60_000 + 1_000))
+    }
+
+    @Test
+    fun i49_theSilenceAddsUpAcrossStaysInFront() {
+        val watch = BrowserWatch(known = setOf("helium"))
+        // The extension turned off, and a terminal in front every 110 s or so.
+        watch.front("helium", browser = true, nowMs = 0)
+        watch.front("konsole", browser = false, nowMs = 110_000)
+        watch.front("helium", browser = true, nowMs = 200_000)
+        assertNull(watch.toClose(200_000 + BrowserWatch.OTHER_GRACE_MS - 1))
+        assertEquals("helium", watch.toClose(200_000 + BrowserWatch.OTHER_GRACE_MS))
+
+        // Closed and opened again: ten seconds each time from now on.
+        watch.front(null, browser = false, nowMs = 300_000)
+        watch.front("helium", browser = true, nowMs = 400_000)
+        assertNull(watch.toClose(400_000 + BrowserWatch.OTHER_GRACE_MS - 1))
+        assertEquals("helium", watch.toClose(400_000 + BrowserWatch.OTHER_GRACE_MS))
+
+        // The extension speaking for the front again: two minutes again.
+        watch.heard(415_000)
+        assertNull(watch.toClose(415_000 + BrowserWatch.SILENT_GRACE_MS - 1))
+        assertEquals("helium", watch.toClose(415_000 + BrowserWatch.SILENT_GRACE_MS))
+    }
+
+    @Test
+    fun i49_aSleepNeitherCountsNorStartsTheSilenceAgain() {
+        val watch = BrowserWatch(known = setOf("helium"))
+        watch.front("helium", browser = true, nowMs = 0)
+        watch.woke(sleptAtMs = 100_000, nowMs = 3_700_000)
+        assertNull(watch.toClose(3_700_000 + 19_999))
+        assertEquals("helium", watch.toClose(3_700_000 + 20_000))
     }
 
     @Test

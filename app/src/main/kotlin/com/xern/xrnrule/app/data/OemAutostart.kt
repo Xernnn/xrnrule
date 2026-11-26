@@ -14,7 +14,7 @@ import androidx.activity.ComponentActivity
 /**
  * OEM battery managers (Xiaomi/MIUI, Oppo/ColorOS, Vivo, Huawei/EMUI, OnePlus) kill background
  * services that aren't explicitly whitelisted for autostart, regardless of the standard
- * battery-optimization exemption — brainstorm §8 calls this the highest-risk item with "no full
+ * battery-optimization exemption — the highest-risk item for this app, with "no full
  * programmatic fix". Best effort: deep-link straight to the known autostart-manager screen for
  * the current manufacturer, falling back to the app's details page if that activity isn't
  * present on this particular ROM build. These are explicit-component intents, so they don't

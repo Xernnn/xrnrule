@@ -136,8 +136,122 @@ class SharedStateTest {
         // After an emergency unlock here (I40) the lock ended: a loosening edit stands.
         val agreed = lockedThere
         val unlockedHere = here(agreed.blocks.getValue("a1").copy(lock = BlockLock(t + 3_000, t + 3_000), dailyAllowanceMs = 60 * minutes, editedAtWall = t + 3_000))
+            .copy(emergencyLog = mapOf("a1@${t + 3_000}" to t + 3_000))
         val renamedThere = SharedState(blocks = mapOf("a1" to agreed.blocks.getValue("a1").copy(name = "renamed", editedAtWall = t + 2_500)))
         assertEquals(60 * minutes, merge(agreed, unlockedHere, renamedThere).blocks.getValue("a1").dailyAllowanceMs)
+    }
+
+    /** Block a1, half an hour a day, locked for a month in what both sides agreed on. */
+    private inner class LockedBlock {
+        val minutes = 60_000L
+        val lock = BlockLock(untilWall = t + 30 * DAY_MS, setAtWall = t - DAY_MS)
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30 * minutes).copy(editedAtWall = t - DAY_MS, lock = lock)
+        val todos = items("a1", 3)
+        val base = state(block, todos)
+
+        fun state(block: Block?, items: List<ChecklistItem> = todos, emergencies: Map<String, Long> = emptyMap()) = SharedState(
+            blocks = listOfNotNull(block).associateBy { it.id },
+            items = items.associateBy { it.id },
+            emergencyLog = emergencies,
+        )
+
+        /** The merge with [changed] on one side and [base] on the other, both ways round: they must agree. */
+        fun oneSided(changed: SharedState): SharedState {
+            val fromThere = merge(base, base, changed)
+            assertEquals("the same either way round", fromThere, merge(base, changed, base))
+            return fromThere
+        }
+    }
+
+    @Test
+    fun locks_aOneSidedLooseningOfALockedBlockIsRefused() {
+        with(LockedBlock()) {
+            // Written into the laptop's world.json while its daemon was stopped, or PUT to the server with curl.
+            val loosenings = listOf(
+                block.copy(dailyAllowanceMs = 120 * minutes, editedAtWall = t),
+                block.copy(lock = lock.copy(untilWall = 0), editedAtWall = t),
+                block.copy(lock = BlockLock(untilWall = t, setAtWall = t), editedAtWall = t), // looks like an emergency unlock, never logged
+                block.copy(enabled = false, editedAtWall = t),
+            )
+            for (loosened in loosenings) {
+                val merged = oneSided(state(loosened)).blocks.getValue("a1")
+                assertEquals(30 * minutes, merged.dailyAllowanceMs)
+                assertEquals(lock, merged.lock)
+                assertTrue(merged.enabled)
+            }
+            val deleted = oneSided(state(null, items = emptyList()))
+            assertEquals("a deleted block comes back", block, deleted.blocks["a1"])
+            assertEquals("and its checklist", todos.map { it.id }.toSet(), deleted.items.keys)
+
+            // Stricter goes through, lock and all.
+            val stricter = block.copy(dailyAllowanceMs = 20 * minutes, lock = BlockLock(t + 60 * DAY_MS, t), editedAtWall = t)
+            assertEquals(stricter, oneSided(state(stricter)).blocks.getValue("a1"))
+
+            // Once the lock has ended by this device's clock, it's an edit like any other.
+            val later = SharedState.merge(base, base, state(loosenings[0]), nowWall = lock.untilWall)
+            assertEquals(120 * minutes, later.blocks.getValue("a1").dailyAllowanceMs)
+        }
+    }
+
+    @Test
+    fun locks_aOneSidedChecklistLooseningOfALockedBlockIsRefused() {
+        with(LockedBlock()) {
+            val removed = state(block.copy(checklistEditedAtWall = t), todos.take(2).map { it.copy(done = true) })
+            val merged = oneSided(removed)
+            assertEquals("the to-do is back", todos.map { it.id }.toSet(), merged.items.keys)
+            assertEquals("what was ticked still counts", listOf(true, true, false), todos.map { merged.items.getValue(it.id).done })
+
+            val added = todos + ChecklistItem(id = "a1-new", blockId = "a1", text = "one more", order = 3)
+            assertEquals("adding one stands", 4, oneSided(state(block.copy(checklistEditedAtWall = t), added)).items.size)
+        }
+    }
+
+    @Test
+    fun locks_anEmergencyUnlockWithItsLogEntryGoesThrough() {
+        with(LockedBlock()) {
+            val ended = block.copy(lock = BlockLock(t, t), dailyAllowanceMs = 120 * minutes, editedAtWall = t + 1)
+            val merged = oneSided(state(ended, emergencies = mapOf("a1@$t" to t)))
+            assertEquals(120 * minutes, merged.blocks.getValue("a1").dailyAllowanceMs)
+            assertEquals(BlockLock(t, t), merged.blocks.getValue("a1").lock)
+
+            // A sixth entry written into the log is no sixth emergency unlock (I40).
+            val used = (1..5).associate { "other$it@${t - it}" to t - it }
+            val sixth = oneSided(state(ended, emergencies = used + ("a1@$t" to t))).blocks.getValue("a1")
+            assertEquals(lock, sixth.lock)
+            assertEquals(30 * minutes, sixth.dailyAllowanceMs)
+        }
+    }
+
+    @Test
+    fun locks_aLockSetLaterDoesNotEndALongerOneThatHolds() {
+        with(LockedBlock()) {
+            // Both sides changed the block: here it was renamed; there a "newer" lock ending today was made up.
+            val renamedHere = state(block.copy(name = "renamed", editedAtWall = t))
+            val madeUp = state(block.copy(lock = BlockLock(untilWall = t + 1, setAtWall = t), editedAtWall = t - 1))
+            for (merged in listOf(merge(base, renamedHere, madeUp), merge(base, madeUp, renamedHere))) {
+                assertEquals(lock, merged.blocks.getValue("a1").lock)
+            }
+        }
+    }
+
+    @Test
+    fun locks_aStampFromTheFutureIsReadAsTwoMinutesAhead() {
+        val soon = t + Defaults.FUTURE_STAMP_MS
+        val block = modeBlock("s1", BlockMode.SCHEDULE).copy(editedAtWall = t - DAY_MS)
+        // An ended lock, stamped a year ahead: as it was, it beat every lock set before then.
+        val farAhead = block.copy(lock = BlockLock(untilWall = t - 1, setAtWall = t + 365 * DAY_MS), editedAtWall = t + 365 * DAY_MS, checklistEditedAtWall = t + 365 * DAY_MS)
+        val read = merge(null, SharedState(), SharedState(blocks = mapOf("s1" to farAhead))).blocks.getValue("s1")
+        assertEquals(BlockLock(untilWall = t - 1, setAtWall = soon), read.lock)
+        assertEquals(soon, read.editedAtWall)
+        assertEquals(soon, read.checklistEditedAtWall)
+
+        // So a real lock set past those two minutes, while the other side renamed the block, holds.
+        val agreed = SharedState(blocks = mapOf("s1" to read))
+        val later = soon + 1
+        val lockedHere = SharedState(blocks = mapOf("s1" to read.copy(lock = BlockLock(later + 7 * DAY_MS, later), editedAtWall = later)))
+        val renamedThere = SharedState(blocks = mapOf("s1" to farAhead.copy(name = "renamed")))
+        val merged = SharedState.merge(agreed, lockedHere, renamedThere, nowWall = later).blocks.getValue("s1")
+        assertEquals(BlockLock(later + 7 * DAY_MS, later), merged.lock)
     }
 
     /** Block c1 with three to-dos, as both sides agreed, and the other side's lock set at t + 1 s. */
@@ -390,7 +504,8 @@ class SharedStateTest {
         val older = agreed.copy(blocks = mapOf("a1" to limit.copy(name = "renamed", editedAtWall = t + 1), "new" to itsOwn))
         val text = asAnOlderDeviceWritesIt(older, setOf("opensPerDay", "openWaitS", "lock"), setOf("opens"))
 
-        val naive = merge(agreed, agreed, Json { ignoreUnknownKeys = true }.decodeFromString(SharedState.serializer(), text))
+        // Once the lock has ended (while it holds, the whole change would be refused as a loosening).
+        val naive = SharedState.merge(agreed, agreed, Json { ignoreUnknownKeys = true }.decodeFromString(SharedState.serializer(), text), nowWall = t + 8 * DAY_MS)
         assertEquals("how it went before: the limit's opens were gone", 0, naive.blocks.getValue("a1").opensPerDay)
 
         val merged = merge(agreed, agreed, SharedState.fromServer(text, agreed, agreed))

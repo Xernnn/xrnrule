@@ -79,6 +79,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import socket
 import sys
 import threading
@@ -919,10 +920,20 @@ def usage_ms(ms):
 def load_usage(user):
     """The user's screen time (cached), only the shape add_usage writes. Call under usage_lock."""
     if user not in usage:
+        path = usage_path(user)
         try:
-            with open(usage_path(user), encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 kept = json.load(f)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            kept = {}
+        except (OSError, ValueError, RecursionError) as e:
+            # Kept aside, never written over: up to EVENTS_KEEP_DAYS of every device's screen time.
+            aside = f"{path}.unreadable-{int(time.time())}"
+            try:
+                os.replace(path, aside)
+                print(f"usage of {user} unreadable ({e}), kept as {os.path.basename(aside)}", file=sys.stderr, flush=True)
+            except OSError as moved:
+                print(f"usage of {user} unreadable ({e}) and couldn't be moved aside ({moved})", file=sys.stderr, flush=True)
             kept = {}
         kept = kept if isinstance(kept, dict) else {}
         days = {}
@@ -991,17 +1002,36 @@ def add_usage(user, device, body):
     return grew
 
 
-def flush_usage(user):
-    """Writes usage.json if it's behind and wasn't written in the last USAGE_WRITE_S. Call under usage_lock."""
-    if user not in usage_dirty or time.monotonic() - usage_written.get(user, -USAGE_WRITE_S) < USAGE_WRITE_S:
+def flush_usage(user, now=False):
+    """Writes usage.json if it's behind and wasn't written in the last USAGE_WRITE_S ([now]: whenever
+    it's behind), as state.json is written: a new file, synced to disk, then moved over the old one.
+    It counts as written only once that worked; a failed write is tried again next time. Call under
+    usage_lock."""
+    if user not in usage_dirty:
+        return
+    if not now and time.monotonic() - usage_written.get(user, -USAGE_WRITE_S) < USAGE_WRITE_S:
+        return
+    path = usage_path(user)
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(usage[user], f, ensure_ascii=False, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"usage of {user} not written ({e}), trying again with the next", file=sys.stderr, flush=True)
         return
     usage_written[user] = time.monotonic()
     usage_dirty.discard(user)
-    path = usage_path(user)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(usage[user], f, ensure_ascii=False, separators=(",", ":"))
-    os.replace(path + ".tmp", path)
+
+
+def flush_all_usage():
+    """Every user's usage.json that is behind, written now: at shutdown (runit's sv restart sends SIGTERM)."""
+    with usage_lock:
+        for user in list(usage_dirty):
+            flush_usage(user, now=True)
 
 
 def usage_since(user, since):
@@ -1642,6 +1672,12 @@ def main():
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.daemon_threads = True
     sys.stderr.write(f"xrnrule-sync on http://{args.host}:{args.port}, data in {args.data}\n")
+
+    def stop(_signum, _frame):
+        flush_all_usage()  # up to USAGE_WRITE_S of screen time is only in memory
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
     srv.serve_forever()
 
 

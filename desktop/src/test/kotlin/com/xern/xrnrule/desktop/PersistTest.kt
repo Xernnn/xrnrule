@@ -1,6 +1,7 @@
 package com.xern.xrnrule.desktop
 
 import com.xern.xrnrule.domain.Block
+import com.xern.xrnrule.domain.BlockEngine
 import com.xern.xrnrule.domain.BlockLock
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.EarnedCredit
@@ -13,6 +14,9 @@ import com.xern.xrnrule.domain.Trigger
 import com.xern.xrnrule.domain.TriggerType
 import com.xern.xrnrule.domain.TriggerUnit
 import com.xern.xrnrule.domain.World
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -80,6 +84,25 @@ class PersistTest {
         val world = FilePersist(worldFile, TestClock, base).loadWorld()
         assertEquals(listOf("b1"), world.blocks.map { it.id })
         assertTrue(base.exists())
+    }
+
+    @Test
+    fun aWorldEditedWhileStoppedDoesNotGetPastALock() {
+        val (worldFile, base, _) = synced()
+        // The daemon stopped, the lock and the site taken out of world.json by hand, the daemon started with no network.
+        val edited = FilePersist(worldFile, TestClock).loadWorld().let { w ->
+            w.copy(blocks = w.blocks.map { it.copy(lock = BlockLock(0, it.lock!!.setAtWall), targetSites = emptySet(), editedAtWall = TestClock.nowWallMs()) })
+        }
+        FilePersist(worldFile, TestClock).save(edited)
+        val dir = worldFile.parentFile
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+        val store = Store(BlockEngine(), FilePersist(worldFile, TestClock, base), TestClock, scope)
+        val shared = SharedSyncClient(Config("", "", "", 0, dir), store, FileTelemetry(File(dir, "telemetry.log")), scope)
+        runBlocking { store.coldStart(locks = shared::holdLocks) {} }
+        val b1 = store.world.value.block("b1")!!
+        assertEquals(locked.lock, b1.lock)
+        assertEquals(setOf("reddit.com"), b1.targetSites)
+        dir.deleteRecursively()
     }
 
     @Test

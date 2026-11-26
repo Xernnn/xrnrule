@@ -731,6 +731,47 @@ class SyncServerTest(unittest.TestCase):
             srv.usage.pop("kept")
         self.assertEqual(42000, srv.usage_since("kept", srv.date.min)["usage"]["laptop"][today]["apps"]["zen"])
 
+    def test_screen_time_is_written_to_disk_before_it_counts_as_written(self):
+        today = self.day()
+        path = os.path.join(srv.args.data, "users", "synced", "usage.json")
+        real_fsync = os.fsync
+        synced = []
+        with unittest.mock.patch.object(srv.os, "fsync", side_effect=lambda fd: (synced.append(fd), real_fsync(fd))):
+            srv.add_usage("synced", "laptop", {"days": {today: {"apps": {"zen": 1000}}}})
+        self.assertEqual(1, len(synced), "flushed to disk before the rename, as state.json is")
+        # A write that fails stays to do: the next call tries again, whatever USAGE_WRITE_S says.
+        with unittest.mock.patch.object(srv, "USAGE_WRITE_S", 0), \
+                unittest.mock.patch.object(srv.os, "replace", side_effect=OSError(28, "No space left on device")):
+            srv.add_usage("synced", "laptop", {"days": {today: {"apps": {"zen": 2000}}}})
+        with open(path) as f:
+            self.assertEqual(1000, json.load(f)["days"]["laptop"][today]["apps"]["zen"])
+        with srv.usage_lock:
+            self.assertIn("synced", srv.usage_dirty)
+            srv.flush_usage("synced", now=True)
+        with open(path) as f:
+            self.assertEqual(2000, json.load(f)["days"]["laptop"][today]["apps"]["zen"])
+
+    def test_an_unreadable_usage_file_is_kept_aside(self):
+        today = self.day()
+        folder = os.path.join(srv.args.data, "users", "garbled")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "usage.json"), "w") as f:
+            f.write('{"days": {"laptop": {')  # cut off by a power cut
+        srv.add_usage("garbled", "laptop", {"days": {today: {"apps": {"zen": 1000}}}})
+        aside = [n for n in os.listdir(folder) if n.startswith("usage.json.unreadable-")]
+        self.assertEqual(1, len(aside))
+        with open(os.path.join(folder, aside[0])) as f:
+            self.assertEqual('{"days": {"laptop": {', f.read())
+
+    def test_screen_time_still_in_memory_is_written_at_shutdown(self):
+        today = self.day()
+        path = os.path.join(srv.args.data, "users", "stopping", "usage.json")
+        srv.add_usage("stopping", "laptop", {"days": {today: {"apps": {"zen": 1000}}}})
+        srv.add_usage("stopping", "laptop", {"days": {today: {"apps": {"zen": 5000}}}})  # held back: written just now
+        srv.flush_all_usage()
+        with open(path) as f:
+            self.assertEqual(5000, json.load(f)["days"]["laptop"][today]["apps"]["zen"])
+
     def test_screen_time_is_written_at_most_so_often(self):
         today = self.day()
         path = os.path.join(srv.args.data, "users", "often", "usage.json")

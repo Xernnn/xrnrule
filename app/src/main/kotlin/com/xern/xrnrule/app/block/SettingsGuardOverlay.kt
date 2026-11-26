@@ -19,14 +19,14 @@ import com.xern.xrnrule.app.ui.PasswordGateContent
 import com.xern.xrnrule.domain.World
 
 /**
- * Phase C anti-bypass (brainstorm §4.5): while a HARDCORE block is ARMED/EARNED, intercept the
+ * Anti-bypass: while a HARDCORE block is ARMED/EARNED, intercept the
  * system Settings app itself (and OEM security apps such as MIUI's, which can force-stop apps
  * and revoke permissions) with a password prompt, so the user can't navigate to
  * Settings > Apps > xrnrule > Device admin apps and deactivate protection mid-urge.
  *
- * Coarser than the brainstorm's per-screen targeting — this only sees "Settings is in the
+ * Coarser than per-screen targeting — this only sees "Settings is in the
  * foreground", not which screen inside it, because the baseline detector is UsageStats-only
- * (brainstorm §4.1 Option C, no Accessibility). Same honesty tradeoff as the rest of the app:
+ * (usage access, no Accessibility: see ForegroundAppDetector). Same honesty tradeoff as the rest of the app:
  * gate the whole app rather than claim precision we don't have. [NoopHardcoreGuard] makes
  * [HardcoreGuard.shouldIntercept] always false, so this is a no-op in the `play` flavor and
  * when no password/device-admin is configured.

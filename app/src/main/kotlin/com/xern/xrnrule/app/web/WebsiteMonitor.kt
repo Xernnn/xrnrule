@@ -71,6 +71,41 @@ class ExtensionBrowsers(private val prefs: SharedPreferences) {
 }
 
 /**
+ * I49 on the phone: how long the extension has been silent with its own browser in front (turned
+ * off there, or a private tab it may not run in), added up across returns until it names a site
+ * from that browser again. Once [allowanceMs] is used, the browser gets only a few seconds each
+ * time it comes in front. Pure, so it can be tested without a phone.
+ */
+class ExtensionSilence(private val allowanceMs: Long = ALLOWANCE_MS) {
+    private var counted = 0L
+    private var lastLookAt: Long? = null
+
+    /** A look at [nowElapsed]: whether the extension's browser is in front, a while, with the extension silent. */
+    @Synchronized
+    fun look(silentInFront: Boolean, nowElapsed: Long) {
+        val last = lastLookAt
+        // Looks come every few seconds while the screen is on; a longer gap is the screen off.
+        if (silentInFront && last != null) counted += (nowElapsed - last).coerceIn(0, MAX_STEP_MS)
+        lastLookAt = nowElapsed.takeIf { silentInFront }
+    }
+
+    /** The extension named a site from its browser in front: it works there again. */
+    @Synchronized
+    fun spoke() {
+        counted = 0
+    }
+
+    /** Whether the silence allowed in front is used up. */
+    val spent: Boolean
+        @Synchronized get() = counted >= allowanceMs
+
+    companion object {
+        const val ALLOWANCE_MS = 2L * 60_000
+        const val MAX_STEP_MS = 10_000L
+    }
+}
+
+/**
  * A site the extension says is in front. [timed]: whether its time is time on that site. Not on
  * the block page standing in for it, nor in a private tab: the engine still hears them (the block
  * page's site runs its wait timer, I4), but time per site leaves them out, as on the laptop

@@ -30,7 +30,7 @@ object ScreenTime {
 
     /** Oldest first; the last entry is today (so far). Blocking — call off the main thread. */
     @SuppressLint("InlinedApi") // event-type constants are plain ints; newer ones just never occur on older OSes
-    fun lastDays(context: Context, days: Int = 7, zone: ZoneId = ZoneId.systemDefault()): List<DayUsage> {
+    fun lastDays(context: Context, days: Int = 7, zone: ZoneId = ZoneId.systemDefault(), shieldSpans: ShieldSpans? = null): List<DayUsage> {
         val usm = context.getSystemService(UsageStatsManager::class.java) ?: return emptyList()
         val today = LocalDate.now(zone)
         val dates = (days - 1 downTo 0).map { today.minusDays(it.toLong()) }
@@ -52,13 +52,21 @@ object ScreenTime {
                 t = next
             }
         }
-        fun credit(pkg: String, from: Long, to: Long) {
-            if (pkg in excluded || to <= from) return
+        fun creditTo(pkg: String, from: Long, to: Long) {
             for (d in 0 until days) {
                 val overlap = minOf(to, bounds[d + 1]) - maxOf(from, bounds[d])
                 if (overlap > 0) perDay[d].merge(pkg, overlap, Long::plus)
             }
             creditHours(from, to)
+        }
+        // While the block screen covered an app, Android still counts that app in front: that
+        // time is the block screen's (this app's), not the blocked app's.
+        val shielded = shieldSpans?.read().orEmpty()
+        fun credit(pkg: String, from: Long, to: Long) {
+            if (pkg in excluded || to <= from) return
+            val (its, shield) = ShieldSpans.split(from, to, shielded[pkg].orEmpty())
+            its.forEach { (a, b) -> creditTo(pkg, a, b) }
+            shield.forEach { (a, b) -> creditTo(context.packageName, a, b) }
         }
 
         // A package is foreground while at least one of its activities is resumed; tracking the

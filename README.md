@@ -131,10 +131,12 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Hard to talk yourself out of.** Deleting a block or making one easier (including the
   buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the clock or
   time zone by hand, on the phone or the laptop, doesn't reset limits, move schedules or end a
-  lock. The laptop goes by the time zone the phone sets itself.
+  lock. The laptop goes by the time zone the phone sets itself. A blocked app left on the phone's
+  screen in picture-in-picture or a floating window loses its sound, again whenever it takes it
+  back, with a notification naming it, until it's closed.
 - **Locks.** A block can be locked for 24 hours up to a year (its edit page): until then nothing
   that makes it easier to get past can change, on the phone or the laptop, whatever you wait or
-  type. Bought minutes and the daily break don't get past it either, not even ones already
+  type, nor by writing the laptop's files or the server's copy by hand: the phone keeps its own. Bought minutes and the daily break don't get past it either, not even ones already
   running; a habit still opens it. Making it stricter still works. Five emergency unlocks, shared
   by both devices and never given back, can end a lock early.
 - **Status at a glance.** The notification shows what's open and for how long, warns 30 s
@@ -270,10 +272,13 @@ The toolbar popup shows the site in front and what xrnrule says about it (blocke
 today and of which block, or no rule), whether xrnrule is answering, and a way into it. The
 extension's settings page has its one setting, the port xrnrule listens on, and shows its version
 and where it updates from, with **Check now**.
-The phone app warns when the browser the extension lives in goes quiet, without ever blocking
-that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
-off is closed after two minutes in front, and so is one that withholds the extension's site access
-(Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:
+The phone app warns when the browser the extension lives in goes quiet (the extension turned
+off, or a private tab it may not run in), and once it has been quiet there for two minutes in
+all, counted across returns, that browser too gets only ten seconds in front each time, enough
+to turn the extension back on. On the laptop, a browser with the extension turned
+off is closed after two minutes in front in all (stepping away and back doesn't start them
+again, and from then on it gets ten seconds each time, until the extension speaks again), and
+so is one that withholds the extension's site access (Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:
 the extension then stops talking to xrnrule), or whose window in front the extension can't
 see: a private window it isn't allowed in, or another profile without it. Browsers can't be seen
 inside other apps: a page opened in an app's own in-app browser isn't blocked.
@@ -302,6 +307,8 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
   by hand: `./gradlew :app:installSideloadRelease`, or open
   `https://<your server>/xrnrule/update/xrnrule.apk` on the phone and sign in with the sync login.
 - **The laptop daemon** has no updater: `desktop/install.sh` again, from an up-to-date checkout.
+  Its version is `git describe` of the checkout it was built from, on its page's Settings tab, in
+  `/api/state` and at the top of its log.
 
 ## Security
 
@@ -359,7 +366,8 @@ the SDK with `local.properties` (`sdk.dir=…`) or `ANDROID_HOME`. The server ne
 ./gradlew :app:assembleSideloadDebug   # full build, with hardcore mode
 ./gradlew :app:assemblePlayDebug       # Play-safe build: no Device Admin
 ./gradlew :app:installSideloadDebug    # build and install on a connected device
-./gradlew :app:installSideloadRelease  # the build to live with: not debuggable
+./gradlew :app:installSideloadRelease  # the build to live with: not debuggable, shrunk by R8
+./gradlew :app:checkReleaseKeeps       # R8 still keeps what reflection and the serializers need
 python3 -m unittest server/test_xrnrule_sync.py   # the sync server
 node --test extension/test/*.test.mjs  # the extension's helpers and its signed .crx
 node --test server/*.test.mjs          # the status page's reading of the shared state, Insights
@@ -369,10 +377,11 @@ desktop/install.sh                     # build and (re)start the laptop daemon
 server/deploy.sh                       # test and deploy the sync server and its page
 node scripts/release.mjs               # publish the extension and the app; see Updates
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
+scripts/extension-icons.sh             # the extension's PNG icons, every size, from its tile SVG (rsvg-convert)
 ```
 
-CI (`.github/workflows/ci.yml`) runs the three Gradle test tasks, the server's tests and the
-extension's and status page's Node tests on every push.
+CI (`.github/workflows/ci.yml`) runs the three Gradle test tasks, `checkReleaseKeeps`, the
+server's tests and the extension's and status page's Node tests on every push.
 
 The phone app's screens can be drawn without a phone:
 `app/src/debug/kotlin/com/xern/xrnrule/app/ui/Previews.kt` holds Compose previews on made-up data

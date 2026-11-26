@@ -214,6 +214,13 @@ class LocalServerTest {
     }
 
     @Test
+    fun thePageSaysWhichBuildOfTheDaemonThisIs() {
+        // Whether the installed daemon was behind main could only be guessed from file times.
+        val version = Daemon(emptyList()).getJson("/api/state")["version"]?.jsonPrimitive?.content
+        assertTrue("git describe of the checkout it was built from: $version", version != null && Regex("""[\w.\-]+""").matches(version))
+    }
+
+    @Test
     fun aBlockNamesItsPhoneAppsAndAHabitItsOwnColourForThePage() {
         // The page draws a block's phone apps by their logos (/api/icon?key=app:<package>) and a
         // habit's row in its own colour: a count of apps and the data orange were all it had.

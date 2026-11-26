@@ -21,7 +21,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Strategy behind the foreground-app signal. Phase A ships [UsageStatsDetector] only (Option C
- * in brainstorm §4.1): it survives Android 17 Advanced Protection Mode and carries no Play
+ * in the early design): it survives Android 17 Advanced Protection Mode and carries no Play
  * policy risk. An `AccessibilityDetector` accelerator can be slotted in later without touching
  * callers.
  */
@@ -73,13 +73,16 @@ class UsageStatsDetector(
      */
     val customTab: Boolean get() = tracker.customTab
 
+    /** Apps shown on the screen besides the one in front: picture-in-picture, a floating window (see [ForegroundTracker.shownBesides]). */
+    fun shownBesides(): Set<String> = tracker.shownBesides()
+
     private fun moves(from: Long, to: Long): List<ForegroundTracker.Move> {
         val events = usm.queryEvents(from, to)
         val event = UsageEvents.Event()
         val out = mutableListOf<ForegroundTracker.Move>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            ForegroundTracker.moveOf(event.packageName, event.className, event.eventType)?.let(out::add)
+            ForegroundTracker.moveOf(event.packageName, event.className, event.eventType, event.timeStamp)?.let(out::add)
         }
         return out
     }
@@ -133,14 +136,20 @@ class ForegroundTracker(
     private val moves: (from: Long, to: Long) -> List<Move>,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
-    /** [pkg]'s activity [className] came to the front ([front]), or paused or stopped. */
-    data class Move(val pkg: String, val className: String?, val front: Boolean = true)
+    /** [pkg]'s activity [className] came to the front ([front]), or paused, or [stopped] (no longer shown), at [atWall]. */
+    data class Move(val pkg: String, val className: String?, val front: Boolean = true, val stopped: Boolean = false, val atWall: Long = 0)
 
     private var cursor: Long? = null
     private var current: String? = null
 
     /** Activities resumed and not paused since, the latest last. */
     private val resumed = LinkedHashMap<Pair<String, String?>, Unit>()
+
+    /** Activities paused and not stopped since, still shown (picture-in-picture), with when they paused. */
+    private val pausedShown = LinkedHashMap<Pair<String, String?>, Long>()
+
+    /** Whether this phone says when an activity stops (API 29 on): without it, every paused one would look shown. */
+    private var stopsSeen = false
 
     @Volatile
     var customTab: Boolean = false
@@ -156,6 +165,7 @@ class ForegroundTracker(
             var fallback: Move? = null
             for (span in FIRST_LOOK_MS) {
                 resumed.clear()
+                pausedShown.clear()
                 val seen = moves((now - span).coerceAtLeast(0L), now)
                 seen.forEach(::apply)
                 if (resumed.isNotEmpty()) break
@@ -174,10 +184,29 @@ class ForegroundTracker(
     private fun apply(move: Move) {
         val key = move.pkg to move.className
         resumed.remove(key)
-        if (move.front) resumed[key] = Unit
+        pausedShown.remove(key)
+        when {
+            move.front -> resumed[key] = Unit
+            move.stopped -> stopsSeen = true
+            else -> pausedShown[key] = move.atWall
+        }
         // With nothing resumed (between one app's pause and the next one's resume) the last app
         // stays in front: `current` only ever moves to another app, it is never cleared.
         resumed.keys.lastOrNull()?.let { (pkg, className) -> take(pkg, className) }
+    }
+
+    /**
+     * The apps shown besides the one in front, as of the last [poll]: another activity still
+     * resumed (a floating window, split screen), or one paused at least [SHOWN_SETTLE_MS] ago and
+     * not stopped (picture-in-picture: an activity that leaves the front stops within a moment).
+     * Empty on a phone that never says an activity stopped.
+     */
+    @Synchronized
+    fun shownBesides(): Set<String> {
+        if (!stopsSeen) return emptySet()
+        val at = cursor ?: return emptySet()
+        val shown = resumed.keys.map { it.first } + pausedShown.filterValues { at - it >= SHOWN_SETTLE_MS }.keys.map { it.first }
+        return shown.toSet() - setOfNotNull(current)
     }
 
     private fun take(pkg: String, className: String?) {
@@ -186,6 +215,9 @@ class ForegroundTracker(
     }
 
     companion object {
+        /** How long a paused activity has to stay unstopped to count as shown (switching apps stops it within a second). */
+        const val SHOWN_SETTLE_MS = 3_000L
+
         /** A minute, then ten, an hour, six, a day, a week. */
         private val FIRST_LOOK_MS = listOf(60_000L, 600_000L, 3_600_000L, 21_600_000L, 86_400_000L, 604_800_000L)
 
@@ -206,9 +238,10 @@ class ForegroundTracker(
          * activity destroyed in front may never send a pause: taken as nothing, it stayed "resumed",
          * and any look between one app's pause and the next one's resume found it in front again.
          */
-        fun moveOf(pkg: String, className: String?, eventType: Int): Move? = when (eventType) {
-            ACTIVITY_RESUMED -> Move(pkg, className, front = true)
-            ACTIVITY_PAUSED, ACTIVITY_STOPPED, ACTIVITY_DESTROYED -> Move(pkg, className, front = false)
+        fun moveOf(pkg: String, className: String?, eventType: Int, atWall: Long = 0): Move? = when (eventType) {
+            ACTIVITY_RESUMED -> Move(pkg, className, front = true, atWall = atWall)
+            ACTIVITY_PAUSED -> Move(pkg, className, front = false, atWall = atWall)
+            ACTIVITY_STOPPED, ACTIVITY_DESTROYED -> Move(pkg, className, front = false, stopped = true, atWall = atWall)
             else -> null
         }
     }

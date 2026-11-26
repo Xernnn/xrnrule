@@ -428,8 +428,9 @@ class Store(
      * stopped: the first window or page reported would otherwise charge all the time it was
      * stopped to whatever was in front then, to a limit or to a habit app's timer.
      */
-    suspend fun coldStart(feed: () -> Unit) {
+    suspend fun coldStart(locks: suspend () -> Unit = {}, feed: () -> Unit) {
         dispatchAndGet(BlockEvent.BootOrColdStart) // and the first shield plan
+        locks() // I39: the world as read from disk can't have got past a lock (SharedSyncClient.holdLocks)
         feed()
     }
 

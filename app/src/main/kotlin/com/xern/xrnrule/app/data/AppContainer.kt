@@ -39,7 +39,7 @@ class AppContainer(context: Context) {
     /** The single source of truth for [World]. UI observes it, the service drives it. */
     val store = WorldStore(engine, persist, telemetry, clock, appScope)
 
-    /** Anti-bypass (brainstorm §4.5) — real in the `sideload` flavor, a no-op in `play`. */
+    /** Anti-bypass — real in the `sideload` flavor, a no-op in `play`. */
     val hardcoreGuard: HardcoreGuard = createHardcoreGuard(context)
 
     /** Websites come from the xrnrule extension in the phone's browser, through [extensionServer]. */
@@ -47,6 +47,9 @@ class AppContainer(context: Context) {
     val extensionServer = ExtensionServer(store, websites, context.assets, appScope)
 
     val siteUsage = SiteUsageLog(File(context.filesDir, "site_usage.json"), clock)
+
+    /** When the block screen covered which app, for screen time. */
+    val shieldSpans = ShieldSpans(File(context.filesDir, "shield_spans.tsv"))
 
     /** Websites' own icons, asked of each site and kept on the phone. */
     val siteIcons = SiteIconCache(context, appScope)
@@ -66,7 +69,7 @@ class AppContainer(context: Context) {
     /** This phone's screen time, sent to the sync server for the laptop's pages, the status page and the hub. */
     val usageUpload = UsageUpload(
         server = { shared.settings.takeIf { it.isConfigured }?.let { IconUpload.Server(it.url, it.user, it.password) } },
-        source = PhoneUsage(context, siteUsage, clock),
+        source = PhoneUsage(context, siteUsage, clock, shieldSpans),
         prefs = context.getSharedPreferences("usage_upload", Context.MODE_PRIVATE),
         clock = clock,
         scope = appScope,

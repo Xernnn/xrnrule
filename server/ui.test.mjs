@@ -120,6 +120,17 @@ test("a block's icons go as the phone's tile: its apps, its laptop apps, then it
   assert.equal(yt.extra, 0);
 });
 
+test("a service on the phone, the laptop and the web is one tile, not two", () => {
+  // Discord's phone app and laptop app, and its site: the phone app's logo stands for all three.
+  const chat = blockLogos({ targetPackages: ["com.discord"], targetDesktopApps: ["discord"], targetSites: ["discord.com"] });
+  assert.deepEqual(chat.items.map((x) => x.key), ["app:com.discord"]);
+  // The laptop's page, which may not know the phone's packages: the laptop app, without the site.
+  const laptop = blockLogos({ desktopApps: ["com.discordapp.Discord"], shownSites: ["discord.com"], phoneApps: 1 });
+  assert.deepEqual(laptop.items.map((x) => x.key), ["desk:com.discordapp.Discord"]);
+  // Another laptop app keeps its own tile.
+  assert.deepEqual(blockLogos({ targetPackages: ["com.discord"], targetDesktopApps: ["steam"] }).items.map((x) => x.key), ["app:com.discord", "desk:steam"]);
+});
+
 test("what a block covers, in words, for its icons' title", () => {
   assert.equal(coverText({ sites: ["reddit.com", "x.com"], phoneApps: 2, laptopApps: ["Steam"], except: ["old.reddit.com"] }),
     "reddit.com, x.com · 2 phone apps · Steam · except old.reddit.com");

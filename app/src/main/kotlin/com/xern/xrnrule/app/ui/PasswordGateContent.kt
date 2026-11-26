@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
 
 /**
- * Shown over the system Settings app while a HARDCORE block is armed (brainstorm §4.5) — the
+ * Shown over the system Settings app while a HARDCORE block is armed — the
  * only way past it is the app password or backing out to the home screen. Shares the same
  * theme/layout language as [BlockOverlayContent] since it's the same kind of surface: a plain,
  * unavoidable overlay.

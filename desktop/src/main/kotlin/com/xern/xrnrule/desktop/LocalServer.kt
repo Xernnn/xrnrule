@@ -621,6 +621,8 @@ class LocalServer(
         /** A clock or time zone set by hand, which blocks leave out (ClockGuard, I54). */
         val clockNote: String? = null,
         val subject: UiSubject?,
+        /** This daemon's version (DAEMON_VERSION). */
+        val version: String? = DAEMON_VERSION,
     )
 
     private fun view(app: String? = null, site: String? = null): UiState {
@@ -904,6 +906,11 @@ class LocalServer(
             "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
         /** The extension's version when this daemon was built (`extension-manifest.json`, see the build). */
+        /** This daemon's version: `git describe` of the checkout it was built from (desktop/build.gradle.kts). */
+        val DAEMON_VERSION: String? = runCatching {
+            LocalServer::class.java.getResourceAsStream("/xrnrule-desktop.version")!!.use { it.readBytes().decodeToString().trim() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() && it.length <= 64 }
+
         private val BUILT_WITH_EXTENSION: String? = runCatching {
             val text = LocalServer::class.java.getResourceAsStream("/extension-manifest.json")!!.use { it.readBytes().decodeToString() }
             Regex("\"version\"\\s*:\\s*\"([0-9.]+)\"").find(text)?.groupValues?.get(1)

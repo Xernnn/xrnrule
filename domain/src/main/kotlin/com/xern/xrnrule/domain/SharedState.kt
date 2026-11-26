@@ -190,38 +190,115 @@ data class SharedState(
             }
         }
 
-        /** [nowWall]: this device's clock, which says what day it is for the use reports ([newerUse]). */
+        /** [nowWall]: this device's clock, which says what day it is for the use reports ([newerUse]) and whether a lock holds (I39). */
         fun merge(base: SharedState?, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
-            // Numbers below zero no form makes are read as what they mean first (§2.3), so a lock judges them as such.
-            val b = (base ?: SharedState()).sane()
-            val sentHere = local.sane()
-            val sentThere = remote.sane()
-            // A checklist change a lock refuses never happened (I39): the merge goes on without it.
-            var l = sentHere
-            var r = sentThere
-            for (id in local.blocks.keys intersect remote.blocks.keys) {
-                if (checklistRefused(id, b, made = sentHere, other = sentThere)) {
+            // Numbers below zero no form makes are read as what they mean first (§2.3), so a lock
+            // judges them as such; and a stamp from the future as no later than just ahead (I39).
+            val latest = nowWall + Defaults.FUTURE_STAMP_MS
+            val b = (base ?: SharedState()).sane().stampedNoLaterThan(latest)
+            val sentHere = local.sane().stampedNoLaterThan(latest)
+            val sentThere = remote.sane().stampedNoLaterThan(latest)
+            val emergencies = sentHere.emergencyLog + sentThere.emergencyLog
+            // A change a lock refuses never happened (I39): the merge goes on without it. First what
+            // either side changed while the lock both knew of held, as nothing that side's own
+            // check lets through can do that (the laptop's world.json and the server's copy can
+            // be written by hand); then what one side changed unaware of a lock the other set.
+            var l = withoutLockedChanges(sentHere, b, emergencies, nowWall)
+            var r = withoutLockedChanges(sentThere, b, emergencies, nowWall)
+            for (id in l.blocks.keys intersect r.blocks.keys) {
+                val lock = keptLock(id, laterLock(l.blocks.getValue(id).lock, r.blocks.getValue(id).lock), b, l, r, emergencies, nowWall)
+                if (checklistRefused(id, b, made = l, lock)) {
                     l = withoutChecklistChange(l, b, id)
-                } else if (checklistRefused(id, b, made = sentThere, other = sentHere)) {
+                } else if (checklistRefused(id, b, made = r, lock)) {
                     r = withoutChecklistChange(r, b, id)
                 }
             }
-            return mergeStates(b, l, r, nowWall)
+            return mergeStates(b, l, r, nowWall, emergencies)
+        }
+
+        /** I39: this state with no block, checklist or lock stamped later than [latest]; later ones are read as [latest]. */
+        private fun SharedState.stampedNoLaterThan(latest: Long): SharedState = copy(
+            blocks = blocks.mapValues { (_, block) ->
+                block.copy(
+                    editedAtWall = block.editedAtWall.coerceAtMost(latest),
+                    checklistEditedAtWall = block.checklistEditedAtWall.coerceAtMost(latest),
+                    lock = block.lock?.let { it.copy(setAtWall = it.setAtWall.coerceAtMost(latest)) },
+                )
+            },
+        )
+
+        /**
+         * [side] without what it changed since [base], against the lock in [base] (one both sides
+         * knew of) that holds at [nowWall] (I39): a block loosened ([BlockEdits.loosens], the lock
+         * aside, which [keptLock] judges) or deleted is back as in [base], with this side's lock and
+         * checklist stamp; a checklist loosened ([itemsLoosen]) is back as in [base], its ticks and
+         * spending kept. Unless this side ended that lock with an emergency unlock (I40): what
+         * followed went through its guard.
+         */
+        private fun withoutLockedChanges(side: SharedState, base: SharedState, emergencies: Map<String, Long>, nowWall: Long): SharedState {
+            var out = side
+            for ((id, was) in base.blocks) {
+                val held = was.lock?.takeIf { BlockEdits.locked(was, nowWall) } ?: continue
+                val now = side.blocks[id]
+                val ended = now?.lock?.let { it.setAtWall >= held.setAtWall && emergency(id, it, emergencies) } == true
+                if (ended) continue
+                if (now == null || BlockEdits.loosens(was, now.copy(lock = was.lock))) {
+                    val back = was.copy(lock = now?.lock ?: was.lock, checklistEditedAtWall = now?.checklistEditedAtWall ?: was.checklistEditedAtWall)
+                    out = out.copy(blocks = out.blocks + (id to back))
+                }
+                if (itemsLoosen(base.itemsOf(id), out.itemsOf(id))) out = withoutChecklistChange(out, base, id)
+            }
+            return out
+        }
+
+        /**
+         * I40: whether [lock] is an emergency unlock of block [id]: ended as it was set, and logged
+         * among the first [Defaults.EMERGENCY_UNLOCKS] in [emergencies] (by when, then by key).
+         * An entry written into the log by hand is no sixth one.
+         */
+        private fun emergency(id: String, lock: BlockLock, emergencies: Map<String, Long>): Boolean =
+            lock.untilWall == lock.setAtWall &&
+                emergencies.entries.sortedWith(compareBy<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+                    .take(Defaults.EMERGENCY_UNLOCKS).any { it.key == "$id@${lock.setAtWall}" }
+
+        /**
+         * I39: block [id]'s lock after the merge: [chosen] (by the table, §2.4), unless it ends before
+         * the longest lock holding at [nowWall] in [base], [local] or [remote] and isn't an emergency
+         * unlock set after that one (I40). Then that one stands: a lock made up as "set later" ends none.
+         */
+        private fun keptLock(
+            id: String,
+            chosen: BlockLock?,
+            base: SharedState,
+            local: SharedState,
+            remote: SharedState,
+            emergencies: Map<String, Long>,
+            nowWall: Long,
+        ): BlockLock? {
+            val held = listOfNotNull(base.blocks[id]?.lock, local.blocks[id]?.lock, remote.blocks[id]?.lock)
+                .filter { nowWall < it.untilWall }
+                .maxByOrNull { it.untilWall } ?: return chosen
+            return when {
+                chosen != null && chosen.untilWall >= held.untilWall -> chosen
+                chosen != null && chosen.setAtWall >= held.setAtWall && emergency(id, chosen, emergencies) -> chosen
+                else -> held
+            }
         }
 
         /**
          * Whether [made]'s change to block [id]'s checklist since [base] gives way (I39): made while
-         * a lock from [other] held that its device hadn't heard of (offline), and making the checklist
-         * easier ([itemsLoosen]: an item gone, a habit item's day or a tag changed). Its device
-         * would have refused it, had it known. An item carries no time of its own, and a removed one
-         * leaves nothing, so the block's [Block.checklistEditedAtWall] says when it was made.
+         * [lock] (the block's after the merge, [keptLock]) held, from the other side, whose device
+         * hadn't heard of it (offline), and making the checklist easier ([itemsLoosen]: an item
+         * gone, a habit item's day or a tag changed). Its device would have refused it, had it known.
+         * An item carries no time of its own, and a removed one leaves nothing, so the block's
+         * [Block.checklistEditedAtWall] says when it was made.
          */
-        private fun checklistRefused(id: String, base: SharedState, made: SharedState, other: SharedState): Boolean {
+        private fun checklistRefused(id: String, base: SharedState, made: SharedState, lock: BlockLock?): Boolean {
             val was = base.blocks[id] ?: return false
             val mine = made.blocks.getValue(id)
             val at = mine.checklistEditedAtWall
             if (at == was.checklistEditedAtWall) return false
-            val lock = laterLock(mine.lock, other.blocks.getValue(id).lock) ?: return false
+            if (lock == null) return false
             val unheardOf = lock != mine.lock && lock.setAtWall <= at && at < lock.untilWall
             return unheardOf && itemsLoosen(base.itemsOf(id), made.itemsOf(id))
         }
@@ -247,21 +324,22 @@ data class SharedState(
 
         private fun SharedState.itemsOf(blockId: String): List<ChecklistItem> = items.values.filter { it.blockId == blockId }
 
-        private fun mergeStates(b: SharedState, local: SharedState, remote: SharedState, nowWall: Long): SharedState {
+        private fun mergeStates(b: SharedState, local: SharedState, remote: SharedState, nowWall: Long, emergencies: Map<String, Long>): SharedState {
             val newer = newerUse(nowWall)
             val unlockSameDay = local.unlockEpochDay == remote.unlockEpochDay
             val overrideSameDay = local.overrideEpochDay == remote.overrideEpochDay
             fun <T> field(get: (Settings) -> T, resolve: (T, T) -> T): T =
                 mergeValue(get(b.settings), get(local.settings), get(remote.settings), resolve)
+            fun lockOf(id: String, chosen: BlockLock?) = keptLock(id, chosen, b, local, remote, emergencies, nowWall)
             return SharedState(
                 blocks = mergeMaps(b.blocks, local.blocks, remote.blocks) { l, r ->
                     when {
                         l == null -> r // edited beats deleted: the stricter side
                         r == null -> l
-                        r.editedAtWall >= l.editedAtWall -> laterEdit(r, l)
-                        else -> laterEdit(l, r)
+                        r.editedAtWall >= l.editedAtWall -> laterEdit(r, l, lockOf(l.id, laterLock(r.lock, l.lock)))
+                        else -> laterEdit(l, r, lockOf(l.id, laterLock(l.lock, r.lock)))
                     }
-                },
+                }.mapValues { (id, block) -> block.copy(lock = lockOf(id, block.lock)) }, // a one-sided change too (I39)
                 items = mergeMaps(b.items, local.items, remote.items) { l, r ->
                     when {
                         l == null -> r
@@ -373,14 +451,14 @@ data class SharedState(
         }
 
         /**
-         * Of two edits of a block, the [later] one wins, with the lock set last whichever it is
-         * (I39). Unless that lock came from the [earlier] side and held when [later] was made:
-         * its device hadn't heard of it yet (offline), and an edit making the block easier is one
-         * the lock refuses, so [earlier] stands. An edit made knowing the lock went through that
-         * device's own check, by its own clock; an emergency unlock (I40) set a lock already ended.
+         * Of two edits of a block, the [later] one wins, with [lock], the one set last whichever it
+         * is, unless it would end one that holds ([keptLock], I39). Unless that lock came from the
+         * [earlier] side and held when [later] was made: its device hadn't heard of it yet
+         * (offline), and an edit making the block easier is one the lock refuses, so [earlier]
+         * stands. An edit made knowing the lock went through that device's own check, by its own
+         * clock; an emergency unlock (I40) set a lock already ended.
          */
-        private fun laterEdit(later: Block, earlier: Block): Block {
-            val lock = laterLock(later.lock, earlier.lock)
+        private fun laterEdit(later: Block, earlier: Block, lock: BlockLock?): Block {
             val unheardOf = lock != null && lock != later.lock && lock.setAtWall <= later.editedAtWall && later.editedAtWall < lock.untilWall
             val refused = unheardOf && BlockEdits.loosens(earlier, later.copy(lock = earlier.lock))
             // The checklist merges on its own, so its stamp is the later of the two whichever settings win.

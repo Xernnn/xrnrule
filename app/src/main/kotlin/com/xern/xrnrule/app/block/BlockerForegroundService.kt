@@ -7,6 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.PowerManager
 import android.widget.Toast
@@ -25,6 +28,7 @@ import com.xern.xrnrule.app.data.isGranted
 import android.os.SystemClock
 import com.xern.xrnrule.app.web.Browsers
 import com.xern.xrnrule.app.web.Sighting
+import com.xern.xrnrule.app.web.ExtensionSilence
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
@@ -57,7 +61,7 @@ import kotlinx.coroutines.withContext
 /**
  * Owns the Phase A core loop: detect the foreground app -> feed the engine -> (re)render the
  * block overlay. Runs as a `specialUse` foreground service so it can hold the overlay and be
- * restarted after death (survival layer, brainstorm §4.4 — the watchdog/boot pieces are
+ * restarted after death (survival layer — the watchdog/boot pieces are
  * Phase B). Also keeps the status notification current and raises alerts (see [Notifications]).
  */
 class BlockerForegroundService : LifecycleService() {
@@ -79,6 +83,9 @@ class BlockerForegroundService : LifecycleService() {
 
     /** I49: the browser in front, if it's one that can't block sites and has to stay closed. */
     private val otherBrowser = MutableStateFlow<String?>(null)
+
+    /** I49: the extension silent in its own browser in front, across returns. */
+    private val homeSilence = ExtensionSilence()
     private var usageDetector: UsageStatsDetector? = null
     private val awake = MutableStateFlow(true)
     private lateinit var overlay: OverlayShieldPort
@@ -218,6 +225,8 @@ class BlockerForegroundService : LifecycleService() {
                 .flowOn(Dispatchers.Default)
                 .collect { (r, screen, status) ->
                     overlay.show(screen)
+                    // Screen time: the app under the block screen isn't in use (ShieldSpans).
+                    container.shieldSpans.shown(r.shown.pkg.takeIf { screen != null })
                     settingsGuard.render(r.fg.pkg, r.world)
                     updateCornerClock()
                     notifications.updateStatus(status)
@@ -289,6 +298,7 @@ class BlockerForegroundService : LifecycleService() {
                 container.checkClock()
             }
             if (seconds % 5 == 0) checkHealth(container.store.world.value)
+            checkShown(container.store.world.value)
             updateCornerClock()
             seconds++
             val today = container.store.world.value.habitDay(container.clock)
@@ -347,15 +357,26 @@ class BlockerForegroundService : LifecycleService() {
         // the moment of switching is the last browser's. And only the extension's own: the block
         // page speaks from any browser that opens it.
         inFront?.takeIf { (_, since) -> SiteSightings.voice.namedSiteSince(since + BROWSER_SETTLE_MS) }
-            ?.let { (pkg, _) -> container.websites.extensionBrowser = pkg }
-        // I49: a browser that can't block sites, once one that can is known. Never that one itself:
-        // it's where the extension gets fixed.
+            ?.let { (pkg, _) ->
+                container.websites.extensionBrowser = pkg
+                homeSilence.spoke()
+            }
+        // I49: a browser that can't block sites, once one that can is known.
         val other = inFront?.takeIf { (pkg, since) ->
             SystemClock.elapsedRealtime() - since >= EXTENSION_GRACE_MS && !inCustomTab() &&
                 container.websites.lacksExtension(pkg) && Browsers.isFullBrowser(this, pkg) &&
                 ExtensionApi.otherBrowsersMatter(world)
         }?.first
-        otherBrowser.value = other
+        // The extension's own browser too, once the extension has been silent there for two
+        // minutes in all (turned off, or a private tab it may not run in): from then on it gets
+        // the same few seconds in front each time, which is where the extension gets fixed.
+        val home = container.websites.extensionBrowser
+        homeSilence.look(silentBrowser != null && silentBrowser == home, SystemClock.elapsedRealtime())
+        val homeShielded = inFront?.takeIf { (pkg, since) ->
+            pkg == home && homeSilence.spent && SystemClock.elapsedRealtime() - since >= EXTENSION_GRACE_MS &&
+                !inCustomTab() && ExtensionApi.otherBrowsersMatter(world)
+        }?.first
+        otherBrowser.value = other ?: homeShielded
         val sitesOff = other == null && silentBrowser != null && world.blocks.any { it.enabled && it.targetSites.isNotEmpty() }
         // Sync failing for an hour: unlocks and ticks from the laptop stop arriving, silently.
         val now = System.currentTimeMillis()
@@ -441,6 +462,46 @@ class BlockerForegroundService : LifecycleService() {
         super.onDestroy()
     }
 
+    /** A blocked app shown besides the one in front, picture-in-picture or a floating window, and the sound held from it. */
+    private var shownBlocked: String? = null
+    private var shownFocus: AudioFocusRequest? = null
+
+    @Volatile
+    private var shownFocusLost = false
+
+    /**
+     * A blocked app still on the screen besides the one in front (picture-in-picture, a floating
+     * window, split screen) is no way past its block: its sound is taken (players pause on losing
+     * it), again whenever it takes it back, and a notification says it's blocked until it's gone.
+     */
+    private fun checkShown(world: World) {
+        val blocked = world.appliedShield.blockedPackages
+        val shown = usageDetector?.shownBesides().orEmpty().firstOrNull { it in blocked && it != foreground.value.pkg }
+        if (shown == null) {
+            if (shownBlocked != null) {
+                shownBlocked = null
+                shownFocus?.let { request -> runCatching { getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(request) } }
+                shownFocus = null
+                notifications.cancel(Notifications.ALERT_SHOWN_BLOCKED)
+            }
+            return
+        }
+        if (shown != shownBlocked) {
+            shownBlocked = shown
+            notifications.alert(Notifications.ALERT_SHOWN_BLOCKED, "${appLabel(shown)} is blocked", "")
+        }
+        if (shownFocus == null || shownFocusLost) {
+            val manager = getSystemService(AudioManager::class.java) ?: return
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+                .setOnAudioFocusChangeListener { change -> if (change < 0) shownFocusLost = true }
+                .build()
+            shownFocusLost = false
+            runCatching { manager.requestAudioFocus(request) }
+            shownFocus = request
+        }
+    }
+
     private fun appLabel(pkg: String): String = AppLabels.of(this, pkg)
 
     private fun overrideText(reason: OverrideRejection): String = when (reason) {
@@ -464,7 +525,7 @@ class BlockerForegroundService : LifecycleService() {
     /**
      * Some OEMs kill the whole process when the task is swiped from recents despite
      * `START_STICKY`. Ask WorkManager to bring the service back up immediately rather than
-     * waiting for [ServiceWatchdogWorker]'s next periodic tick (brainstorm §4.4).
+     * waiting for [ServiceWatchdogWorker]'s next periodic tick.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)

@@ -1027,7 +1027,8 @@ function settingsView() {
     row(icon("extension"), "Browser extension", ext[1], null, ext[0]),
     state.habitsUrl && h("a", { class: "srow", href: state.habitsUrl, target: "_blank" }, h("span", { class: "lead" }, h("img", { src: "/xrnloops.svg", alt: "" })),
       h("div", { class: "stitle" }, h("span", {}, "xrnloops"), h("small", { class: state.loop?.ok === false ? "bad" : "" }, state.loop?.ok === false ? state.loop.message : "Synced")), icon("openNew")),
-    row(icon("lockOpen"), "Unlock time a day", null, h("span", { class: "val num" }, `${min(state.dailyCapMs)} min`))));
+    row(icon("lockOpen"), "Unlock time a day", null, h("span", { class: "val num" }, `${min(state.dailyCapMs)} min`)),
+    row(icon("desktop"), "Version", state.version ?? "–")));
   settingsPage.bar.replaceChildren(settingsDirty ? h("div", { class: "savebar" },
     h("span", { class: "error" }, settingsError),
     h("button", { class: "btn ghost", type: "button", onclick: () => { settingsDirty = false; settingsError = ""; prefsKey = ""; render(); } }, "Cancel"),

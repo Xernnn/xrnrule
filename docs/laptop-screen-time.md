@@ -172,5 +172,8 @@ is unchanged:
   2026-11-26). The Usage access line that said "Nothing leaves your phone" now says "Screen time
   goes only to your own server".
 - Is 3 minutes the right idle time?
-- While the phone's block screen covers an app, Android counts that app in front, so the time
-  counts under it. The laptop leaves its block page out. Leave the phone's out too?
+- ~~While the phone's block screen covers an app, Android counts that app in front, so the time
+  counts under it. The laptop leaves its block page out. Leave the phone's out too?~~ Yes
+  (2026-11-27): the phone notes when its block screen covered which app (`shield_spans.tsv`, a
+  month kept) and counts that time as xrnrule's, the block screen's, in Insights and in what it
+  sends.

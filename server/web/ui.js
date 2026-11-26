@@ -217,6 +217,11 @@ const PAIRS = {
   "pinterest.com": ["com.pinterest"], "snapchat.com": ["com.snapchat.android"], "twitch.tv": ["tv.twitch.android.app"], "discord.com": ["com.discord"],
   "netflix.com": ["com.netflix.mediaclient"],
 };
+/** The PAIRS service a laptop app is ("discord", "com.discordapp.Discord": discord.com), or undefined. */
+const deskService = (id) => {
+  const word = String(id).split(".").pop().toLowerCase();
+  return Object.keys(PAIRS).find((domain) => domain.split(".")[0] === word);
+};
 const covers = (site, domain) => {
   const host = String(site).split("/")[0];
   return host === domain || host.endsWith(`.${domain}`);
@@ -232,13 +237,17 @@ const covers = (site, domain) => {
  */
 export function blockLogos(b, names = (id) => id) {
   const packages = [...new Set(b.phonePackages ?? b.targetPackages ?? [])].sort();
-  const desk = [...new Set(b.desktopApps ?? b.targetDesktopApps ?? [])].sort((x, y) => String(names(x)).localeCompare(String(names(y))));
+  const anyDesk = [...new Set(b.desktopApps ?? b.targetDesktopApps ?? [])];
+  // A laptop app of a service whose phone app the block has is the same service: one tile.
+  const desk = anyDesk.filter((id) => !PAIRS[deskService(id)]?.some((a) => packages.includes(a)))
+    .sort((x, y) => String(names(x)).localeCompare(String(names(y))));
   const all = (b.shownSites ?? b.targetSites ?? b.sites ?? []).map((x) => String(x).toLowerCase());
   const named = new Set(all);
   const sites = [];
   for (const site of [...all].sort()) {
     if (ALIASES[site] && named.has(ALIASES[site])) continue;
     if (Object.entries(PAIRS).some(([domain, apps]) => covers(site, domain) && apps.some((a) => packages.includes(a)))) continue;
+    if (Object.keys(PAIRS).some((domain) => covers(site, domain) && anyDesk.some((id) => deskService(id) === domain))) continue;
     const host = site.split("/")[0];
     if (!sites.includes(host)) sites.push(host);
   }

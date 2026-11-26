@@ -1498,6 +1498,46 @@ class InvariantTests {
     }
 
     @Test
+    fun i39_aOneSidedLooseningByTheLaptopOrTheServerIsRefused() {
+        val minutes = 60_000L
+        val block = modeBlock("a1", BlockMode.ALLOWANCE, dailyAllowanceMs = 30 * minutes)
+        val (phone, laptop, server) = twoDevices(listOf(block))
+        val now = phone.clock.nowWallMs()
+        val lock = BlockLock(untilWall = now + 30 * DAY_MS, setAtWall = now)
+        phone.world = phone.world.copy(blocks = listOf(phone.block("a1").copy(lock = lock, editedAtWall = now)))
+        phone.sync(server)
+        laptop.sync(server)
+        assertEquals(lock, laptop.block("a1").lock)
+        fun loosened(b: Block) = b.copy(dailyAllowanceMs = 120 * minutes, lock = lock.copy(untilWall = 0), editedAtWall = b.editedAtWall + 1)
+        fun assertLockedEverywhere(why: String) {
+            for (device in listOf(phone, laptop)) {
+                assertEquals("$why: ${device.id}", lock, device.block("a1").lock)
+                assertEquals("$why: ${device.id}", 30 * minutes, device.block("a1").dailyAllowanceMs)
+            }
+            assertEquals(why, lock, server.state.blocks.getValue("a1").lock)
+        }
+
+        // The server's copy written with curl and the sync password: the phone keeps its own and
+        // writes it back, and the laptop takes that.
+        server.write(server.state.copy(blocks = server.state.blocks.mapValues { loosened(it.value) }))
+        phone.sync(server)
+        laptop.sync(server)
+        assertLockedEverywhere("the server's copy")
+
+        // The laptop's world.json edited while its daemon was stopped: its first round takes it back.
+        laptop.world = laptop.world.copy(blocks = laptop.world.blocks.map(::loosened))
+        laptop.sync(server)
+        phone.sync(server)
+        assertLockedEverywhere("the laptop's file")
+
+        // Deleting it there does no better.
+        server.write(server.state.copy(blocks = emptyMap(), items = emptyMap()))
+        phone.sync(server)
+        laptop.sync(server)
+        assertLockedEverywhere("deleted on the server")
+    }
+
+    @Test
     fun i40_fiveEmergencyUnlocksInAll() {
         val clock = FakeClock()
         val now = clock.nowWallMs()
