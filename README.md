@@ -214,7 +214,10 @@ server behind HTTPS, under a path such as `/xrnrule`. It keeps no logic of its o
   sign-in (see [Security](#security)).
 
 Logins come from an htpasswd file of bcrypt hashes; the same file and session key can serve
-xrnloops-sync, so one sign-in covers both web pages. `server/deploy.sh [ssh host]` tests the server,
+xrnloops-sync, so one sign-in covers both web pages. A device can sign in with a device token
+of its own instead (`Authorization: Bearer xrndev_…`): one login per device, for the services it
+uses, kept as a SHA-256 in `device-tokens.json` beside the users file and revoked on its own,
+without a restart. A token can't be traded for the pages' cookie. `server/deploy.sh [ssh host]` tests the server,
 copies the program and its `web/` folder to a Termux + runit host together, restarts the
 service and waits for `/health`. The full list of endpoints is at the top of
 `xrnrule-sync.py`.
@@ -315,7 +318,7 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
   If xrnrule were down and another app took the port, the extension would still send blocked
   sites only to its own block page or one on `127.0.0.1:47321`, never to a page that app names.
 - **The sync server** (behind Tailscale Funnel, HTTPS) wants the login for every byte of data.
-  Ten wrong passwords from one address in 15 minutes lock that address out; the address is the
+  Ten wrong passwords (or device tokens) from one address in 15 minutes lock that address out; the address is the
   one Funnel saw, not a header the caller could forge. Uploads are capped at 8 MB, unpacked or
   not.
 - **The web pages** (this status page and the xrnloops habits page, on a host shared with
