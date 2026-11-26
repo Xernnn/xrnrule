@@ -25,6 +25,11 @@ htpasswd file (Radicale's works as-is, so the calendar password is the sync pass
     GET  /limits              each block's daily limit use per device and day, as the devices'
                               writes of /state said it (its `allowance`), for the history pages:
                               {"limits": {block: {device id: {day start ms: ms}}}}; 120 days kept
+    POST /usage               {"days": {"YYYY-MM-DD": {"apps": {app id: ms}, "sites": {host: ms}}},
+                              "names": {app id: name}}: a device's screen time (X-Device), the laptop's
+                              (docs/laptop-screen-time.md). For each device, day and app or site the
+                              largest figure stays: a day's use only grows. 120 days kept
+    GET  /usage?since=DAY     {"usage": {device: {day: {"apps": {...}, "sites": {...}}}}, "names": {...}}
     GET  /icons               the blocked apps' and sites' logos kept here, for the pages:
                               {"site:reddit.com" | "app:<package>" | "desk:<laptop app id>": the first
                               12 hex of its SHA-256}
@@ -75,7 +80,7 @@ import sys
 import threading
 import time
 import zlib
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote
 
@@ -100,6 +105,13 @@ EVENTS_MAX = 50000
 EVENT_TYPES = {"blocked", "habit", "unlock", "bought", "break"}
 LIMITS_WRITE_S = 60  # limits.json is rewritten at most this often per user
 LIMITS_MAX_KEYS = 200  # blocks, devices per block: more than any real state has
+USAGE_WRITE_S = 300  # usage.json is rewritten at most this often per user; devices send today's again
+USAGE_MAX_KEYS = 500  # apps, and sites, a device a day: far more than anyone visits
+USAGE_MAX_MS = 25 * 3600 * 1000  # the most one app can have in a day (25 h: the day clocks go back)
+USAGE_MAX_NAMES = 2000
+USAGE_APP = re.compile(r"[A-Za-z0-9._ +-]{1,200}")  # a phone package or a laptop app id
+USAGE_HOST = re.compile(r"[a-z0-9.-]{1,253}")
+USAGE_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 # Logos of what blocks name, sent by the devices for the pages (GET/PUT /icons). An icon of 96-128 px
 # is a few KB; the most a user keeps, 400 of the largest, is some 25 MB.
 ICON_MAX = 64 * 1024
@@ -142,6 +154,10 @@ limits_lock = threading.Lock()
 limits = {}  # user -> {block: {device id: {day start ms (str): ms}}}, mirrored to limits.json
 limits_written = {}  # user -> time.monotonic() of the last limits.json write
 limits_dirty = set()  # users whose limits.json is behind what's here
+usage_lock = threading.Lock()
+usage = {}  # user -> {"days": {device: {day: {"apps": {id: ms}, "sites": {host: ms}}}}, "names": {id: name}}
+usage_written = {}  # user -> time.monotonic() of the last usage.json write
+usage_dirty = set()  # users whose usage.json is behind what's here
 icons_lock = threading.Lock()
 icons = {}  # user -> {key: {"h": first 12 hex of the image's sha256, "at": ms it was written}}, mirrored to icons/index.json
 session_key = b""  # signs the web pages' login cookies; see load_session_key()
@@ -730,6 +746,128 @@ def limits_of(user):
         return json.loads(json.dumps(load_limits(user)))
 
 
+def usage_path(user):
+    return os.path.join(args.data, "users", user, "usage.json")
+
+
+def usage_window():
+    """The days kept: EVENTS_KEEP_DAYS back, and one ahead of UTC, where a device far east already is."""
+    today = datetime.now(timezone.utc).date()
+    return today - timedelta(days=EVENTS_KEEP_DAYS), today + timedelta(days=1)
+
+
+def usage_day(text):
+    """A day's name as a date, or None for one that isn't a day there is."""
+    if not isinstance(text, str) or not USAGE_DAY.fullmatch(text):
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def usage_ms(ms):
+    return isinstance(ms, int) and not isinstance(ms, bool) and 0 <= ms <= USAGE_MAX_MS
+
+
+def load_usage(user):
+    """The user's screen time (cached), only the shape add_usage writes. Call under usage_lock."""
+    if user not in usage:
+        try:
+            with open(usage_path(user), encoding="utf-8") as f:
+                kept = json.load(f)
+        except (OSError, ValueError):
+            kept = {}
+        kept = kept if isinstance(kept, dict) else {}
+        days = {}
+        for device, by_day in (kept.get("days") if isinstance(kept.get("days"), dict) else {}).items():
+            if not isinstance(by_day, dict):
+                continue
+            for day, use in by_day.items():
+                if usage_day(day) is None or not isinstance(use, dict):
+                    continue
+                clean = {kind: {k: ms for k, ms in use.get(kind).items() if isinstance(k, str) and usage_ms(ms)}
+                         for kind in ("apps", "sites") if isinstance(use.get(kind), dict)}
+                days.setdefault(device, {})[day] = {"apps": clean.get("apps", {}), "sites": clean.get("sites", {})}
+        names = kept.get("names") if isinstance(kept.get("names"), dict) else {}
+        usage[user] = {"days": days, "names": {k: v for k, v in names.items() if isinstance(k, str) and isinstance(v, str)}}
+    return usage[user]
+
+
+def add_usage(user, device, body):
+    """Keeps a device's screen time out of a POST /usage body: for each day, app and site the
+    largest figure seen (a day's use only grows, so a device that lost its own file can't lower
+    it). What isn't a day kept here, an app id, a host or a figure a day can hold is skipped.
+    Returns how many figures grew."""
+    sent = body.get("days") if isinstance(body, dict) else None
+    if not isinstance(sent, dict):
+        raise ValueError("no days")
+    first, last = usage_window()
+    grew = 0
+    with usage_lock:
+        record = load_usage(user)
+        mine = record["days"].setdefault(device, {})
+        for day, use in list(sent.items())[:EVENTS_KEEP_DAYS + 10]:
+            when = usage_day(day)
+            if when is None or not first <= when <= last or not isinstance(use, dict):
+                continue
+            for kind, pattern in (("apps", USAGE_APP), ("sites", USAGE_HOST)):
+                figures = use.get(kind)
+                if not isinstance(figures, dict):
+                    continue
+                for key, ms in list(figures.items())[:USAGE_MAX_KEYS]:
+                    if not isinstance(key, str) or not pattern.fullmatch(key) or not usage_ms(ms):
+                        continue
+                    have = mine.setdefault(day, {"apps": {}, "sites": {}})[kind]
+                    if key not in have and len(have) >= USAGE_MAX_KEYS:
+                        continue
+                    if have.get(key, -1) < ms:
+                        have[key] = ms
+                        grew += 1
+        names = body.get("names")
+        for app, name in (list(names.items())[:USAGE_MAX_KEYS] if isinstance(names, dict) else []):
+            if isinstance(app, str) and USAGE_APP.fullmatch(app) and isinstance(name, str) and name \
+                    and record["names"].get(app) != name[:200] \
+                    and (app in record["names"] or len(record["names"]) < USAGE_MAX_NAMES):
+                record["names"][app] = name[:200]
+                grew += 1
+        # Days past what's kept go, and devices left with none.
+        dropped = False
+        for dev in list(record["days"]):
+            for day in [d for d in record["days"][dev] if usage_day(d) is None or usage_day(d) < first]:
+                del record["days"][dev][day]
+                dropped = True
+            if not record["days"][dev]:
+                del record["days"][dev]
+        if grew or dropped:
+            usage_dirty.add(user)
+        flush_usage(user)
+    return grew
+
+
+def flush_usage(user):
+    """Writes usage.json if it's behind and wasn't written in the last USAGE_WRITE_S. Call under usage_lock."""
+    if user not in usage_dirty or time.monotonic() - usage_written.get(user, -USAGE_WRITE_S) < USAGE_WRITE_S:
+        return
+    usage_written[user] = time.monotonic()
+    usage_dirty.discard(user)
+    path = usage_path(user)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(usage[user], f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(path + ".tmp", path)
+
+
+def usage_since(user, since):
+    """The screen time of [since] (a date) and after, every device's, with the apps' names."""
+    with usage_lock:
+        record = load_usage(user)
+        flush_usage(user)
+        days = {dev: {day: use for day, use in by_day.items() if usage_day(day) >= since}
+                for dev, by_day in record["days"].items()}
+        return json.loads(json.dumps({"usage": {d: v for d, v in days.items() if v}, "names": record["names"]}))
+
+
 def icon_type(data):
     """The media type of a raster image, told by its first bytes; None for anything else. SVG,
     HTML and text above all: served from this origin, a browser could run script in them."""
@@ -1096,6 +1234,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, json.dumps({"limits": limits_of(user)}, separators=(",", ":")),
                           "application/json; charset=utf-8")
             return
+        if path == "/usage":
+            user = self.login()
+            if not user:
+                return
+            since = usage_day(query.get("since", "")) if query.get("since") else date.min
+            if since is None:
+                return self.send(400, "since must be a day, as 2026-11-26")
+            return self.send(200, json.dumps(usage_since(user, since), ensure_ascii=False, separators=(",", ":")),
+                             "application/json; charset=utf-8")
         if path == "/icons":
             user = self.login()
             if user:
@@ -1157,6 +1304,8 @@ class Handler(BaseHTTPRequestHandler):
         user = self.login()
         if not user:
             return
+        if path == "/usage":
+            return self.post_usage(user)
         if path != "/events":
             return self.send(404, "not found")
         raw = self.body()
@@ -1174,6 +1323,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400, "X-Device required")
         added = add_events(user, device, raw)
         self.send(200, json.dumps({"ok": True, "added": added}), "application/json")
+
+    def post_usage(self, user):
+        raw = self.body()
+        if raw is None:
+            return
+        device = (self.headers.get("X-Device") or "")[:64]
+        if not device:
+            return self.send(400, "X-Device required")
+        try:
+            grew = add_usage(user, device, json.loads(raw))
+        except (ValueError, TypeError, RecursionError):  # RecursionError: nested too deep
+            return self.send(400, 'body must be {"days": {...}}')
+        self.send(200, json.dumps({"ok": True, "grew": grew}), "application/json")
 
     def do_DELETE(self):
         path, _ = self.route()
