@@ -307,6 +307,8 @@ bump it in a commit first. It needs `~/.config/xrnrule/release.json`:
   by hand: `./gradlew :app:installSideloadRelease`, or open
   `https://<your server>/xrnrule/update/xrnrule.apk` on the phone and sign in with the sync login.
 - **The laptop daemon** has no updater: `desktop/install.sh` again, from an up-to-date checkout.
+  Its version is `git describe` of the checkout it was built from, on its page's Settings tab, in
+  `/api/state` and at the top of its log.
 
 ## Security
 

@@ -95,7 +95,7 @@ fun main() = runBlocking {
     }
 
     System.err.println(
-        "xrnrule-desktop on ${config.localUrl}, data in ${config.dataDir}" +
+        "xrnrule-desktop ${LocalServer.DAEMON_VERSION ?: "(no version)"} on ${config.localUrl}, data in ${config.dataDir}" +
             if (config.syncConfigured) ", syncing with ${config.ruleUrl} and ${config.loopUrl}" else ", not syncing" + config.syncRefusal?.let { ": $it" }.orEmpty(),
     )
     for (file in config.exposedFiles(Config.file())) System.err.println("xrnrule-desktop: other users can read $file, which holds the sync password (chmod 600 it)")
