@@ -24,6 +24,7 @@ import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.isGranted
 import android.os.SystemClock
 import com.xern.xrnrule.app.web.Browsers
+import com.xern.xrnrule.app.web.Sighting
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
@@ -243,20 +244,27 @@ class BlockerForegroundService : LifecycleService() {
         }
     }
 
-    /** The app in front, and the site when it's a browser, to the engine and the site-time log. The detector only polls while the screen is on and unlocked. */
+    /**
+     * The app in front, and the site when it's a browser, to the engine and the site-time log
+     * ([InFront]: not quite the same site). The detector only polls while the screen is on and
+     * unlocked.
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun followForeground(container: AppContainer, detector: UsageStatsDetector) {
         val detected = awake.flatMapLatest { isAwake -> if (isAwake) detector.foregroundPackage else flowOf(null) }
-        combine(detected, SiteSightings.current, awake) { pkg, host, isAwake ->
-            val browser = pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
-            if (!isAwake) Foreground(null, null) else Foreground(pkg, host?.takeIf { browser != null })
-        }.distinctUntilChanged().collect { fg ->
+        var told: Foreground? = null
+        combine(detected, SiteSightings.current, awake) { pkg, seen, isAwake ->
+            InFront.of(pkg, seen, isAwake) { Browsers.isBrowser(this@BlockerForegroundService, it) }
+        }.distinctUntilChanged().collect { front ->
+            container.siteUsage.onSite(front.timedSite?.let(Sites::hostOf))
+            val fg = Foreground(front.pkg, front.site)
+            if (fg == told) return@collect // only the site's time changed: the engine heard all this
+            told = fg
             foreground.value = fg
             shieldFront.value = held.of(awake.value, fg)
             val browser = fg.pkg?.takeIf { Browsers.isBrowser(this@BlockerForegroundService, it) }
             if (browser == null) browserInFront = null
             else if (browserInFront?.first != browser) browserInFront = browser to SystemClock.elapsedRealtime()
-            container.siteUsage.onSite(fg.site?.let(Sites::hostOf))
             container.store.dispatch(BlockEvent.ForegroundChanged(fg.pkg, fg.site))
         }
     }
@@ -524,5 +532,22 @@ class BlockerForegroundService : LifecycleService() {
         @Volatile
         var running = false
             private set
+    }
+}
+
+/**
+ * What is in front: the app ([pkg]) and, when it is a browser, the site ([site]), as the engine
+ * hears them; and [timedSite], the site whose time it is, for the site-time log. That leaves out
+ * the block page standing in for a site and a private tab ([Sighting.timed]), as the laptop does
+ * (docs/laptop-screen-time.md): the engine still hears them, so a wait timer runs on the block page (I4).
+ */
+internal data class InFront(val pkg: String?, val site: String?, val timedSite: String?) {
+    companion object {
+        /** Nothing while the screen is off or locked ([awake] false); a site only while a browser is in front. */
+        fun of(pkg: String?, seen: Sighting?, awake: Boolean, isBrowser: (String) -> Boolean): InFront {
+            if (!awake) return InFront(null, null, null)
+            val site = seen?.host?.takeIf { pkg != null && isBrowser(pkg) }
+            return InFront(pkg, site, seen?.takeIf { site != null && it.timed }?.host)
+        }
     }
 }
