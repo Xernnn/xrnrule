@@ -352,6 +352,33 @@ test("screen time on one device, and for one block", () => {
   assert.equal(yt.total, 15 * MIN + 46 * MIN);
 });
 
+test("the phone's screen time shows beside the laptop's, its apps by the names the phone sent", () => {
+  // As the server keeps them: the phone sends its packages and their names, as the laptop does.
+  const both = {
+    laptop: { [named(0)]: { apps: { zen: 60 * MIN }, sites: { "example.org": 20 * MIN } } },
+    phone: {
+      [named(0)]: { apps: { "com.example.reader": 45 * MIN, "com.example.chat": 5 * MIN }, sites: { "example.org": 10 * MIN } },
+      [named(1)]: { apps: { "com.example.reader": 30 * MIN }, sites: {} },
+    },
+  };
+  const names = { zen: "Zen Browser", "com.example.reader": "Reader", "com.example.chat": "Chat" };
+  const st = screenTime(both, names, { first: today - 1, today });
+  assert.deepEqual([st.phone, st.laptop, st.total], [80 * MIN, 60 * MIN, 140 * MIN]);
+  assert.deepEqual(st.days.map((d) => [d.phone, d.laptop]), [[30 * MIN, 0], [50 * MIN, 60 * MIN]]);
+  assert.deepEqual(st.apps.map((a) => [a.dev, a.name, a.ms]), [
+    ["phone", "Reader", 75 * MIN], ["laptop", "Zen Browser", 60 * MIN], ["phone", "Chat", 5 * MIN],
+  ]);
+  const site = st.sites.find((x) => x.key === "example.org");
+  assert.deepEqual([site.ms, site.phone, site.laptop], [30 * MIN, 10 * MIN, 20 * MIN]);
+  // Phone picked: the phone's alone.
+  const phone = screenTime(both, names, { first: today - 1, today, device: "phone" });
+  assert.deepEqual([phone.total, phone.laptop], [80 * MIN, 0]);
+  assert.deepEqual(phone.apps.map((a) => a.name), ["Reader", "Chat"]);
+  // And the page's card has both, as the status page and the laptop's page draw it.
+  const page = compute({ events: [], blocks, now: NOW, zone: ZONE, usage: both, usageNames: names }, { range: "week" });
+  assert.deepEqual([page.screen.phone, page.screen.laptop], [80 * MIN, 60 * MIN]);
+});
+
 test("the page has screen time only when there is a count to show", () => {
   const input = { events: [], blocks, now: NOW, zone: ZONE };
   assert.equal(compute(input, { range: "week" }).screen, null);

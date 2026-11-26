@@ -205,6 +205,7 @@ class HistoryTest {
         val names = got["usageNames"]!!.jsonObject
         assertEquals("Zen Browser", names["zen"]!!.jsonPrimitive.content)
         assertEquals("Editor", names["org.example.Editor"]!!.jsonPrimitive.content)
+        assertEquals("the phone's, as it sent them", "Reader", names["com.example.reader"]!!.jsonPrimitive.content)
         assertEquals(listOf(today.minusDays(7).toString()), server.usageAsked.distinct())
     }
 

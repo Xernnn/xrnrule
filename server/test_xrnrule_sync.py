@@ -660,6 +660,29 @@ class SyncServerTest(unittest.TestCase):
         only_today = json.loads(self.call("GET", f"/usage?since={today}")[1])["usage"]["laptop"]
         self.assertEqual([today], list(only_today))
 
+    def test_the_phone_and_the_laptop_each_keep_their_own_screen_time(self):
+        # The phone sends as the laptop does: its packages, its sites, its apps' names (UsageUpload).
+        today = self.day()
+        phone = {"days": {today: {"apps": {"com.example.reader": 900000, "com.example.chat_2": 60000},
+                                  "sites": {"example.org": 300000}}},
+                 "names": {"com.example.reader": "Reader", "com.example.chat_2": "Chat"}}
+        laptop = {"days": {today: {"apps": {"org.example.Editor": 600000}, "sites": {"example.org": 200000}}},
+                  "names": {"org.example.Editor": "Editor"}}
+        self.assertEqual(5, json.loads(self.call("POST", "/usage", phone, {"X-Device": "phone"})[1])["grew"])
+        self.call("POST", "/usage", laptop, {"X-Device": "laptop"})
+        got = json.loads(self.call("GET", f"/usage?since={today}")[1])
+        self.assertEqual({"apps": {"com.example.reader": 900000, "com.example.chat_2": 60000}, "sites": {"example.org": 300000}},
+                         got["usage"]["phone"][today])
+        self.assertEqual(600000, got["usage"]["laptop"][today]["apps"]["org.example.Editor"])
+        self.assertNotIn("com.example.reader", got["usage"]["laptop"][today]["apps"])
+        self.assertEqual(("Reader", "Chat", "Editor"),
+                         (got["names"]["com.example.reader"], got["names"]["com.example.chat_2"], got["names"]["org.example.Editor"]))
+        # A phone's resend of a day it counted less of (Android trimmed its history) lowers nothing.
+        less = {"days": {today: {"apps": {"com.example.reader": 1000}}}}
+        self.assertEqual(0, json.loads(self.call("POST", "/usage", less, {"X-Device": "phone"})[1])["grew"])
+        again = json.loads(self.call("GET", f"/usage?since={today}")[1])
+        self.assertEqual(900000, again["usage"]["phone"][today]["apps"]["com.example.reader"])
+
     def test_screen_time_that_makes_no_sense_is_skipped(self):
         today = self.day()
         weird = {"days": {
