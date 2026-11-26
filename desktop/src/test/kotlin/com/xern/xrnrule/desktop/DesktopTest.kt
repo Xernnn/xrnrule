@@ -71,6 +71,36 @@ class DesktopTest {
         assertEquals("helium-browser" to null, fg.current())
     }
 
+    /** Screen time as [Foreground] tells it: the app in front, and the site unless a block page or private. */
+    @Test
+    fun screenTimeGetsTheWindowInFrontAndOnlyARealPagesSite() {
+        val clock = TestClock()
+        val usage = UsageLog(File(Files.createTempDirectory("usage").toFile(), "usage.json"), clock)
+        val fg = Foreground(blocking("steam", clock), usage = usage)
+        /** A minute with [beat] beating every 2 s, as a page in front does. */
+        fun minute(beat: Foreground.Heartbeat?) {
+            repeat(60) { s ->
+                clock.mono += 1_000
+                usage.tick()
+                if (beat != null && s % 2 == 0) fg.onHeartbeat(beat) else fg.update()
+            }
+        }
+        fg.active = AppWindow("zen", "zen", 10)
+        minute(Foreground.Heartbeat(host = "www.example.org/a", focused = true))
+        // The extension's block page, standing in for a blocked site: the browser, on no site.
+        minute(Foreground.Heartbeat(host = "youtube.com", focused = true, standIn = true))
+        // Our own block page, standing in for a blocked laptop app: the browser, not that app.
+        minute(Foreground.Heartbeat(app = "steam", focused = true, fromBlockPage = true))
+        // A private page.
+        minute(Foreground.Heartbeat(host = "private.example", focused = true, inPrivate = true))
+        // Locked: nothing.
+        fg.locked = true
+        minute(null)
+        val day = usage.snapshot().values.single()
+        assertEquals(mapOf("zen" to 4 * 60_000L), day.apps)
+        assertEquals(mapOf("example.org" to 60_000L), day.sites)
+    }
+
     @Test
     fun switchingToAnotherAppDropsTheTab() {
         val fg = foreground()

@@ -52,9 +52,9 @@ kept 120 days:
 ```
 
 The figure for what's in front grows as it's used. To take the idle minutes back, the last 3
-minutes stay unwritten until the next minute's write: they're shown, never stored. So a stored
-figure only ever grows. It's written once a minute, when the screen locks and when the daemon
-stops: a crash loses at most a minute and those 3.
+minutes are shown but not stored until they're older than that. So a stored figure only ever
+grows. It's written once a minute and when the daemon stops: a crash loses at most a minute and
+those 3.
 
 **On the server** (`xrnrule-sync.py`, `usage.json` beside `events.jsonl`):
 

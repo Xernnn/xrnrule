@@ -58,8 +58,12 @@ interface DesktopBus : DBusInterface {
  * host a few times a second while that browser window has focus. The daemon's own block page
  * reports the app or site it is standing in for, so a TIMER that counts "waiting on the block
  * screen" (I4) runs while you wait there. A locked screen is "nothing in use", as on the phone.
+ *
+ * It also tells [usage] what is in front for screen time, which isn't quite what the engine is
+ * told: a block page standing in for a site or an app is the browser, on no site, and so is a
+ * private page (docs/laptop-screen-time.md).
  */
-class Foreground(private val store: Store, private val browsersFile: File? = null) {
+class Foreground(private val store: Store, private val browsersFile: File? = null, private val usage: UsageLog? = null) {
     /** I49. */
     val browsers = BrowserWatch(
         known = browsersFile?.takeIf { it.isFile }?.readLines()?.filter { it.isNotBlank() }?.toSet().orEmpty(),
@@ -80,6 +84,8 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
         val playing: Boolean = false,
         /** Whether the extension may run in incognito windows, if the browser says. */
         val incognito: Boolean? = null,
+        /** This page is in a private window (versions up to 2.3.11 don't say): screen time leaves its site out. */
+        val inPrivate: Boolean = false,
     )
 
     @Volatile var active: AppWindow? = null
@@ -197,6 +203,21 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
             sent = next
             store.dispatch(BlockEvent.ForegroundChanged(next.first, next.second))
         }
+        usage?.let { log ->
+            val (app, site) = inUse(beat)
+            log.show(app, site)
+        }
+    }
+
+    /**
+     * What is in use for screen time: the window in front (the browser while a block page stands
+     * in for an app), and the site of the focused page, unless that page is a block page or private.
+     */
+    private fun inUse(beat: Heartbeat?): Pair<String?, String?> {
+        if (locked) return null to null
+        val app = active?.appId?.takeIf { it.isNotEmpty() } ?: if (beat != null) "browser" else null
+        val site = beat?.takeIf { !it.fromBlockPage && !it.standIn && !it.inPrivate && it.app == null }?.host?.let(Sites::normalizeTarget)
+        return app to site
     }
 
     /** A browser is in front but the extension has gone quiet for it: website blocking isn't working. */
