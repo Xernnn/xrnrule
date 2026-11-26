@@ -270,8 +270,10 @@ The toolbar popup shows the site in front and what xrnrule says about it (blocke
 today and of which block, or no rule), whether xrnrule is answering, and a way into it. The
 extension's settings page has its one setting, the port xrnrule listens on, and shows its version
 and where it updates from, with **Check now**.
-The phone app warns when the browser the extension lives in goes quiet, without ever blocking
-that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
+The phone app warns when the browser the extension lives in goes quiet (the extension turned
+off, or a private tab it may not run in), and once it has been quiet there for two minutes in
+all, counted across returns, that browser too gets only ten seconds in front each time, enough
+to turn the extension back on. On the laptop, a browser with the extension turned
 off is closed after two minutes in front in all (stepping away and back doesn't start them
 again, and from then on it gets ten seconds each time, until the extension speaks again), and
 so is one that withholds the extension's site access (Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:

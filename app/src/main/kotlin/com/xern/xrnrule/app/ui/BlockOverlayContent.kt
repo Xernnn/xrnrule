@@ -147,6 +147,7 @@ fun BlockOverlayContent(
                         Text(
                             when {
                                 ui?.useBrowser != null -> "$subject can't block sites"
+                                ui?.extensionOff == true -> "Sites aren't blocked in $subject"
                                 earned -> "Nice work!\n$subject is ready to open"
                                 ui?.usedToday == true -> "$subject is done\nfor today"
                                 ui?.reason == BlockReason.WAIT -> "$subject is opening"

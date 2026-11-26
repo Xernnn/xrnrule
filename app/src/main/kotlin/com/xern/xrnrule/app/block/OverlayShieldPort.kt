@@ -167,7 +167,10 @@ class OverlayShieldPort(
         if (!appBlocked && !siteBlocked && browser == null) return null
         if (browser != null) {
             AppIcons.load(context, browser)
-            return Screenful(OverlayUi(subject = appLabel(browser), pkg = browser, isSite = false, block = null, items = emptyList(), useBrowser = homeBrowser()), ofABlock = false)
+            // The extension's own browser, the extension silent there (I49): nowhere else to send you.
+            val use = homeBrowser()?.takeIf { it.pkg != browser }
+            val ui = OverlayUi(subject = appLabel(browser), pkg = browser, isSite = false, block = null, items = emptyList(), useBrowser = use, extensionOff = use == null)
+            return Screenful(ui, ofABlock = false)
         }
         val engine = store.engine
         val clock = store.clock
@@ -422,6 +425,8 @@ class OverlayShieldPort(
         val triesToday: Int = 0,
         /** [subject] is a browser without the extension (I49): use this one. */
         val useBrowser: UseBrowser? = null,
+        /** [subject] is the extension's own browser, the extension silent there too long (I49). */
+        val extensionOff: Boolean = false,
         /** The blocked app, for its icon; null for a site. */
         val pkg: String? = null,
         val isSite: Boolean,

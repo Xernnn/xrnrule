@@ -25,6 +25,7 @@ import com.xern.xrnrule.app.data.isGranted
 import android.os.SystemClock
 import com.xern.xrnrule.app.web.Browsers
 import com.xern.xrnrule.app.web.Sighting
+import com.xern.xrnrule.app.web.ExtensionSilence
 import com.xern.xrnrule.app.web.SiteSightings
 import com.xern.xrnrule.domain.BlockEvent
 import com.xern.xrnrule.domain.BlockMode
@@ -79,6 +80,9 @@ class BlockerForegroundService : LifecycleService() {
 
     /** I49: the browser in front, if it's one that can't block sites and has to stay closed. */
     private val otherBrowser = MutableStateFlow<String?>(null)
+
+    /** I49: the extension silent in its own browser in front, across returns. */
+    private val homeSilence = ExtensionSilence()
     private var usageDetector: UsageStatsDetector? = null
     private val awake = MutableStateFlow(true)
     private lateinit var overlay: OverlayShieldPort
@@ -347,15 +351,26 @@ class BlockerForegroundService : LifecycleService() {
         // the moment of switching is the last browser's. And only the extension's own: the block
         // page speaks from any browser that opens it.
         inFront?.takeIf { (_, since) -> SiteSightings.voice.namedSiteSince(since + BROWSER_SETTLE_MS) }
-            ?.let { (pkg, _) -> container.websites.extensionBrowser = pkg }
-        // I49: a browser that can't block sites, once one that can is known. Never that one itself:
-        // it's where the extension gets fixed.
+            ?.let { (pkg, _) ->
+                container.websites.extensionBrowser = pkg
+                homeSilence.spoke()
+            }
+        // I49: a browser that can't block sites, once one that can is known.
         val other = inFront?.takeIf { (pkg, since) ->
             SystemClock.elapsedRealtime() - since >= EXTENSION_GRACE_MS && !inCustomTab() &&
                 container.websites.lacksExtension(pkg) && Browsers.isFullBrowser(this, pkg) &&
                 ExtensionApi.otherBrowsersMatter(world)
         }?.first
-        otherBrowser.value = other
+        // The extension's own browser too, once the extension has been silent there for two
+        // minutes in all (turned off, or a private tab it may not run in): from then on it gets
+        // the same few seconds in front each time, which is where the extension gets fixed.
+        val home = container.websites.extensionBrowser
+        homeSilence.look(silentBrowser != null && silentBrowser == home, SystemClock.elapsedRealtime())
+        val homeShielded = inFront?.takeIf { (pkg, since) ->
+            pkg == home && homeSilence.spent && SystemClock.elapsedRealtime() - since >= EXTENSION_GRACE_MS &&
+                !inCustomTab() && ExtensionApi.otherBrowsersMatter(world)
+        }?.first
+        otherBrowser.value = other ?: homeShielded
         val sitesOff = other == null && silentBrowser != null && world.blocks.any { it.enabled && it.targetSites.isNotEmpty() }
         // Sync failing for an hour: unlocks and ticks from the laptop stop arriving, silently.
         val now = System.currentTimeMillis()
