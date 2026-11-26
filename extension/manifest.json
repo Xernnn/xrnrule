@@ -20,10 +20,10 @@
   "action": {
     "default_title": "xrnrule",
     "default_popup": "popup.html",
-    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png" }
+    "default_icon": { "16": "icons/icon-16.png", "24": "icons/icon-24.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "64": "icons/icon-64.png", "96": "icons/icon-96.png", "128": "icons/icon-128.png", "256": "icons/icon-256.png" }
   },
   "options_ui": { "page": "options.html", "open_in_tab": true },
-  "icons": { "16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
+  "icons": { "16": "icons/icon-16.png", "24": "icons/icon-24.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "64": "icons/icon-64.png", "96": "icons/icon-96.png", "128": "icons/icon-128.png", "256": "icons/icon-256.png" },
   "browser_specific_settings": {
     "gecko": { "id": "xrnrule@sonn.dev", "strict_min_version": "140.0", "data_collection_permissions": { "required": ["none"] } },
     "gecko_android": { "strict_min_version": "142.0" }

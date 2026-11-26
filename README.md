@@ -377,6 +377,7 @@ desktop/install.sh                     # build and (re)start the laptop daemon
 server/deploy.sh                       # test and deploy the sync server and its page
 node scripts/release.mjs               # publish the extension and the app; see Updates
 scripts/pack-extension.sh              # the extension as a .zip, loaded by hand (never updates)
+scripts/extension-icons.sh             # the extension's PNG icons, every size, from its tile SVG (rsvg-convert)
 ```
 
 CI (`.github/workflows/ci.yml`) runs the three Gradle test tasks, `checkReleaseKeeps`, the
