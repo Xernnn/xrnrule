@@ -178,10 +178,15 @@ class Foreground(private val store: Store, private val browsersFile: File? = nul
      * [focused]: alive for the window in front even where no page of it beats (about:, the new tab
      * page, our block page). Not while no window it can see has focus: a private window it may not
      * run in, or another profile's, is in front (I49). Null: a version up to 2.3.5, which doesn't
-     * say; or the laptop waking up, which isn't a silent extension.
+     * say.
      */
     fun heardExtension(focused: Boolean? = null) {
         if (focused != false) browsers.heard(store.clock.nowMonotonicMs())
+    }
+
+    /** The laptop slept since [sleptAtMono]: no silence of the extension's, nor a fresh start of it (I49). */
+    fun woke(sleptAtMono: Long) {
+        browsers.woke(sleptAtMono, store.clock.nowMonotonicMs())
     }
 
     @Synchronized

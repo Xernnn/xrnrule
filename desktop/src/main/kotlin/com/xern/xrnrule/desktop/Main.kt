@@ -113,7 +113,7 @@ fun main() = runBlocking {
         if (now - lastMono > 10_000) {
             withContext(Dispatchers.IO) { clock.check() } // the clock may have been set while it slept
             store.dispatch(BlockEvent.BootOrColdStart)
-            foreground.heardExtension() // a sleeping laptop isn't a silent extension (I49)
+            foreground.woke(lastMono) // a sleeping laptop isn't a silent extension (I49)
         }
         lastMono = now
         usage.tick() // a sleep isn't screen time either

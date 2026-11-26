@@ -272,8 +272,9 @@ extension's settings page has its one setting, the port xrnrule listens on, and 
 and where it updates from, with **Check now**.
 The phone app warns when the browser the extension lives in goes quiet, without ever blocking
 that browser, since that's where you'd fix it. On the laptop, a browser with the extension turned
-off is closed after two minutes in front, and so is one that withholds the extension's site access
-(Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:
+off is closed after two minutes in front in all (stepping away and back doesn't start them
+again, and from then on it gets ten seconds each time, until the extension speaks again), and
+so is one that withholds the extension's site access (Chromium's "Site access: on specific sites" or "On click", Zen's switches in `about:addons`:
 the extension then stops talking to xrnrule), or whose window in front the extension can't
 see: a private window it isn't allowed in, or another profile without it. Browsers can't be seen
 inside other apps: a page opened in an app's own in-app browser isn't blocked.
