@@ -7,6 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.PowerManager
 import android.widget.Toast
@@ -293,6 +296,7 @@ class BlockerForegroundService : LifecycleService() {
                 container.checkClock()
             }
             if (seconds % 5 == 0) checkHealth(container.store.world.value)
+            checkShown(container.store.world.value)
             updateCornerClock()
             seconds++
             val today = container.store.world.value.habitDay(container.clock)
@@ -454,6 +458,46 @@ class BlockerForegroundService : LifecycleService() {
         container.siteUsage.onSite(null)
         container.persist.flush()
         super.onDestroy()
+    }
+
+    /** A blocked app shown besides the one in front, picture-in-picture or a floating window, and the sound held from it. */
+    private var shownBlocked: String? = null
+    private var shownFocus: AudioFocusRequest? = null
+
+    @Volatile
+    private var shownFocusLost = false
+
+    /**
+     * A blocked app still on the screen besides the one in front (picture-in-picture, a floating
+     * window, split screen) is no way past its block: its sound is taken (players pause on losing
+     * it), again whenever it takes it back, and a notification says it's blocked until it's gone.
+     */
+    private fun checkShown(world: World) {
+        val blocked = world.appliedShield.blockedPackages
+        val shown = usageDetector?.shownBesides().orEmpty().firstOrNull { it in blocked && it != foreground.value.pkg }
+        if (shown == null) {
+            if (shownBlocked != null) {
+                shownBlocked = null
+                shownFocus?.let { request -> runCatching { getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(request) } }
+                shownFocus = null
+                notifications.cancel(Notifications.ALERT_SHOWN_BLOCKED)
+            }
+            return
+        }
+        if (shown != shownBlocked) {
+            shownBlocked = shown
+            notifications.alert(Notifications.ALERT_SHOWN_BLOCKED, "${appLabel(shown)} is blocked", "")
+        }
+        if (shownFocus == null || shownFocusLost) {
+            val manager = getSystemService(AudioManager::class.java) ?: return
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+                .setOnAudioFocusChangeListener { change -> if (change < 0) shownFocusLost = true }
+                .build()
+            shownFocusLost = false
+            runCatching { manager.requestAudioFocus(request) }
+            shownFocus = request
+        }
     }
 
     private fun appLabel(pkg: String): String = AppLabels.of(this, pkg)

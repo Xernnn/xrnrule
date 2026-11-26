@@ -131,7 +131,9 @@ parts of a site alone (music.youtube.com under youtube.com).
 - **Hard to talk yourself out of.** Deleting a block or making one easier (including the
   buy-minutes settings) takes a 60-second wait, or the hardcore password. Changing the clock or
   time zone by hand, on the phone or the laptop, doesn't reset limits, move schedules or end a
-  lock. The laptop goes by the time zone the phone sets itself.
+  lock. The laptop goes by the time zone the phone sets itself. A blocked app left on the phone's
+  screen in picture-in-picture or a floating window loses its sound, again whenever it takes it
+  back, with a notification naming it, until it's closed.
 - **Locks.** A block can be locked for 24 hours up to a year (its edit page): until then nothing
   that makes it easier to get past can change, on the phone or the laptop, whatever you wait or
   type, nor by writing the laptop's files or the server's copy by hand: the phone keeps its own. Bought minutes and the daily break don't get past it either, not even ones already

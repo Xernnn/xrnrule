@@ -154,6 +154,67 @@ class ForegroundTrackerTest {
         assertEquals(notes, tracker.poll())
     }
 
+    /** Raw UsageStats events, read as the detector reads them (with their times). */
+    private class Raw {
+        val events = mutableListOf<Pair<Long, Triple<String, String?, Int>>>()
+        var now = 10 * 60 * 60_000L
+        val tracker = ForegroundTracker({ from, to ->
+            events.filter { it.first in from..to }.mapNotNull { (at, e) -> ForegroundTracker.moveOf(e.first, e.second, e.third, at) }
+        }) { now }
+
+        fun at(pkg: String, className: String, type: Int) {
+            events += now - 10 to Triple(pkg, className, type)
+        }
+    }
+
+    @Test
+    fun aBlockedAppInPictureInPictureIsShownBesidesTheFront() {
+        val video = "com.example.video"
+        with(Raw()) {
+            at(video, "Watch", ForegroundTracker.ACTIVITY_RESUMED)
+            assertEquals(video, tracker.poll())
+            // Home pressed during a video: it goes to picture-in-picture, paused and never stopped.
+            now += 1_000
+            at(video, "Watch", ForegroundTracker.ACTIVITY_PAUSED)
+            at(home, "Launcher", ForegroundTracker.ACTIVITY_RESUMED)
+            assertEquals(home, tracker.poll())
+            assertEquals("not yet: an app on its way out stops within a moment", emptySet<String>(), tracker.shownBesides())
+            now += ForegroundTracker.SHOWN_SETTLE_MS
+            tracker.poll()
+            assertEquals(emptySet<String>(), tracker.shownBesides()) // no stop ever seen yet: an older phone, perhaps
+            at("com.example.notes", "Main", ForegroundTracker.ACTIVITY_STOPPED) // this phone says when one stops
+            now += 1_000
+            assertEquals(home, tracker.poll())
+            assertEquals(setOf(video), tracker.shownBesides())
+            // Its window closed: stopped.
+            at(video, "Watch", ForegroundTracker.ACTIVITY_STOPPED)
+            now += 1_000
+            tracker.poll()
+            assertEquals(emptySet<String>(), tracker.shownBesides())
+        }
+    }
+
+    @Test
+    fun aFloatingWindowIsShownBesidesTheFront() {
+        val chat = "com.example.chat"
+        with(Raw()) {
+            at("com.example.notes", "Main", ForegroundTracker.ACTIVITY_STOPPED)
+            at(chat, "Main", ForegroundTracker.ACTIVITY_RESUMED)
+            now += 1_000
+            at(home, "Launcher", ForegroundTracker.ACTIVITY_RESUMED) // both resumed: the chat floats over it
+            assertEquals(home, tracker.poll())
+            assertEquals(setOf(chat), tracker.shownBesides())
+            // An ordinary switch: paused, then stopped a moment later, never shown besides.
+            now += 1_000
+            at(chat, "Main", ForegroundTracker.ACTIVITY_PAUSED)
+            at(chat, "Main", ForegroundTracker.ACTIVITY_STOPPED)
+            tracker.poll()
+            now += ForegroundTracker.SHOWN_SETTLE_MS
+            tracker.poll()
+            assertEquals(emptySet<String>(), tracker.shownBesides())
+        }
+    }
+
     @Test
     fun onlyResumesPausesStopsAndDestroysAreMoves() {
         assertEquals(true, ForegroundTracker.moveOf("a", null, ForegroundTracker.ACTIVITY_RESUMED)?.front)

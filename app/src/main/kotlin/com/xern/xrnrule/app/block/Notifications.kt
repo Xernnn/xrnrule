@@ -60,6 +60,7 @@ class Notifications(private val context: Context) {
         const val ALERT_SYNC_OFF = 15
         const val ALERT_UPDATE = 16
         const val ALERT_AUTOSTART_OFF = 17
+        const val ALERT_SHOWN_BLOCKED = 18
         private const val CHANNEL_STATUS = "enforcement"
         private const val CHANNEL_ALERTS = "alerts"
 
