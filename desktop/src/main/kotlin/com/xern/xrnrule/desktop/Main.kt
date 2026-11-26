@@ -52,7 +52,7 @@ fun main() = runBlocking {
     val windows = WindowSystem.detect()
     enforcer.windowSystem = windows
     store.shield = enforcer
-    val shared = SharedSyncClient(config, store, telemetry, scope)
+    val shared = SharedSyncClient(config, store, telemetry, scope, usage)
     val habits = HabitClient(config, store, scope)
 
     // The blocked apps' and sites' logos: the laptop's own, and the phone's through the server.
@@ -65,7 +65,7 @@ fun main() = runBlocking {
 
     store.coldStart {
         windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
-        LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons).start()
+        LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons, usage = usage).start()
     }
     shared.start()
     habits.start()

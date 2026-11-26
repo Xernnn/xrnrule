@@ -209,4 +209,45 @@ class EndToEndTest {
         runBlocking { a.store.dispatchAndGet(BlockEvent.LogHabit("pushups", -2_000)) }
         await("B sees 20") { b.store.world.value.entry("pushups", day)?.value == 20_000L }
     }
+
+    @Test
+    fun theLaptopsScreenTimeReachesTheServerAndOnlyGrowsThere() {
+        val data = File(dir, "screen").apply { mkdirs() }
+        val clock = object : Clock {
+            var mono = 10_000_000L
+            override fun nowMonotonicMs() = mono
+            override fun nowWallMs() = System.currentTimeMillis()
+            override fun zone(): ZoneId = ZoneId.systemDefault()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default).also { scopes += it }
+        val config = Config(server = "", user = "you", password = LOGIN, port = 0, dataDir = data, ruleUrl = ruleUrl, loopUrl = loopUrl)
+        val usage = UsageLog(File(data, "usage.json"), clock)
+        val client = SharedSyncClient(config, Store(BlockEngine(), NoPersist, clock, scope), FileTelemetry(File(data, "t.log")), scope, usage)
+        fun pass(log: UsageLog, minutes: Int) = repeat(minutes * 60) {
+            clock.mono += 1_000
+            log.tick()
+        }
+        usage.show("zen", "example.org")
+        pass(usage, 10)
+        usage.stop()
+        client.sendUsage(usage)
+        val day = LocalDate.now().toString()
+        fun onServer(): String {
+            val conn = URI("$ruleUrl/usage?since=$day").toURL().openConnection() as HttpURLConnection
+            conn.setRequestProperty("Authorization", "Basic " + Base64.getEncoder().encodeToString("you:pw".toByteArray()))
+            return conn.inputStream.bufferedReader().readText()
+        }
+        val got = kotlinx.serialization.json.Json.parseToJsonElement(onServer()).let { it as kotlinx.serialization.json.JsonObject }
+        val laptop = (got["usage"] as kotlinx.serialization.json.JsonObject)["laptop"].toString()
+        assertEquals(true, laptop.contains("\"zen\":600000") && laptop.contains("\"example.org\":600000"))
+
+        // The laptop loses its file and starts again from nothing: the server keeps what it had.
+        File(data, "usage.json").delete()
+        val fresh = UsageLog(File(data, "usage.json"), clock)
+        fresh.show("zen", null)
+        pass(fresh, 1)
+        fresh.stop()
+        client.sendUsage(fresh)
+        assertEquals(true, onServer().contains("\"zen\":600000"))
+    }
 }

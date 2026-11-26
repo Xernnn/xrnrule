@@ -74,9 +74,11 @@ class LocalServer(
     private val laptopIcons: LaptopAppIcons = LaptopAppIcons(),
     /** The server's copies of every device's logos, with sync on ([ServerIcons]). */
     private val serverIcons: ServerIcons? = null,
+    /** This laptop's screen time, for Insights. */
+    usage: UsageLog? = null,
 ) {
     private val guards = ConcurrentHashMap<String, Guard>()
-    private val history = History(telemetry, remote, store.clock)
+    private val history = History(telemetry, remote, store.clock, usageLog = usage)
 
     /**
      * A loosening change waiting out its 60 s (contract §2.3); applied only if confirmed in time,

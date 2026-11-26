@@ -8,6 +8,9 @@ import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.time.LocalDate
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Screen time on the laptop (docs/laptop-screen-time.md): how long each app was in front, and
@@ -126,13 +129,14 @@ class UsageLog(private val file: File, private val clock: Clock, private val hol
     }
 
     /**
-     * The stored days to send the server: today and yesterday every time (so a server that lost
-     * its last write gets them again), and any other that changed since the last [sentOk].
+     * The stored days to send the server: those that changed since the last [sentOk] (all of them,
+     * the first time), and with [again] today and yesterday whatever, for a server that lost its
+     * last write. Only stored figures go: they never shrink, so the server can keep the largest.
      */
     @Synchronized
-    fun toSend(): Map<Long, Day> {
+    fun toSend(again: Boolean = false): Map<Long, Day> {
         val today = today()
-        return booked.filter { (day, use) -> day >= today - 1 || sent[day] != use }
+        return booked.filter { (day, use) -> sent[day] != use || (again && day >= today - 1) }
     }
 
     /** The server took [days]. */
@@ -231,5 +235,21 @@ class UsageLog(private val file: File, private val clock: Clock, private val hol
 
         /** An epoch day as the server and the pages name it, "2026-11-26". */
         fun dayName(epochDay: Long): String = LocalDate.ofEpochDay(epochDay).toString()
+
+        fun dayJson(use: Day): JsonObject = buildJsonObject {
+            put("apps", buildJsonObject { for ((k, ms) in use.apps.toSortedMap()) put(k, ms) })
+            put("sites", buildJsonObject { for ((k, ms) in use.sites.toSortedMap()) put(k, ms) })
+        }
+
+        /** A `POST /usage` body for [days], with the names of their apps where [name] knows one. */
+        fun body(days: Map<Long, Day>, name: (String) -> String): JsonObject = buildJsonObject {
+            put("days", buildJsonObject { for ((d, use) in days.toSortedMap()) put(dayName(d), dayJson(use)) })
+            put(
+                "names",
+                buildJsonObject {
+                    for (app in days.values.flatMap { it.apps.keys }.toSortedSet()) name(app).takeIf { it.isNotBlank() && it != app }?.let { put(app, it) }
+                },
+            )
+        }
     }
 }

@@ -175,11 +175,27 @@ class UsageLogTest {
         val first = log.toSend()
         assertEquals(setOf(day.minusDays(5).toEpochDay()), first.keys)
         log.sentOk(first)
-        assertTrue(log.toSend().isEmpty()) // nothing new, and nothing today or yesterday
+        assertTrue(log.toSend(again = true).isEmpty()) // nothing new, and nothing today or yesterday
         log.show("steam", null)
         clock.pass(log, 10.0)
         log.flush()
-        assertEquals(setOf(day.toEpochDay()), log.toSend().keys)
+        val today = log.toSend()
+        assertEquals(setOf(day.toEpochDay()), today.keys)
+        log.sentOk(today)
+        assertTrue(log.toSend().isEmpty())
+        // Every so often today goes again, for a server that lost its last write.
+        assertEquals(setOf(day.toEpochDay()), log.toSend(again = true).keys)
+    }
+
+    @Test
+    fun aBodyForTheServerNamesItsDaysAndApps() {
+        val body = UsageLog.body(
+            mapOf(day.toEpochDay() to UsageLog.Day(mapOf("zen" to 60_000L, "odd-app" to 1_000L), mapOf("example.org" to 30_000L))),
+        ) { id -> if (id == "zen") "Zen Browser" else id }
+        assertEquals(
+            """{"days":{"2026-11-20":{"apps":{"odd-app":1000,"zen":60000},"sites":{"example.org":30000}}},"names":{"zen":"Zen Browser"}}""",
+            body.toString(),
+        )
     }
 
     @Test
