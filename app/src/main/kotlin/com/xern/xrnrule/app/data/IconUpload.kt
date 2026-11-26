@@ -37,7 +37,7 @@ class IconUpload(
     private val scope: CoroutineScope,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
-    /** Where xrnrule-sync is (its `/xrnrule` URL) and the login. */
+    /** Where xrnrule-sync is (its `/xrnrule` URL) and the login; [UsageUpload] goes by it too. */
     class Server(val url: String, val user: String, val password: String)
 
     /** This phone's logos, each a PNG of at most 96 px, or null when it has none. */

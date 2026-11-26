@@ -63,6 +63,15 @@ class AppContainer(context: Context) {
         scope = appScope,
     )
 
+    /** This phone's screen time, sent to the sync server for the laptop's pages, the status page and the hub. */
+    val usageUpload = UsageUpload(
+        server = { shared.settings.takeIf { it.isConfigured }?.let { IconUpload.Server(it.url, it.user, it.password) } },
+        source = PhoneUsage(context, siteUsage, clock),
+        prefs = context.getSharedPreferences("usage_upload", Context.MODE_PRIVATE),
+        clock = clock,
+        scope = appScope,
+    )
+
     /** Habits and their entries, shared with xrnloops, the web app and the laptop (contract §2.5). */
     val habits = HabitSync(context, store, shared.settings, appScope)
 
@@ -95,6 +104,7 @@ class AppContainer(context: Context) {
         if (store.world.value.deviceKind != DeviceKind.PHONE) store.edit { it.copy(deviceKind = DeviceKind.PHONE) }
         shared.start()
         icons.start(shared.status)
+        usageUpload.start(shared.status)
         habits.start()
         extensionServer.start()
         updates.start()

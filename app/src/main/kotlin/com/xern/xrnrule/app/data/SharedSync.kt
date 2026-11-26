@@ -298,9 +298,9 @@ class SharedSync(
     }
 
     /**
-     * The other devices' screen time from [since] (`GET /usage`), for Insights: the laptop's, which
-     * sends it; this phone's own stays here. Nothing with sync off, null when the server couldn't be
-     * asked (or is from before /usage). Blocking.
+     * The other devices' screen time from [since] (`GET /usage`), for Insights: the laptop's. This
+     * phone's own copy there is left out ([usageFrom]). Nothing with sync off, null when the server
+     * couldn't be asked (or is from before /usage). Blocking.
      */
     fun usageElsewhere(since: java.time.LocalDate): UsageElsewhere? {
         if (!settings.isConfigured) return UsageElsewhere()

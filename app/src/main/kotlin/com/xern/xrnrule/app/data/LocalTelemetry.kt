@@ -83,7 +83,7 @@ fun limitsFrom(body: String): Map<String, Map<String, Map<Long, Long>>> {
     }.toMap()
 }
 
-/** A day of another device's screen time: app id -> ms, host -> ms (docs/laptop-screen-time.md). */
+/** A day of a device's screen time: app id -> ms, host -> ms (docs/laptop-screen-time.md). */
 data class UsageDay(val apps: Map<String, Long> = emptyMap(), val sites: Map<String, Long> = emptyMap()) {
     /** A day's time is its apps': a site's is part of its browser's. */
     val totalMs: Long get() = apps.values.sum()
@@ -94,9 +94,9 @@ data class UsageElsewhere(val days: Map<LocalDate, UsageDay> = emptyMap(), val n
 
 /**
  * What other devices counted, out of a `GET /usage` answer ({"usage": {device: {"YYYY-MM-DD":
- * {"apps", "sites"}}}, "names": {...}}), this device's own left out, the rest added up by day: in
- * practice the laptop's, since only it sends. Anything malformed is left out, since this only
- * adds to a screen.
+ * {"apps", "sites"}}}, "names": {...}}), the rest added up by day: in practice the laptop's. This
+ * device's own copy there ([UsageUpload]) is left out: Insights has it from the phone itself, and
+ * it would count twice. Anything malformed is left out, since this only adds to a screen.
  */
 fun usageFrom(body: String, thisDevice: String): UsageElsewhere {
     val root = runCatching { Json.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return UsageElsewhere()
