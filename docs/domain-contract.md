@@ -507,6 +507,10 @@ sealed interface BlockEvent {
 - Cách biết trình duyệt đang mở site nào (extension của xrnrule trong trình duyệt, báo host cho
   app/daemon qua `127.0.0.1`) và thống kê thời gian theo website — chi tiết lớp ngoài; engine chỉ
   nhận `site` qua `ForegroundChanged`.
+- Thời gian dùng theo app và site (Insights, ở điện thoại và laptop, `docs/laptop-screen-time.md`):
+  chỉ là thống kê, **không bao giờ** vào engine, nên dừng, hỏng hay xóa nó không qua được giới hạn
+  nào. Hạn mức vẫn đếm theo I19 (phần mọi máy cộng lại, trừ `perDevice`), không theo thống kê này;
+  máy không dùng (khóa màn hình, ngủ, không chạm phím chuột) chỉ dừng thống kê, không dừng hạn mức.
 - Habit server (`xrnloops-sync`), giao thức HTTP của nó và lúc nào đồng bộ; nhắc nhở, widget, biểu
   đồ — chi tiết lớp ngoài; engine chỉ nhận `HabitServerPulled`/`HabitServerPushed` (§2.5). Luật
   điểm số, chuỗi ngày và tự điền của Loop nằm ở `LoopRules` trong `:domain` (port từ Loop, test bằng
