@@ -121,7 +121,7 @@ private fun sum(a: Map<String, Long>, b: Map<String, Long>): Map<String, Long> =
 
 /**
  * Append-only local event log behind the Insights history. One `;`-separated line per event (the
- * `.jsonl` name is historical). It stays on the phone (brainstorm §1) unless sync with the
+ * `.jsonl` name is historical). It stays on the phone unless sync with the
  * user's own server is set up: then [SharedSync] also sends it there, for the weekly review.
  */
 class LocalTelemetry(private val file: File) : Telemetry {

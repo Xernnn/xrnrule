@@ -531,7 +531,7 @@ sealed interface BlockEvent {
 
 ## 6. Những gì KHÔNG thuộc hợp đồng này
 
-- Chiến lược phát hiện foreground (UsageStats vs Accessibility) — chi tiết Android, xem brainstorm §4.1.
+- Chiến lược phát hiện foreground (UsageStats vs Accessibility) — chi tiết Android, xem `app/.../block/ForegroundAppDetector.kt` (usage access, không Accessibility).
 - Cách biết trình duyệt đang mở site nào (extension của xrnrule trong trình duyệt, báo host cho
   app/daemon qua `127.0.0.1`) và thống kê thời gian theo website — chi tiết lớp ngoài; engine chỉ
   nhận `site` qua `ForegroundChanged`.
@@ -545,9 +545,9 @@ sealed interface BlockEvent {
   số liệu test của Loop), dùng chung cho engine (I23) và biểu đồ.
 - Server đồng bộ (`server/xrnrule-sync.py`), giao thức HTTP, lúc nào đồng bộ và cách laptop phát
   hiện app/website — chi tiết lớp ngoài; engine chỉ nhận `SharedStateMerged` (§2.4).
-- Giao diện overlay, layout 3 màn hình — xem brainstorm §5.
-- Cơ chế sống sót (foreground service, WorkManager, OEM autostart) — brainstorm §4.4.
-- Device Admin / anti-bypass — module `:hardcore`, brainstorm §4.5.
+- Giao diện overlay và các màn hình — `app/.../block/OverlayShieldPort.kt`, `app/.../ui/`.
+- Cơ chế sống sót (foreground service, WorkManager, OEM autostart) — `BlockerForegroundService`, `ServiceWatchdogWorker`, `BootReceiver`, `OemAutostart` trong `app/`.
+- Device Admin / anti-bypass — module `:hardcore`, `SettingsGuardOverlay`, `HardcoreGuard`.
 - Health Connect / Location / Beacon — phase E.
 
 ---
@@ -556,5 +556,5 @@ sealed interface BlockEvent {
 
 - `:domain` dùng `FakeClock`, `InMemoryPersist`, `RecordingShield` — không JUnit-Android, không Robolectric.
 - Mỗi bất biến I1–I54 có ít nhất một test đặt tên `i01_...` ... `i54_...` (I54 thêm `ClockGuardTest` ở desktop và app, `ZoneGuardTest` ở app); quy tắc sửa block (§2.3) nằm ở `BlockEditsTest`, bảng trộn (§2.4) ở `SharedStateTest`.
-- Acceptance của brainstorm §1 map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
+- Các tiêu chí nghiệm thu ban đầu map thành test tích hợp cấp `:domain` trong `AcceptanceTests.kt`,
   chạy chuỗi sự kiện end-to-end trên engine.

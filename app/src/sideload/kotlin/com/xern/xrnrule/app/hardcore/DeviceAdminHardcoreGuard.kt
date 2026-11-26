@@ -19,7 +19,7 @@ import java.security.SecureRandom
  * Real [HardcoreGuard], compiled only into the `sideload` flavor. The password is stored as a
  * salted SHA-256 hash in a private `SharedPreferences` file — enough to stop a casual in-app
  * bypass attempt; the "Honest limits" copy in Settings already says ADB / safe mode / factory
- * reset defeat the whole app regardless (brainstorm §8), so this isn't trying to be a vault.
+ * reset defeat the whole app regardless, so this isn't trying to be a vault.
  */
 class DeviceAdminHardcoreGuard(private val context: Context) : HardcoreGuard {
 

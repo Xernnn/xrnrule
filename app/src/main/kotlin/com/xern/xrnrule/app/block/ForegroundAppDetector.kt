@@ -21,7 +21,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Strategy behind the foreground-app signal. Phase A ships [UsageStatsDetector] only (Option C
- * in brainstorm §4.1): it survives Android 17 Advanced Protection Mode and carries no Play
+ * in the early design): it survives Android 17 Advanced Protection Mode and carries no Play
  * policy risk. An `AccessibilityDetector` accelerator can be slotted in later without touching
  * callers.
  */

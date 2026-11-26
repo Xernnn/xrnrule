@@ -13,7 +13,7 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Entry point. Manual DI (a 3-screen app does not need Hilt — brainstorm §4.6).
+ * Entry point. Manual DI (a 3-screen app does not need Hilt).
  */
 class XrnruleApp : Application() {
 
@@ -32,7 +32,7 @@ class XrnruleApp : Application() {
         scheduleWatchdog()
     }
 
-    /** Phase B survival backstop (brainstorm §4.4) — see [ServiceWatchdogWorker]. */
+    /** Survival backstop: see [ServiceWatchdogWorker]. */
     private fun scheduleWatchdog() {
         val request = PeriodicWorkRequestBuilder<ServiceWatchdogWorker>(15, TimeUnit.MINUTES).build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(

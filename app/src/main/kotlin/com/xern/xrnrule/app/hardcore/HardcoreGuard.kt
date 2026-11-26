@@ -4,7 +4,7 @@ import android.app.Activity
 import com.xern.xrnrule.domain.World
 
 /**
- * Anti-bypass surface (brainstorm §4.5). The real implementation lives in the `:hardcore`
+ * Anti-bypass surface. The real implementation lives in the `:hardcore`
  * module and is only linked into the `sideload` build flavor; `:app`'s main source set never
  * references `:hardcore` directly so the `play` flavor can exclude it entirely. The
  * flavor-specific factory (`HardcoreGuardFactory.kt` under `src/sideload` / `src/play`) wires

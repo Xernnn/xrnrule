@@ -34,7 +34,7 @@ android {
         compose = true
     }
 
-    // "chưa chốt phân phối" (brainstorm §2.2): the :hardcore module (Device Admin, settings
+    // The distribution channel is undecided (README "Build"): the :hardcore module (Device Admin, settings
     // guard) is only linked into the `sideload` flavor. `play` builds ship without it.
     flavorDimensions += "distribution"
     productFlavors {

@@ -39,7 +39,7 @@ class AppContainer(context: Context) {
     /** The single source of truth for [World]. UI observes it, the service drives it. */
     val store = WorldStore(engine, persist, telemetry, clock, appScope)
 
-    /** Anti-bypass (brainstorm §4.5) — real in the `sideload` flavor, a no-op in `play`. */
+    /** Anti-bypass — real in the `sideload` flavor, a no-op in `play`. */
     val hardcoreGuard: HardcoreGuard = createHardcoreGuard(context)
 
     /** Websites come from the xrnrule extension in the phone's browser, through [extensionServer]. */

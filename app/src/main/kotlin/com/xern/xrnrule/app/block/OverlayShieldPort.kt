@@ -57,7 +57,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * The enforcement surface (brainstorm §4.3): a `TYPE_APPLICATION_OVERLAY` window rather than a
+ * The enforcement surface: a `TYPE_APPLICATION_OVERLAY` window rather than a
  * launched Activity, because a foreground service holding the overlay permission can show it
  * reliably where background Activity starts are restricted.
  *

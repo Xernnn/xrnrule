@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * End-to-end runs of the acceptance criteria from the brainstorm §1, driven purely through
+ * End-to-end runs of the acceptance criteria of the first design, driven purely through
  * the engine. These are the "core loop is done" checks, minus the on-device parts.
  */
 class AcceptanceTests {

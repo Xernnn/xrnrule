@@ -61,7 +61,7 @@ import kotlinx.coroutines.withContext
 /**
  * Owns the Phase A core loop: detect the foreground app -> feed the engine -> (re)render the
  * block overlay. Runs as a `specialUse` foreground service so it can hold the overlay and be
- * restarted after death (survival layer, brainstorm §4.4 — the watchdog/boot pieces are
+ * restarted after death (survival layer — the watchdog/boot pieces are
  * Phase B). Also keeps the status notification current and raises alerts (see [Notifications]).
  */
 class BlockerForegroundService : LifecycleService() {
@@ -525,7 +525,7 @@ class BlockerForegroundService : LifecycleService() {
     /**
      * Some OEMs kill the whole process when the task is swiped from recents despite
      * `START_STICKY`. Ask WorkManager to bring the service back up immediately rather than
-     * waiting for [ServiceWatchdogWorker]'s next periodic tick (brainstorm §4.4).
+     * waiting for [ServiceWatchdogWorker]'s next periodic tick.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
