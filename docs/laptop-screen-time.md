@@ -1,14 +1,15 @@
-# Laptop screen time
+# Laptop screen time, and the phone's
 
 Insights on the phone shows time per app and site, but only the phone's: Android keeps that
 history, and the phone app keeps its own per-site log. The laptop counted nothing. A browser
 extension that logs every site visited ("all sites plus tabs") filled the gap, and it sent that
 log to somebody else. This replaces it. The laptop daemon counts minutes per app and per site,
-sends them to the user's own sync server, and Insights shows them beside the phone's.
+sends them to the user's own sync server, and Insights shows them beside the phone's. The phone
+sends its own the same way (the owner's call, 2026-11-26), so the web pages and the hub show both.
 
 ## What counts
 
-Time is counted on the laptop only. The daemon already knows what is in front, for enforcement:
+**On the laptop.** The daemon already knows what is in front, for enforcement:
 
 - **App:** the focused window's app (KWin's `desktopFileName`, or on Hyprland the id worked out
   from the window class, `Hyprland.appId`). It's the same id a block's `targetDesktopApps` uses.
@@ -42,6 +43,19 @@ Nothing counts while the laptop isn't in use:
 Time is measured on the boot-time clock (`/proc/uptime`, which runs through sleep) and given to days
 by the wall clock, split at local midnight in the zone the laptop goes by (I54).
 
+**On the phone**, as its Insights has always counted:
+
+- **App:** the app in front as Android's usage events have it (`ScreenTime`, the figure Digital
+  Wellbeing shows): from an activity resuming to the app's last one pausing, only while the
+  screen is on, without the home screen and the system UI.
+- **Site:** the host the xrnrule extension in the phone's browser reports, while that browser is
+  in front and the screen is on and unlocked (`SiteUsageLog`), by the same host rule as the
+  laptop's (`Sites.usageHost`).
+- **Not counted as a site**, as on the laptop: the block page standing in for a site, a private
+  tab (`inPrivate`, from extension 2.3.12), and a tab playing out of sight. Their time is the
+  browser's, with no site. The engine still hears the block page's site, for its wait timer (I4).
+- Days split at local midnight in the zone the phone goes by (I54).
+
 ## Where it lives
 
 **On the laptop** (`UsageLog`, `usage.json` in the daemon's data dir, owner-only like the rest),
@@ -56,12 +70,16 @@ minutes are shown but not stored until they're older than that. So a stored figu
 grows. It's written once a minute and when the daemon stops: a crash loses at most a minute and
 those 3.
 
+**On the phone**: Android keeps the apps' history; the app keeps `site_usage.json` (31 days), and,
+in the `usage_upload` preferences, the last day a send got through and to which server and user.
+
 **On the server** (`xrnrule-sync.py`, `usage.json` beside `events.jsonl`):
 
 ```
 POST /usage   {"days": {"2026-11-26": {"apps": {app id: ms}, "sites": {host: ms}}}, "names": {app id: name}}
-              from a device (X-Device). The largest figure seen stays for each device, day and
-              app or site: a day's use only grows, and a device that lost its file can't lower it.
+              from a device (X-Device: laptop or phone). The largest figure seen stays for each
+              device, day and app or site: a day's use only grows, and a device that lost its file
+              can't lower it.
 GET  /usage?since=YYYY-MM-DD
               {"usage": {device: {day: {"apps": {...}, "sites": {...}}}}, "names": {...}}
 ```
@@ -74,9 +92,15 @@ ahead; ids and hosts of the usual characters; figures between 0 and 25 hours; at
 and 500 sites a day) and skips anything else. It writes the file at most every 5 minutes, so a
 restart may lose the last few; the laptop's resend of today and yesterday puts them back.
 
-**Only the laptop sends.** The phone's time stays on the phone, as its Usage access screen
-promises ("Nothing leaves your phone"). Sending it too would be the owner's call (see Open
-questions).
+**The phone sends too** (`UsageUpload`), in the same format, as device `phone`: each day's time per
+app (its package) and per site, with the apps' names as the phone shows them. It needs no job of its
+own. A send follows a sync round that worked, at most every 5 minutes, so it goes while the phone
+is in use and the server can be reached. It sends the days from the last one a send got through
+(yesterday at the latest, for the minutes after that send) to today. A figure only grows and the
+server keeps the largest, so a day sent again changes nothing. A phone that was offline catches up
+the same way, 30 days at most (as far as Insights goes, and the site log keeps). The first send,
+and the first to another server or user, sends those 30 days. It goes only to the sync server set
+in Settings, with the sync login; with sync off nothing goes. Nothing else leaves the phone for it.
 
 ## Where it shows
 
@@ -87,13 +111,15 @@ questions).
     figure. Today shows the figures alone.
   - A day's total on each device is its apps' time; sites are part of it. Laptop apps go by their
     laptop names, under a laptop icon.
+  - The phone's own time comes from the phone, not the server: its copy there is left out of what
+    the server answers, so nothing counts twice.
 - **Laptop page and the server's status page** (the shared `insights.js`). The same Screen time
   card: the range's time, each device's when there are two, a column a day split by device, then
   the apps and the sites with their time.
   The laptop page reads it from `/api/history`, which merges this laptop's own count with the
   server's.
-- **xrnhub**, `GET /api/v1/screen-time?from=&to=`: each day's time per device, app and site, from
-  the server's `usage.json`.
+- **xrnhub**, `GET /api/v1/screen-time?from=&to=&device=`: each day's time per device (`laptop`,
+  `phone`), app and site, from the server's `usage.json`.
 
 ## Limits and screen time
 
@@ -101,9 +127,10 @@ Screen time is a statistic. It never goes into the engine, so it can't change wh
 (contract §6).
 
 A limit that applies on both devices already counts both devices' time, and nothing here changes
-that. Each device reports its own use of each limit in the shared state (`allowance`, by device
-id), and the engine adds the other devices' use to its own unless the block is per device (I19,
-I33, §2.4). The review of 2026-11-26 saw it happen: phone 15 + laptop 15 = a 30-minute limit.
+that, the phone's sending included. Each device reports its own use of each limit in the shared
+state (`allowance`, by device id), not in `/usage`, and the engine adds the other devices' use to
+its own unless the block is per device (I19, I33, §2.4). The review of 2026-11-26 saw it happen:
+phone 15 + laptop 15 = a 30-minute limit.
 
 The two figures differ on purpose, and the limit is never the smaller for it:
 
@@ -125,19 +152,25 @@ is unchanged:
   the browser. Enforcement is as before: a browser without the extension is closed while site
   blocks apply (I49).
 - **The idle watch failing.** More counts, never less.
+- **The phone not sending** (sync off, offline, a server from before `/usage`). The web pages and
+  the hub lack the phone's time until it catches up. Insights on the phone is as before.
 - **`usage.json` deleted.** The server keeps the largest figure for each day, and the pages show
   the larger of the laptop's and the server's. Nothing it held goes into a limit anyway.
 
 ## Left out
 
-- The phone's time on the server, the hub, and the web pages (above).
 - Time by hour. Days are enough for the totals and the hub. The phone's own chart stays as it is.
 - Window titles, page titles and paths. Only app ids and hosts are kept.
-- A switch to turn it off. It counts whenever the daemon runs, and goes to the server whenever
-  sync is set up, as the event log does.
+- A switch to turn it off, on either device. It counts whenever the daemon or the phone app runs,
+  and goes to the server whenever sync is set up, as the event log does.
+- The phone reading its own time back from the server, as the laptop page does (after a reinstall
+  its site log starts afresh, and Android keeps the apps' only so long).
 
 ## Open questions
 
-- Should the phone send its time too? That would put both devices on the web pages and the hub,
-  but it breaks the phone's "Nothing leaves your phone" line.
+- ~~Should the phone send its time too?~~ Yes, to the owner's own sync server only (owner,
+  2026-11-26). The Usage access line that said "Nothing leaves your phone" now says "Screen time
+  goes only to your own server".
 - Is 3 minutes the right idle time?
+- While the phone's block screen covers an app, Android counts that app in front, so the time
+  counts under it. The laptop leaves its block page out. Leave the phone's out too?
