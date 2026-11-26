@@ -35,6 +35,17 @@ class SitesTest {
     }
 
     @Test
+    fun timePerSiteGoesByTheSiteAPersonWouldName() {
+        assertEquals("youtube.com", Sites.usageHost("m.youtube.com"))
+        assertEquals("youtube.com", Sites.usageHost("www.youtube.com/shorts/abc"))
+        assertEquals("facebook.com", Sites.usageHost("mobile.facebook.com"))
+        assertEquals("music.youtube.com", Sites.usageHost("music.youtube.com/watch"))
+        // A prefix with no site after it is the site itself.
+        assertEquals("m.com", Sites.usageHost("m.com"))
+        assertEquals("example.org", Sites.usageHost("Example.ORG"))
+    }
+
+    @Test
     fun matchesSubdomainsOnly() {
         assertTrue(Sites.matches("youtube.com", "youtube.com"))
         assertTrue(Sites.matches("m.youtube.com", "youtube.com"))

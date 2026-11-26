@@ -79,11 +79,13 @@ test("an xrnrule that never answers is unreachable, and a minute on everything w
 /** background.js loaded with xrnrule answering every call at once; [overrides] add to chrome.*. */
 function answering(overrides = {}) {
   const urls = [];
+  const bodies = [];
   const stored = {};
   const sandbox = {
     URL, console, AbortController, setTimeout, clearTimeout,
-    fetch: async (url) => {
+    fetch: async (url, init) => {
       urls.push(String(url));
+      bodies.push(init?.body ? JSON.parse(init.body) : null);
       return { ok: true, json: async () => ({ v: "1", blocked: [], watched: [] }) };
     },
   };
@@ -99,8 +101,19 @@ function answering(overrides = {}) {
   });
   vm.runInNewContext(read("shared.js"), sandbox);
   vm.runInNewContext(read("background.js"), sandbox);
-  return { sandbox, urls, stored };
+  return { sandbox, urls, bodies, stored };
 }
+
+test("a page in a private window says so, for the laptop to leave its site out of screen time", async () => {
+  const messages = [];
+  const bg = answering({ "chrome.runtime.onMessage.addListener": (fn) => { messages.push(fn); } });
+  const [onMessage] = messages;
+  const heartbeats = () => bg.bodies.filter((_b, i) => bg.urls[i].endsWith("/ext/heartbeat"));
+  // What the private tab is comes from the browser (the sender's tab), not from the page's message.
+  await new Promise((resolve) => onMessage({ type: "beat", host: "example.com", focused: true, inPrivate: false }, { tab: { id: 1, incognito: true } }, resolve));
+  await new Promise((resolve) => onMessage({ type: "beat", host: "example.org", focused: true, inPrivate: true }, { tab: { id: 2, incognito: false } }, resolve));
+  assert.deepEqual(heartbeats().map((b) => [b.host, b.inPrivate]), [["example.com", true], ["example.org", false]]);
+});
 
 test("every rule fetch says whether a window the extension can see has focus (I49)", async () => {
   // A private window it may not run in, or another profile's, is in front when none has: the

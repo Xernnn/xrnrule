@@ -2,6 +2,7 @@ package com.xern.xrnrule.app.data
 
 import androidx.core.util.AtomicFile
 import com.xern.xrnrule.domain.Clock
+import com.xern.xrnrule.domain.Sites
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,7 +36,7 @@ class SiteUsageLog(private val file: File, private val clock: Clock) {
     @Synchronized
     fun onSite(host: String?) {
         close()
-        openHost = host?.let(::displayHost)
+        openHost = host?.let(Sites::usageHost)
         openSinceMono = clock.nowMonotonicMs()
     }
 
@@ -85,14 +86,5 @@ class SiteUsageLog(private val file: File, private val clock: Clock) {
 
     private companion object {
         const val KEEP_DAYS = 31 // Insights goes back 30 days
-
-        /** "www.youtube.com" and "m.youtube.com" are the same site to a person reading Insights. */
-        fun displayHost(host: String): String {
-            for (prefix in listOf("www.", "m.", "mobile.")) {
-                val rest = host.removePrefix(prefix)
-                if (rest != host && '.' in rest) return rest
-            }
-            return host
-        }
     }
 }

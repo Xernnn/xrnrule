@@ -108,6 +108,10 @@ Without a server it blocks on the laptop only, and nothing it does reaches the p
   block page within a few seconds.
 - A locked screen or a sleeping laptop counts as "nothing in use", so daily allowances don't
   drain overnight.
+- **Screen time.** Minutes per app, and per site in the browser in front, a day. Not while the
+  screen is locked, the laptop sleeps, or nothing was touched for 3 minutes (the compositor's
+  `ext-idle-notify-v1`; a playing video holds it off). Not on a block page or a private page.
+  Never read by the engine: limits count as before.
 - **History.** Blocked app opens, habits done and unlock time go to the sync server, which
   keeps 120 days of them from both devices for the **Review** page of the habits web app.
 - If sync has been failing for an hour, a notification says so.
@@ -137,7 +141,8 @@ curl -s http://127.0.0.1:47321/api/state | head -c 400
 
 State lives in `~/.local/share/xrnrule/` (owner-only): `world.json`, `habit-entries.json` (the
 habit history), `shared-base.json` (the copy last agreed with the server), `clock.json` (how far the clock was
-set by hand, and the time zone blocks go by), `site-icons/`
+set by hand, and the time zone blocks go by), `usage.json` (screen time: minutes per app and site
+a day, [docs/laptop-screen-time.md](../docs/laptop-screen-time.md)), `site-icons/`
 (each blocked website's own icon, asked of that site, served to the page at `/api/site-icon`), and
 `server-icons/` (the sync server's copies of the other devices' logos, the phone's apps above all).
 The page asks `/api/icon?key=site:<host>|desk:<app id>|app:<package>` for any of them: the

@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.xern.xrnrule.app.R
 import com.xern.xrnrule.app.block.OverlayShieldPort
 import com.xern.xrnrule.app.data.TelemetryEvent
+import com.xern.xrnrule.app.data.UsageDay
 import com.xern.xrnrule.app.ui.theme.DataColor
 import com.xern.xrnrule.app.ui.theme.MiSans
 import com.xern.xrnrule.app.ui.theme.XrnruleTheme
@@ -135,7 +136,21 @@ private fun sampleUi(events: List<InsightEvent>, range: InsightRange, device: De
         "com.android.chrome" to ("Chrome" to 7 * MIN * k),
     )
     val siteTime = if (!phone) emptyMap() else mapOf("youtube.com" to 22 * MIN * k, "news.example.com" to 12 * MIN * k, "reddit.com" to 3 * MIN * k, "docs.example.org" to 5 * MIN * k)
-    val (apps, sites) = InsightsModel.topTargets(appTime, siteTime, summary.targets, sampleBlocks, blockId)
+    // The laptop's, as the server keeps it: made up, a day at a time.
+    val laptopDays = (0L until 30L).associate { back ->
+        now.let { InsightsModel.today(it, zone).minusDays(back) } to UsageDay(
+            apps = mapOf("zen" to (90 + back * 7 % 60) * MIN, "org.example.Editor" to (40 + back * 11 % 80) * MIN, "steam" to if (back % 3 == 0L) 35 * MIN else 0L),
+            sites = mapOf("youtube.com" to (25 + back * 5 % 20) * MIN, "docs.example.org" to 20 * MIN),
+        )
+    }
+    val laptopShown = device != DeviceFilter.PHONE
+    val first = InsightsModel.today(now, zone).minusDays(k - 1L)
+    val inRange = laptopDays.filterKeys { !it.isBefore(first) }.values
+    val laptopApps = if (!laptopShown) emptyMap() else inRange.flatMap { it.apps.entries }.groupBy({ it.key }, { it.value })
+        .mapValues { (id, ms) -> (mapOf("zen" to "Zen Browser", "org.example.Editor" to "Editor", "steam" to "Steam")[id] ?: id) to ms.sum() }
+    val laptopSites = if (!laptopShown) emptyMap() else inRange.flatMap { it.sites.entries }.groupBy({ it.key }, { it.value }).mapValues { it.value.sum() }
+    val (apps, sites) = InsightsModel.topTargets(appTime, siteTime, summary.targets, sampleBlocks, blockId, laptopApps, laptopSites)
+    val phoneDays = (0L until 30L).associate { back -> InsightsModel.today(now, zone).minusDays(back) to appTime.mapValues { it.value.second / k * (8 + back % 5) / 10 } }
     return InsightsUi(
         summary = summary,
         blocks = sampleBlocks,
@@ -149,6 +164,7 @@ private fun sampleUi(events: List<InsightEvent>, range: InsightRange, device: De
         laptop = laptop,
         zone = zone,
         appLabel = { pkg -> mapOf("com.instagram.android" to "Instagram", "com.zhiliaoapp.musically" to "TikTok", "com.google.android.youtube" to "YouTube")[pkg] ?: pkg },
+        screen = InsightsModel.screenTime(phoneDays, emptyMap(), laptopDays, sampleBlocks, blockId, range, device, now, zone),
     )
 }
 

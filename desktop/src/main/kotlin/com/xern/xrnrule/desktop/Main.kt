@@ -45,12 +45,14 @@ fun main() = runBlocking {
 
     val notifier = Notifier(config)
     val enforcer = Enforcer(store, notifier, config)
-    val foreground = Foreground(store, File(config.dataDir, "browsers.txt"))
+    // Screen time (docs/laptop-screen-time.md): statistics only, never read by the engine.
+    val usage = UsageLog(File(config.dataDir, "usage.json"), clock)
+    val foreground = Foreground(store, File(config.dataDir, "browsers.txt"), usage)
     enforcer.foreground = foreground
     val windows = WindowSystem.detect()
     enforcer.windowSystem = windows
     store.shield = enforcer
-    val shared = SharedSyncClient(config, store, telemetry, scope)
+    val shared = SharedSyncClient(config, store, telemetry, scope, usage)
     val habits = HabitClient(config, store, scope)
 
     // The blocked apps' and sites' logos: the laptop's own, and the phone's through the server.
@@ -63,12 +65,18 @@ fun main() = runBlocking {
 
     store.coldStart {
         windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
-        LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons).start()
+        LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons, usage = usage).start()
     }
     shared.start()
     habits.start()
+    IdleWatch({ IdleWatch.socketOf() }, clock, usage::idle, usage::active).start()
     serverIcons.start(shared.status)
-    Runtime.getRuntime().addShutdownHook(Thread { persist.flush() })
+    Runtime.getRuntime().addShutdownHook(
+        Thread {
+            persist.flush()
+            usage.stop()
+        },
+    )
 
     // Engine effects -> desktop notifications.
     scope.launch {
@@ -108,6 +116,7 @@ fun main() = runBlocking {
             foreground.heardExtension() // a sleeping laptop isn't a silent extension (I49)
         }
         lastMono = now
+        usage.tick() // a sleep isn't screen time either
         if (seconds % 3 == 0) {
             val locked = withContext(Dispatchers.IO) { windows.screenLocked() }
             if (locked != foreground.locked) {
@@ -116,6 +125,7 @@ fun main() = runBlocking {
             }
         }
         foreground.update()
+        if (seconds % 60 == 0) withContext(Dispatchers.IO) { usage.flush() }
         val world = store.world.value
         if (needsTicking(world)) store.dispatch(BlockEvent.Tick)
         if (seconds % 5 == 0 && ExtensionApi.otherBrowsersMatter(world)) {

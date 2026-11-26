@@ -111,4 +111,27 @@ class TelemetryLinesTest {
         assertTrue(limitsFrom("not json").isEmpty())
         assertTrue(limitsFrom("""{"limits": 3}""").isEmpty())
     }
+
+    @Test
+    fun theLaptopsScreenTimeReadsBackByDayItsOwnDevicesAddedUp() {
+        val body = """{"usage": {
+            "laptop": {"2026-11-25": {"apps": {"zen": 600000, "steam": 60000}, "sites": {"example.org": 300000}},
+                       "2026-11-24": {"apps": {"zen": 1000, "bad": -5, "odd": "60000"}, "sites": []},
+                       "not-a-day": {"apps": {"zen": 1}}},
+            "laptop-2": {"2026-11-25": {"apps": {"zen": 5000}}},
+            "phone": {"2026-11-25": {"apps": {"com.example.reader": 99}}}
+          }, "names": {"zen": "Zen Browser", "steam": 3}}"""
+        val got = usageFrom(body, "phone")
+        assertEquals(
+            mapOf(
+                java.time.LocalDate.of(2026, 11, 25) to UsageDay(mapOf("zen" to 605_000L, "steam" to 60_000L), mapOf("example.org" to 300_000L)),
+                java.time.LocalDate.of(2026, 11, 24) to UsageDay(mapOf("zen" to 1_000L)),
+            ),
+            got.days,
+        )
+        assertEquals(mapOf("zen" to "Zen Browser"), got.names)
+        assertEquals(665_000L, got.days.getValue(java.time.LocalDate.of(2026, 11, 25)).totalMs)
+        assertTrue(usageFrom("not json", "phone").days.isEmpty())
+        assertTrue(usageFrom("""{"usage": []}""", "phone").days.isEmpty())
+    }
 }

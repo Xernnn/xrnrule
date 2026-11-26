@@ -630,6 +630,122 @@ class SyncServerTest(unittest.TestCase):
         self.assertFalse({"a", "b", "c", "d"} & set(got), got)
         self.assertEqual(401, self.call("GET", "/limits", password=WRONG)[0])
 
+    # ---- screen time (docs/laptop-screen-time.md) ----------------------------------------------
+
+    @staticmethod
+    def day(back=0):
+        return (srv.datetime.now(srv.timezone.utc).date() - srv.timedelta(days=back)).isoformat()
+
+    def test_screen_time_keeps_the_largest_figure_for_each_device_day_and_app(self):
+        today, yesterday = self.day(), self.day(1)
+        first = {"days": {today: {"apps": {"zen": 600000, "steam": 60000}, "sites": {"example.org": 300000}},
+                          yesterday: {"apps": {"zen": 7200000}}},
+                 "names": {"zen": "Zen Browser", "steam": "Steam"}}
+        status, body, _ = self.call("POST", "/usage", first, {"X-Device": "laptop"})
+        self.assertEqual(200, status)
+        self.assertEqual(6, json.loads(body)["grew"])  # four figures and two names
+        # Later the same day: more of one, and a copy that lost the other figure; then a resend.
+        later = {"days": {today: {"apps": {"zen": 900000}, "sites": {"example.org": 100000}}}}
+        self.assertEqual(1, json.loads(self.call("POST", "/usage", later, {"X-Device": "laptop"})[1])["grew"])
+        self.assertEqual(0, json.loads(self.call("POST", "/usage", later, {"X-Device": "laptop"})[1])["grew"])
+        # Another device's own.
+        self.call("POST", "/usage", {"days": {today: {"apps": {"zen": 5000}}}}, {"X-Device": "laptop-2"})
+        status, body, _ = self.call("GET", f"/usage?since={yesterday}")
+        self.assertEqual(200, status)
+        got = json.loads(body)
+        self.assertEqual({"apps": {"zen": 900000, "steam": 60000}, "sites": {"example.org": 300000}}, got["usage"]["laptop"][today])
+        self.assertEqual({"apps": {"zen": 7200000}, "sites": {}}, got["usage"]["laptop"][yesterday])
+        self.assertEqual({"zen": 5000}, got["usage"]["laptop-2"][today]["apps"])
+        self.assertEqual("Steam", got["names"]["steam"])
+        only_today = json.loads(self.call("GET", f"/usage?since={today}")[1])["usage"]["laptop"]
+        self.assertEqual([today], list(only_today))
+
+    def test_the_phone_and_the_laptop_each_keep_their_own_screen_time(self):
+        # The phone sends as the laptop does: its packages, its sites, its apps' names (UsageUpload).
+        today = self.day()
+        phone = {"days": {today: {"apps": {"com.example.reader": 900000, "com.example.chat_2": 60000},
+                                  "sites": {"example.org": 300000}}},
+                 "names": {"com.example.reader": "Reader", "com.example.chat_2": "Chat"}}
+        laptop = {"days": {today: {"apps": {"org.example.Editor": 600000}, "sites": {"example.org": 200000}}},
+                  "names": {"org.example.Editor": "Editor"}}
+        self.assertEqual(5, json.loads(self.call("POST", "/usage", phone, {"X-Device": "phone"})[1])["grew"])
+        self.call("POST", "/usage", laptop, {"X-Device": "laptop"})
+        got = json.loads(self.call("GET", f"/usage?since={today}")[1])
+        self.assertEqual({"apps": {"com.example.reader": 900000, "com.example.chat_2": 60000}, "sites": {"example.org": 300000}},
+                         got["usage"]["phone"][today])
+        self.assertEqual(600000, got["usage"]["laptop"][today]["apps"]["org.example.Editor"])
+        self.assertNotIn("com.example.reader", got["usage"]["laptop"][today]["apps"])
+        self.assertEqual(("Reader", "Chat", "Editor"),
+                         (got["names"]["com.example.reader"], got["names"]["com.example.chat_2"], got["names"]["org.example.Editor"]))
+        # A phone's resend of a day it counted less of (Android trimmed its history) lowers nothing.
+        less = {"days": {today: {"apps": {"com.example.reader": 1000}}}}
+        self.assertEqual(0, json.loads(self.call("POST", "/usage", less, {"X-Device": "phone"})[1])["grew"])
+        again = json.loads(self.call("GET", f"/usage?since={today}")[1])
+        self.assertEqual(900000, again["usage"]["phone"][today]["apps"]["com.example.reader"])
+
+    def test_screen_time_that_makes_no_sense_is_skipped(self):
+        today = self.day()
+        weird = {"days": {
+            "2026-02-30": {"apps": {"zen": 1000}},  # no such day
+            "yesterday": {"apps": {"zen": 1000}},
+            self.day(srv.EVENTS_KEEP_DAYS + 1): {"apps": {"zen": 1000}},  # past what's kept
+            self.day(-3): {"apps": {"zen": 1000}},  # three days ahead
+            today: {
+                "apps": {"zen": -1, "steam": True, "game": srv.USAGE_MAX_MS + 1, "bad\nid": 5, "ok": 2000, "x" * 201: 5},
+                "sites": {"Example.org": 1000, "a b.com": 1000, "fine.example": 3000},
+            },
+            self.day(1): ["not", "a", "day"],
+        }, "names": {"ok": "OK", "bad\nid": "Bad", "x": 7}}
+        self.assertEqual(3, srv.add_usage("odd", "laptop", weird))
+        with srv.usage_lock:
+            kept = srv.load_usage("odd")
+        self.assertEqual({today: {"apps": {"ok": 2000}, "sites": {"fine.example": 3000}}}, kept["days"]["laptop"])
+        self.assertEqual({"ok": "OK"}, kept["names"])
+        self.assertEqual(400, self.call("POST", "/usage", {"days": []}, {"X-Device": "laptop"})[0])
+        self.assertEqual(400, self.call("POST", "/usage", {"days": {}})[0])  # no X-Device
+        self.assertEqual(400, self.call("GET", "/usage?since=last-week")[0])
+        self.assertEqual(401, self.call("GET", "/usage", password=WRONG)[0])
+        self.assertEqual(401, self.call("POST", "/usage", {"days": {}}, {"X-Device": "laptop"}, password=WRONG)[0])
+
+    def test_a_day_holds_at_most_so_many_apps(self):
+        today = self.day()
+        with unittest.mock.patch.object(srv, "USAGE_MAX_KEYS", 3):
+            srv.add_usage("many", "laptop", {"days": {today: {"apps": {f"a{i}": 1000 for i in range(5)}}}})
+            srv.add_usage("many", "laptop", {"days": {today: {"apps": {"a9": 1000, "a0": 5000}}}})
+            with srv.usage_lock:
+                self.assertEqual({"a0": 5000, "a1": 1000, "a2": 1000}, srv.load_usage("many")["days"]["laptop"][today]["apps"])
+
+    def test_screen_time_is_on_disk_and_old_days_go(self):
+        today, old = self.day(), self.day(srv.EVENTS_KEEP_DAYS + 5)
+        path = os.path.join(srv.args.data, "users", "kept", "usage.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:  # as an earlier run left it, a day since aged out
+            json.dump({"days": {"laptop": {old: {"apps": {"zen": 1000}, "sites": {}}}}, "names": {}}, f)
+        with unittest.mock.patch.object(srv, "USAGE_WRITE_S", 0):
+            srv.add_usage("kept", "laptop", {"days": {today: {"apps": {"zen": 42000}}}})
+        with open(path) as f:
+            on_disk = json.load(f)
+        self.assertEqual({today: {"apps": {"zen": 42000}, "sites": {}}}, on_disk["days"]["laptop"])
+        # Read in again after a restart.
+        with srv.usage_lock:
+            srv.usage.pop("kept")
+        self.assertEqual(42000, srv.usage_since("kept", srv.date.min)["usage"]["laptop"][today]["apps"]["zen"])
+
+    def test_screen_time_is_written_at_most_so_often(self):
+        today = self.day()
+        path = os.path.join(srv.args.data, "users", "often", "usage.json")
+        srv.add_usage("often", "laptop", {"days": {today: {"apps": {"zen": 1000}}}})  # the first goes at once
+        with open(path) as f:
+            self.assertEqual(1000, json.load(f)["days"]["laptop"][today]["apps"]["zen"])
+        srv.add_usage("often", "laptop", {"days": {today: {"apps": {"zen": 2000}}}})
+        with open(path) as f:
+            self.assertEqual(1000, json.load(f)["days"]["laptop"][today]["apps"]["zen"], "held back")
+        with srv.usage_lock:
+            srv.usage_written["often"] -= srv.USAGE_WRITE_S
+        srv.usage_since("often", srv.date.min)  # a read writes what's held back once it may
+        with open(path) as f:
+            self.assertEqual(2000, json.load(f)["days"]["laptop"][today]["apps"]["zen"])
+
     def test_an_event_whose_type_is_no_string_is_dropped_not_a_dropped_connection(self):
         # A list or an object can't be looked up in the set of types: TypeError, no answer at all.
         day_ago = int(time.time() * 1000) - 86400 * 1000  # out of the other tests' way

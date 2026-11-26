@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 // Viewed from a browser in another zone than the devices': their days are the ones counted.
 process.env.TZ = "America/Los_Angeles";
-const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline, dayByBlock, dayLine, tryKey } = await import("./web/insights.js");
+const { normalizeBlocks, blockOf, isSite, mergeShared, compute, limitUse, dayOf, dayStart, timeline, dayByBlock, dayLine, tryKey, screenTime } = await import("./web/insights.js");
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -308,4 +308,80 @@ test("a history day's head: its tries by block, unlocks and their time, minutes 
   const [day] = timeline(events, blocks, ZONE);
   assert.deepEqual([day.tries, day.unlocks, day.unlockedMs, day.boughtMs], [4, 1, 10 * MIN, 5 * MIN]);
   assert.deepEqual(day.parts, new Map([["social", 2], ["games", 1], [null, 1]]), "what no block covers too");
+});
+
+// ---- screen time ----------------------------------------------------------------------------
+
+/** The days around NOW as the server names them. */
+const named = (back) => new Date((dayOf(ZONE, NOW) - back) * DAY).toISOString().slice(0, 10);
+const usage = {
+  laptop: {
+    [named(0)]: { apps: { zen: 90 * MIN, steam: 30 * MIN, "org.example.Tiny": 20_000 }, sites: { "youtube.com": 40 * MIN, "example.org": 10 * MIN } },
+    [named(1)]: { apps: { zen: 60 * MIN }, sites: { "youtube.com": 5 * MIN } },
+    [named(9)]: { apps: { zen: 600 * MIN }, sites: {} }, // before the week
+  },
+  phone: { [named(0)]: { apps: { "com.google.android.youtube": 15 * MIN }, sites: { "youtube.com": 6 * MIN } } },
+};
+const today = dayOf(ZONE, NOW);
+
+test("a day's screen time on a device is its apps' time, a site's being part of its browser's", () => {
+  const st = screenTime(usage, { zen: "Zen Browser" }, { first: today - 6, today });
+  assert.equal(st.days.length, 7);
+  // The app under a minute counts toward the day, though it isn't a row.
+  assert.deepEqual(st.days[6], { day: today, total: 135 * MIN + 20_000, phone: 15 * MIN, laptop: 120 * MIN + 20_000 });
+  assert.deepEqual(st.days[5], { day: today - 1, total: 60 * MIN, phone: 0, laptop: 60 * MIN });
+  assert.equal(st.total, 195 * MIN + 20_000);
+  assert.equal(st.laptop, 180 * MIN + 20_000);
+  // Apps by device, most first, named where a name came; under a minute left out.
+  assert.deepEqual(st.apps.map((a) => [a.dev, a.name, a.ms]), [
+    ["laptop", "Zen Browser", 150 * MIN], ["laptop", "steam", 30 * MIN], ["phone", "com.google.android.youtube", 15 * MIN],
+  ]);
+  // A site is one row, each device's part beside it.
+  const yt = st.sites.find((x) => x.key === "youtube.com");
+  assert.deepEqual([yt.ms, yt.laptop, yt.phone], [51 * MIN, 45 * MIN, 6 * MIN]);
+});
+
+test("screen time on one device, and for one block", () => {
+  const laptopOnly = screenTime(usage, {}, { first: today, today, device: "laptop" });
+  assert.equal(laptopOnly.total, 120 * MIN + 20_000);
+  assert.equal(laptopOnly.phone, 0);
+  // The YouTube block covers its app on the phone and its site everywhere: their time, nothing else.
+  const yt = screenTime(usage, {}, { first: today, today, block: "yt", blocks });
+  assert.deepEqual(yt.apps.map((a) => a.key), ["com.google.android.youtube"]);
+  assert.deepEqual(yt.sites.map((x) => x.key), ["youtube.com"]);
+  assert.equal(yt.total, 15 * MIN + 46 * MIN);
+});
+
+test("the phone's screen time shows beside the laptop's, its apps by the names the phone sent", () => {
+  // As the server keeps them: the phone sends its packages and their names, as the laptop does.
+  const both = {
+    laptop: { [named(0)]: { apps: { zen: 60 * MIN }, sites: { "example.org": 20 * MIN } } },
+    phone: {
+      [named(0)]: { apps: { "com.example.reader": 45 * MIN, "com.example.chat": 5 * MIN }, sites: { "example.org": 10 * MIN } },
+      [named(1)]: { apps: { "com.example.reader": 30 * MIN }, sites: {} },
+    },
+  };
+  const names = { zen: "Zen Browser", "com.example.reader": "Reader", "com.example.chat": "Chat" };
+  const st = screenTime(both, names, { first: today - 1, today });
+  assert.deepEqual([st.phone, st.laptop, st.total], [80 * MIN, 60 * MIN, 140 * MIN]);
+  assert.deepEqual(st.days.map((d) => [d.phone, d.laptop]), [[30 * MIN, 0], [50 * MIN, 60 * MIN]]);
+  assert.deepEqual(st.apps.map((a) => [a.dev, a.name, a.ms]), [
+    ["phone", "Reader", 75 * MIN], ["laptop", "Zen Browser", 60 * MIN], ["phone", "Chat", 5 * MIN],
+  ]);
+  const site = st.sites.find((x) => x.key === "example.org");
+  assert.deepEqual([site.ms, site.phone, site.laptop], [30 * MIN, 10 * MIN, 20 * MIN]);
+  // Phone picked: the phone's alone.
+  const phone = screenTime(both, names, { first: today - 1, today, device: "phone" });
+  assert.deepEqual([phone.total, phone.laptop], [80 * MIN, 0]);
+  assert.deepEqual(phone.apps.map((a) => a.name), ["Reader", "Chat"]);
+  // And the page's card has both, as the status page and the laptop's page draw it.
+  const page = compute({ events: [], blocks, now: NOW, zone: ZONE, usage: both, usageNames: names }, { range: "week" });
+  assert.deepEqual([page.screen.phone, page.screen.laptop], [80 * MIN, 60 * MIN]);
+});
+
+test("the page has screen time only when there is a count to show", () => {
+  const input = { events: [], blocks, now: NOW, zone: ZONE };
+  assert.equal(compute(input, { range: "week" }).screen, null);
+  const withUse = compute({ ...input, usage, usageNames: {} }, { range: "today" });
+  assert.equal(withUse.screen.total, 135 * MIN + 20_000);
 });

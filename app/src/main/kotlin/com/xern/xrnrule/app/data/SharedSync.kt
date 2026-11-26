@@ -297,6 +297,16 @@ class SharedSync(
         return runCatching { limitsFrom(Api(settings.url, settings.user, settings.password).limits()) }.getOrNull()
     }
 
+    /**
+     * The other devices' screen time from [since] (`GET /usage`), for Insights: the laptop's. This
+     * phone's own copy there is left out ([usageFrom]). Nothing with sync off, null when the server
+     * couldn't be asked (or is from before /usage). Blocking.
+     */
+    fun usageElsewhere(since: java.time.LocalDate): UsageElsewhere? {
+        if (!settings.isConfigured) return UsageElsewhere()
+        return runCatching { usageFrom(Api(settings.url, settings.user, settings.password).usage(since.toString()), DEVICE) }.getOrNull()
+    }
+
     private fun loadBase(): Base? = try {
         json.decodeFromString(Base.serializer(), baseFile.readFully().decodeToString())
     } catch (_: FileNotFoundException) {
@@ -387,6 +397,16 @@ class SharedSync(
             try {
                 check(conn, conn.responseCode)
                 return conn.inputStream.use { it.readBytes().decodeToString() }
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        fun usage(since: String): String {
+            val conn = open("GET", "?since=$since", "/usage")
+            try {
+                check(conn, conn.responseCode)
+                return conn.inputStream.bufferedReader().use { it.readText() }
             } finally {
                 conn.disconnect()
             }

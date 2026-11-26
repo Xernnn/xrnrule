@@ -15,7 +15,7 @@ xrnrule was called xrnhabit until 24 Oct 2026, when it took in
 [xrnfocus](https://github.com/Xernnn/xrnfocus), a browser extension that put time limits on
 sites. One set of rules now covers apps and sites on both devices.
 
-Phone app 0.7.0 (build 26), browser extension 2.3.11.
+Phone app 0.8.0 (build 27), browser extension 2.3.12.
 
 ## Screenshots
 
@@ -163,7 +163,9 @@ parts of a site alone (music.youtube.com under youtube.com).
   first day); tries per day (per hour on Today) stacked by block, each column's split shown on
   hover or tap, and when in the week they come; the most tried apps and sites, and on which
   device; a row per block (tries and their trend, unlocks and time open, minutes bought, a daily
-  limit's use a day against it, clean days in a row); on the phone, time per app and site; and a
+  limit's use a day against it, clean days in a row); screen time, each day's on each device, and
+  time per app and site with each device's part (with sync on, each device sends its own to your
+  sync server and nowhere else, [docs/laptop-screen-time.md](docs/laptop-screen-time.md)); and a
   day-by-day history. A block has a muted tone from its place in the block list, shown only small:
   a dot before its name, its part of a bar or a day's strip, its sparkline. A habit or an unlock
   both devices logged counts once.
@@ -208,6 +210,9 @@ server behind HTTPS, under a path such as `/xrnrule`. It keeps no logic of its o
 - **History** (`POST`/`GET /events`, `GET /limits`): blocked tries, habits, unlocks, bought
   minutes and breaks from both devices, and each limit's use a day, kept 120 days, for Insights
   and the weekly review in the habits web app.
+- **Screen time** (`POST`/`GET /usage`): each device's minutes per app and site a day, for the
+  pages' Insights, kept 120 days, the largest figure a day winning
+  ([docs/laptop-screen-time.md](docs/laptop-screen-time.md)).
 - **Logos** (`/icons`), **check-ins** (`/devices`) and **releases** (`/update/…`: the extension's
   signed `.crx`, the phone app's `.apk`; see [Updates](#updates)).
 - **The status page** (`/`): the blocks both devices share, live, with Insights, after one
@@ -382,7 +387,8 @@ Minimum Android version: 8.0 (API 26).
 
 ## Permissions
 
-Usage access (to see the foreground app), draw over other apps (the block screen),
+Usage access (to see the foreground app, and for the screen time in Insights, which with sync on
+goes to your own server and nowhere else), draw over other apps (the block screen),
 notifications, and exemption from battery optimization. On Xiaomi/MIUI also enable
 autostart. NFC only if a block asks for a tag. The Settings screen shows what's missing and
 links to each one. Sites need the browser extension (above); the app only listens for it on

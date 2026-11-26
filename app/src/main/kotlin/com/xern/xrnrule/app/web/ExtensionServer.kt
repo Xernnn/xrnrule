@@ -57,6 +57,8 @@ class ExtensionServer(
         val playing: Boolean = false,
         /** Whether the extension is allowed in incognito tabs, if the browser says. */
         val incognito: Boolean? = null,
+        /** This page is in a private tab (versions up to 2.3.11 don't say): time per site leaves it out. */
+        val inPrivate: Boolean = false,
     )
 
     private class Reply(val code: Int, val type: String, val body: ByteArray) {
@@ -181,7 +183,7 @@ class ExtensionServer(
                     SiteSightings.reportPlaying(location)
                     false
                 } else {
-                    SiteSightings.report(location, beat.standIn)
+                    SiteSightings.report(location, beat.standIn, beat.inPrivate)
                 }
                 beat.version?.let(websites::onVersion)
                 beat.incognito?.let { websites.incognitoAllowed = it }

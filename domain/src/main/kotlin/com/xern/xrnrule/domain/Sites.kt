@@ -64,6 +64,22 @@ object Sites {
     fun hostOf(location: String): String = location.substringBefore('/')
 
     /**
+     * A page as time per site counts it, on every device: its host without the path (I46), and
+     * without "www.", "m." or "mobile.", since "m.youtube.com" is youtube.com to a person reading
+     * Insights. Only a prefix with a site still after it goes: "m.com" stays.
+     */
+    fun usageHost(location: String): String {
+        val host = hostOf(location.trim().lowercase())
+        for (prefix in USAGE_PREFIXES) {
+            val rest = host.removePrefix(prefix)
+            if (rest != host && '.' in rest) return rest
+        }
+        return host
+    }
+
+    private val USAGE_PREFIXES = listOf("www.", "m.", "mobile.")
+
+    /**
      * `youtube.com` covers `youtube.com` and `m.youtube.com/anything`, but not `notyoutube.com`.
      * I46: `youtube.com/shorts` covers that path and what's under it, on the same hosts.
      */

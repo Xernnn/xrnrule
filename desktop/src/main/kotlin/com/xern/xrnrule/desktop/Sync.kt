@@ -131,6 +131,8 @@ class SharedSyncClient(
     private val store: Store,
     private val telemetry: FileTelemetry,
     private val scope: CoroutineScope,
+    /** This laptop's screen time, sent once a minute while it changes (docs/laptop-screen-time.md). */
+    private val usage: UsageLog? = null,
 ) : RemoteHistory {
     private val http = Http(config.user, config.password, serverTime(store))
     private val baseFile = File(config.dataDir, BASE_FILE)
@@ -178,6 +180,17 @@ class SharedSyncClient(
                     _status.value = SyncStatus(System.currentTimeMillis(), false, describe(e))
                     delay(5_000)
                     requests.trySend(Unit)
+                }
+            }
+        }
+        // Screen time: what grew each minute, and today's again every ten, for a server that lost it.
+        usage?.let { log ->
+            scope.launch(Dispatchers.IO) {
+                var minute = 0
+                while (true) {
+                    delay(60_000)
+                    runCatching { sendUsage(log, again = minute % 10 == 0) } // best effort: it goes next minute
+                    minute++
                 }
             }
         }
@@ -273,6 +286,21 @@ class SharedSyncClient(
         }
         telemetrySizeSent = size
     }
+
+    /** This laptop's screen time the server hasn't got (`POST /usage`). Blocking. */
+    fun sendUsage(log: UsageLog, again: Boolean = false) {
+        val days = log.toSend(again)
+        if (days.isEmpty()) return
+        val r = http.send("${config.ruleUrl}/usage", "POST", UsageLog.body(days, DesktopApps::name).toString())
+        check(r.statusCode() == 200) { "server answered ${r.statusCode()}" }
+        log.sentOk(days)
+    }
+
+    /** Every device's screen time from [sinceDay] ("2026-11-26"), as the server keeps it. Blocking. */
+    override fun usage(sinceDay: String): JsonObject? = runCatching {
+        val (code, text) = http.getText("${config.ruleUrl}/usage?since=$sinceDay")
+        if (code != 200) null else json.parseToJsonElement(text) as? JsonObject
+    }.getOrNull()
 
     /** Both devices' events since [sinceMs], for the Insights page ([History]). Blocking. */
     override fun events(sinceMs: Long): List<JsonObject>? = runCatching {

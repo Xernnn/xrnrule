@@ -26,8 +26,8 @@ android {
         targetSdk = 35
         // The phone and the self-update channel go by versionCode alone; the name is for people.
         // scripts/release.mjs may raise the code past what the server has, and leaves the name.
-        versionCode = 26
-        versionName = "0.7.0"
+        versionCode = 27
+        versionName = "0.8.0"
     }
 
     buildFeatures {

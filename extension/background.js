@@ -273,12 +273,14 @@ async function moveBlockedTabs(rules) {
 /**
  * Tells xrnrule which site is in front ([host] null: none, or a page that isn't a website) and
  * returns its answer: blocked or not, and what runs out first. [standIn]: our block page,
- * standing in for the site it blocks, so a timer habit counts while you wait there.
+ * standing in for the site it blocks, so a timer habit counts while you wait there. [inPrivate]:
+ * the page is in a private window, which xrnrule blocks like any other but leaves out of the
+ * time it keeps per site (docs/laptop-screen-time.md).
  */
-async function beat(host, focused, standIn = false, playing = false) {
+async function beat(host, focused, standIn = false, playing = false, inPrivate = false) {
   if (!(await showAccess())) return { ...(await unanswered(host)), access: false };
   try {
-    const verdict = await call("/ext/heartbeat", { host, focused, standIn, playing, incognito, version: chrome.runtime.getManifest().version });
+    const verdict = await call("/ext/heartbeat", { host, focused, standIn, playing, inPrivate, incognito, version: chrome.runtime.getManifest().version });
     badge(true);
     const rules = await cachedRules();
     if (!rules || rules.v !== verdict.rules) refreshRules();
@@ -310,7 +312,7 @@ async function beatActive() {
   // xrnrule's own pages (its block page stands in for a site) speak for themselves.
   if (tab?.url?.startsWith(`${await engineUrl()}/`)) return;
   const host = tab ? locationOf(tab.url || "") : null;
-  const verdict = await beat(host, focused);
+  const verdict = await beat(host, focused, false, false, !!tab?.incognito);
   if (verdict.blocked && tab && host) {
     chrome.tabs.update(tab.id, { url: blockUrl(verdict.page, OWN_PAGE, verdict.site || host, tab.url) }).catch(() => {});
   }
@@ -343,8 +345,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   // The options page's: what xrnrule's port is, and "Check now".
   if ((msg?.type === "setPort" || msg?.type === "checkUpdate") && !fromOwnPage(sender)) return false;
   switch (msg?.type) {
-    case "beat":
-      beat(msg.host ?? null, !!msg.focused, !!msg.standIn, !!msg.playing).then(reply);
+    case "beat": // a private window's page: its tab says so, which the page itself can't change
+      beat(msg.host ?? null, !!msg.focused, !!msg.standIn, !!msg.playing, !!sender?.tab?.incognito).then(reply);
       return true; // the reply comes later
     case "check": // the popup: about a host, without saying it's in front
       showAccess().then(async (access) => {

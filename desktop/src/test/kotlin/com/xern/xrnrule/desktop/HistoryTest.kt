@@ -45,14 +45,20 @@ class HistoryTest {
         dir.deleteRecursively()
     }
 
-    private class FakeServer(var events: List<JsonObject>? = emptyList(), var limits: JsonObject? = null) : RemoteHistory {
+    private class FakeServer(var events: List<JsonObject>? = emptyList(), var limits: JsonObject? = null, var usage: JsonObject? = null) : RemoteHistory {
         val asked = mutableListOf<Long>()
+        val usageAsked = mutableListOf<String>()
         override fun events(sinceMs: Long): List<JsonObject>? {
             asked += sinceMs
             return events?.filter { it["at"]!!.jsonPrimitive.long >= sinceMs }
         }
 
         override fun limits(): JsonObject? = limits
+
+        override fun usage(sinceDay: String): JsonObject? {
+            usageAsked += sinceDay
+            return usage
+        }
     }
 
     private fun event(d: String, t: String, at: Long, vararg extra: Pair<String, Any>) = buildJsonObject {
@@ -159,5 +165,61 @@ class HistoryTest {
         val days = got["limits"]!!.jsonObject["yt"]!!.jsonObject["phone-1"]!!.jsonObject
         assertEquals(JsonPrimitive(1_200_000), days[(today - 86_400_000).toString()])
         assertEquals("the newer, larger use", JsonPrimitive(600_000), days[today.toString()])
+    }
+
+    /** Screen time: every device's from the server, with this laptop's own as it counts now in place of its copy there. */
+    @Test
+    fun screenTimeIsTheServersWithThisLaptopsOwnOnTop() {
+        val clock = TestClock()
+        val today = java.time.Instant.ofEpochMilli(clock.wall).atZone(clock.zone()).toLocalDate()
+        val server = FakeServer(
+            usage = parse(
+                """{"usage":{
+                    "laptop":{"$today":{"apps":{"zen":600000,"steam":60000},"sites":{"example.org":300000}},
+                              "${today.minusDays(30)}":{"apps":{"zen":1000},"sites":{}}},
+                    "phone":{"$today":{"apps":{"com.example.reader":120000},"sites":{}}}},
+                  "names":{"zen":"Zen Browser","com.example.reader":"Reader"}}""",
+            ),
+        )
+        // Counting here now: more of zen than the server has heard of, and an app it hasn't.
+        val usage = UsageLog(File(dir, "usage.json"), clock)
+        fun pass(minutes: Int) = repeat(minutes * 60) {
+            clock.mono += 1_000
+            clock.wall += 1_000
+            usage.tick()
+        }
+        usage.show("zen", null)
+        pass(15)
+        usage.show("org.example.Editor", null)
+        pass(1)
+        val history = History(FileTelemetry(File(dir, "t.log")), server, clock, usage, appName = { if (it == "org.example.Editor") "Editor" else it }) { it() }
+        val got = parse(history.json(World(), 7))
+        val laptop = got["usage"]!!.jsonObject["laptop"]!!.jsonObject
+        assertEquals(setOf(today.toString()), laptop.keys) // the 7 days asked for, not the 30th day back
+        val day = laptop[today.toString()]!!.jsonObject
+        assertEquals(900_000L, day["apps"]!!.jsonObject["zen"]!!.jsonPrimitive.long) // this laptop's figure, the larger
+        assertEquals(60_000L, day["apps"]!!.jsonObject["steam"]!!.jsonPrimitive.long) // the server's, lost here
+        assertEquals(60_000L, day["apps"]!!.jsonObject["org.example.Editor"]!!.jsonPrimitive.long)
+        assertEquals(300_000L, day["sites"]!!.jsonObject["example.org"]!!.jsonPrimitive.long)
+        assertEquals(120_000L, got["usage"]!!.jsonObject["phone"]!!.jsonObject[today.toString()]!!.jsonObject["apps"]!!.jsonObject["com.example.reader"]!!.jsonPrimitive.long)
+        val names = got["usageNames"]!!.jsonObject
+        assertEquals("Zen Browser", names["zen"]!!.jsonPrimitive.content)
+        assertEquals("Editor", names["org.example.Editor"]!!.jsonPrimitive.content)
+        assertEquals("the phone's, as it sent them", "Reader", names["com.example.reader"]!!.jsonPrimitive.content)
+        assertEquals(listOf(today.minusDays(7).toString()), server.usageAsked.distinct())
+    }
+
+    @Test
+    fun withoutSyncScreenTimeIsThisLaptopsAlone() {
+        val clock = TestClock()
+        val usage = UsageLog(File(dir, "usage.json"), clock)
+        usage.show("zen", "example.org")
+        repeat(120) {
+            clock.mono += 1_000
+            usage.tick()
+        }
+        val got = parse(History(FileTelemetry(File(dir, "t.log")), null, clock, usage) { it() }.json(World(), 7))
+        val day = got["usage"]!!.jsonObject["laptop"]!!.jsonObject.values.single().jsonObject
+        assertEquals(120_000L, day["sites"]!!.jsonObject["example.org"]!!.jsonPrimitive.long)
     }
 }

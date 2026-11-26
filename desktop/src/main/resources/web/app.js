@@ -936,6 +936,8 @@ async function loadHistory() {
         return card ? { ...b, logos: logosOf(card) } : b;
       })),
       limits: raw.limits ?? {},
+      usage: raw.usage ?? null,
+      usageNames: raw.usageNames ?? {},
       now: raw.now,
       zone: raw.zone,
       reached: raw.synced ? raw.reached : null,
@@ -959,11 +961,12 @@ function drawInsights(force) {
   if (!force && insightsDrawn === historyData) return insightsNode;
   insightsDrawn = historyData;
   renderInsights(insightsNode, historyData, insights, {
-    setRange: (range) => setInsights({ range, historyDays: 7, topAll: false }),
+    setRange: (range) => setInsights({ range, historyDays: 7, topAll: false, screenAll: false }),
     setDevice: (device) => setInsights({ device }),
     pickBlock: (block) => { setInsights({ block, historyDays: 7, topAll: false }); window.scrollTo({ top: 0, behavior: "smooth" }); },
     more: () => setInsights({ historyDays: insights.historyDays + 7 }),
     moreTop: () => setInsights({ topAll: true }),
+    moreScreen: () => setInsights({ screenAll: true }),
     toggleDay: (day, open) => setInsights({ openDays: { ...insights.openDays, [day]: open } }),
   });
   if (historyData.reached === false) {

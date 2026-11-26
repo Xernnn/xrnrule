@@ -71,6 +71,14 @@ class ExtensionBrowsers(private val prefs: SharedPreferences) {
 }
 
 /**
+ * A site the extension says is in front. [timed]: whether its time is time on that site. Not on
+ * the block page standing in for it, nor in a private tab: the engine still hears them (the block
+ * page's site runs its wait timer, I4), but time per site leaves them out, as on the laptop
+ * (docs/laptop-screen-time.md).
+ */
+data class Sighting(val host: String, val timed: Boolean = true)
+
+/**
  * The site the xrnrule browser extension (in Quetta) last said is in front, handed from
  * [ExtensionServer] to the blocker service. The extension only speaks from a visible page, every
  * 2.5 s; a page that stops (closed, the browser sent to the background) is forgotten after
@@ -79,8 +87,8 @@ class ExtensionBrowsers(private val prefs: SharedPreferences) {
 object SiteSightings {
     const val FRESH_MS = 6_000L
 
-    private val _current = MutableStateFlow<String?>(null)
-    val current: StateFlow<String?> = _current.asStateFlow()
+    private val _current = MutableStateFlow<Sighting?>(null)
+    val current: StateFlow<Sighting?> = _current.asStateFlow()
 
     private val _playing = MutableStateFlow<Set<String>>(emptySet())
 
@@ -141,10 +149,10 @@ object SiteSightings {
 
     /**
      * The extension's report: [host] in front, or null for a page that isn't a website.
-     * [standIn]: from its block page, standing in for [host]. Returns whether that page should
-     * leave (see [leave]).
+     * [standIn]: from its block page, standing in for [host]. [inPrivate]: a page in a private tab
+     * (extension 2.3.12 on). Returns whether that page should leave (see [leave]).
      */
-    fun report(host: String?, standIn: Boolean): Boolean {
+    fun report(host: String?, standIn: Boolean, inPrivate: Boolean = false): Boolean {
         heard()
         reportedAtElapsed = lastHeardElapsed
         lastReportWasSite = host != null
@@ -153,7 +161,7 @@ object SiteSightings {
             host != null && Sites.hostOf(site) == Sites.hostOf(host) && lastHeardElapsed - at < LEAVE_MS
         }
         if (left == null) {
-            _current.value = host
+            _current.value = host?.let { Sighting(it, timed = !standIn && !inPrivate) }
             return false
         }
         // The site doesn't come back in front while its tab steps off it. Each stand-in told to

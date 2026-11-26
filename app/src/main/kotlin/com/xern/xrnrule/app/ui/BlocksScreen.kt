@@ -411,7 +411,7 @@ private fun FirstRun(onCreate: () -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val needs = remember(resume) {
         listOf(
-            Triple(AppPermission.USAGE_ACCESS, "See which app is open", "So a blocked app can be caught. Nothing leaves your phone."),
+            Triple(AppPermission.USAGE_ACCESS, "See which app is open", "So a blocked app can be caught. Screen time goes only to your own server."),
             Triple(AppPermission.OVERLAY, "Show the block screen", "It goes on top of a blocked app or site."),
             Triple(AppPermission.NOTIFICATIONS, "Notifications", "For time running out, and if blocking ever stops working."),
         )

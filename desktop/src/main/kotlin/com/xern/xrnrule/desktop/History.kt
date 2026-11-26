@@ -22,14 +22,18 @@ interface RemoteHistory {
 
     /** Each block's daily limit use, {block: {device id: {day start ms: ms}}}, or null. */
     fun limits(): JsonObject?
+
+    /** Every device's screen time from [sinceDay], {"usage": {device: {day: …}}, "names": …}, or null. */
+    fun usage(sinceDay: String): JsonObject? = null
 }
 
 /**
  * The Insights page's history (`GET /api/history`): this laptop's own event log and, with sync,
  * the server's log of both devices, each event once; the limit use the server has kept per day,
  * with today's as this laptop has it now; the emergency unlocks (shared, so known here); and the
- * blocks, in list order, to tell which one a blocked try was for. The page works the figures out
- * (insights.js).
+ * blocks, in list order, to tell which one a blocked try was for; and screen time, every device's
+ * from the server with this laptop's own as it stands now ([UsageLog]). The page works the figures
+ * out (insights.js).
  *
  * The server is asked at most once a minute, and not while the page waits: the first time it is,
  * later the copy kept here is answered and the next one fetched behind it. The log after the last
@@ -40,6 +44,9 @@ class History(
     private val local: FileTelemetry,
     private val remote: RemoteHistory?,
     private val clock: Clock,
+    private val usageLog: UsageLog? = null,
+    /** A laptop app's name. */
+    private val appName: (String) -> String = DesktopApps::name,
     /** Runs the fetches behind the answer; the tests run them in place. */
     private val background: (() -> Unit) -> Unit = { job -> WORKER.execute(job) },
 ) {
@@ -48,6 +55,7 @@ class History(
     private var fullAt = Long.MIN_VALUE / 2
     private var askedAt = Long.MIN_VALUE / 2
     private var limits: JsonObject? = null
+    private var usage: JsonObject? = null
     private var ok: Boolean? = null
     private var fetching = false
 
@@ -57,6 +65,7 @@ class History(
         val since = now - days.coerceIn(1, KEEP_DAYS) * DAY_MS
         remote?.let { fetch(since) }
         val (theirs, theirLimits, reached) = synchronized(this) { Triple(events.orEmpty(), limits, ok) }
+        val theirUsage = synchronized(this) { usage }
         return buildJsonObject {
             put("now", now)
             put("zone", clock.zone().id)
@@ -68,6 +77,12 @@ class History(
             // I40: shared, every one ever, "blockId@wall" -> wall; the page shows them on every device.
             put("emergencies", buildJsonObject { for ((key, at) in world.emergencyLog) if (at >= since) put(key, at) })
             put("blocks", blocksOf(world))
+            usageLog?.let { log ->
+                val mine = log.snapshot()
+                val firstDay = java.time.Instant.ofEpochMilli(since).atZone(clock.zone()).toLocalDate().toEpochDay()
+                put("usage", usageWith(theirUsage?.get("usage") as? JsonObject, mine, firstDay))
+                put("usageNames", namesWith(theirUsage?.get("names") as? JsonObject, mine, appName))
+            }
         }.toString()
     }
 
@@ -97,9 +112,11 @@ class History(
         val from = if (whole) since else clock.nowWallMs() - RECENT_MS
         val got = remote.events(from)
         val record = remote.limits()
+        val use = usageLog?.let { remote.usage(UsageLog.dayName(java.time.Instant.ofEpochMilli(since).atZone(clock.zone()).toLocalDate().toEpochDay())) }
         synchronized(this) {
             ok = got != null
             if (record != null) limits = record
+            if (use != null) usage = use
             if (got == null) return
             if (whole) {
                 events = got
@@ -158,6 +175,47 @@ class History(
                 }
             }
         }
+
+        /**
+         * Every device's screen time from [firstDay], {device: {day: {"apps", "sites"}}}: the server's
+         * ([server]), with this laptop's own ([mine], what it counts now included) in place of its
+         * copy there, each figure the larger of the two (a lost usage.json shows what the server kept).
+         */
+        fun usageWith(server: JsonObject?, mine: Map<Long, UsageLog.Day>, firstDay: Long, device: String = "laptop"): JsonObject {
+            val out = LinkedHashMap<String, MutableMap<String, UsageLog.Day>>()
+            server?.forEach { (dev, days) ->
+                (days as? JsonObject)?.forEach { (day, use) ->
+                    val d = runCatching { java.time.LocalDate.parse(day).toEpochDay() }.getOrNull()
+                    if (d != null && d >= firstDay && use is JsonObject) out.getOrPut(dev) { java.util.TreeMap() }[day] = dayOf(use)
+                }
+            }
+            for ((d, use) in mine) {
+                if (d < firstDay) continue
+                val days = out.getOrPut(device) { java.util.TreeMap() }
+                val name = UsageLog.dayName(d)
+                val had = days[name]
+                days[name] = if (had == null) use else UsageLog.Day(larger(had.apps, use.apps), larger(had.sites, use.sites))
+            }
+            return buildJsonObject {
+                for ((dev, days) in out) put(dev, buildJsonObject { for ((day, use) in days) put(day, UsageLog.dayJson(use)) })
+            }
+        }
+
+        /** The apps' names: the server's, and this laptop's own apps by [name]. */
+        fun namesWith(server: JsonObject?, mine: Map<Long, UsageLog.Day>, name: (String) -> String): JsonObject {
+            val out = LinkedHashMap<String, String>()
+            server?.forEach { (app, n) -> (n as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { out[app] = it } }
+            for (app in mine.values.flatMap { it.apps.keys }.toSortedSet()) name(app).takeIf { it.isNotBlank() && it != app }?.let { out[app] = it }
+            return JsonObject(out.mapValues { JsonPrimitive(it.value) })
+        }
+
+        private fun dayOf(use: JsonObject): UsageLog.Day {
+            fun figures(key: String) = (use[key] as? JsonObject)?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.longOrNull?.let { k to it } }?.toMap().orEmpty()
+            return UsageLog.Day(figures("apps"), figures("sites"))
+        }
+
+        private fun larger(a: Map<String, Long>, b: Map<String, Long>): Map<String, Long> =
+            (a.keys + b.keys).associateWith { maxOf(a[it] ?: 0, b[it] ?: 0) }
 
         /** The blocks in list order, with what they block: a try names what was tried, not its block. */
         fun blocksOf(world: World): JsonElement = buildJsonArray {

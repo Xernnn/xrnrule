@@ -296,7 +296,9 @@ export function compute(input, { range = "week", device = "all", block = null } 
   }
   const top = [...tops.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
 
-  return { today, first, days: n, range, nowHour, figures, before, bars: barList, heat, heatMax, peak, perBlock, top, timeline: timeline(inRange, blocks, zone), byId };
+  const screen = input.usage ? screenTime(input.usage, input.usageNames, { first, today, device, block, blocks }) : null;
+
+  return { today, first, days: n, range, nowHour, figures, before, bars: barList, heat, heatMax, peak, perBlock, top, screen, timeline: timeline(inRange, blocks, zone), byId };
 }
 
 /**
@@ -392,6 +394,66 @@ export function dayLine(day) {
     day.boughtMs > 0 && `${duration(day.boughtMs)} bought`,
   ].filter(Boolean).join(" · ");
 }
+
+// ---- screen time (docs/laptop-screen-time.md) ----------------------------------------------
+
+/** "2026-11-26" as days since 1970-01-01, or NaN. */
+function dayNumber(name) {
+  const [y, m, d] = String(name).split("-").map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  return Number.isFinite(t) ? t / DAY : NaN;
+}
+
+/**
+ * Screen time from [first] to [today], out of the devices' counts ([usage]: {device: {"YYYY-MM-DD":
+ * {apps: {id: ms}, sites: {host: ms}}}}, as the server's /usage keeps them): each day's time on
+ * each device, the range's, and the apps and the sites with theirs, most first. A day's time on a
+ * device is its apps' time: a site's is part of its browser's. Only the devices [device] shows;
+ * with a [block] picked, only what it covers, its apps' time and its sites'. An app goes by its
+ * device too (a laptop app and a phone package are two); a site is one row with each device's part.
+ */
+export function screenTime(usage, names, { first, today, device = "all", block = null, blocks = [] }) {
+  const days = [];
+  for (let d = first; d <= today; d++) days.push({ day: d, total: 0, phone: 0, laptop: 0 });
+  const picked = block ? blocks.find((b) => b.id === block) : null;
+  const covers = (target) => !block || (!!picked && blockOf([picked], target) != null);
+  const apps = new Map();
+  const sites = new Map();
+  for (const [dev, byDay] of Object.entries(usage ?? {})) {
+    const which = deviceOf(dev);
+    if (device !== "all" && which !== device) continue;
+    for (const [name, use] of Object.entries(byDay ?? {})) {
+      const day = days[dayNumber(name) - first];
+      if (!day) continue;
+      const add = (ms) => {
+        day.total += ms;
+        if (which) day[which] += ms;
+      };
+      for (const [id, ms] of Object.entries(use?.apps ?? {})) {
+        if (!Number.isFinite(ms) || ms <= 0 || !covers(id)) continue;
+        add(ms);
+        const key = `${which}|${id}`;
+        const row = apps.get(key) ?? { key: id, name: names?.[id] || id, dev: which, ms: 0 };
+        row.ms += ms;
+        apps.set(key, row);
+      }
+      for (const [host, ms] of Object.entries(use?.sites ?? {})) {
+        if (!Number.isFinite(ms) || ms <= 0 || !covers(host)) continue;
+        if (block) add(ms); // a block's sites aren't its apps: their time is its own
+        const row = sites.get(host) ?? { key: host, name: host, ms: 0, phone: 0, laptop: 0 };
+        row.ms += ms;
+        if (which) row[which] += ms;
+        sites.set(host, row);
+      }
+    }
+  }
+  const sum = (k) => days.reduce((a, d) => a + d[k], 0);
+  const ranked = (m) => [...m.values()].filter((r) => r.ms >= MIN_SHOWN).sort((a, b) => b.ms - a.ms || a.name.localeCompare(b.name));
+  return { days, total: sum("total"), phone: sum("phone"), laptop: sum("laptop"), apps: ranked(apps), sites: ranked(sites) };
+}
+
+/** Under a minute isn't a row. */
+const MIN_SHOWN = 60_000;
 
 // ---- the view ------------------------------------------------------------------------------
 
@@ -634,6 +696,44 @@ function topList(data, view, actions) {
   ];
 }
 
+/**
+ * Screen time: the range's time, and each device's beside its icon when there are two; a column
+ * a day, split by device (not on Today); then the apps and the sites with their time, the first
+ * eight of each.
+ */
+function screenCard(data, view, actions) {
+  const st = data.screen;
+  const devices = ["phone", "laptop"].filter((d) => st[d] > 0);
+  const most = Math.max(1, ...st.days.map((d) => d.total));
+  const list = (rows, site) => {
+    const max = Math.max(1, ...rows.map((r) => r.ms));
+    const shown = view.screenAll ? rows : rows.slice(0, TOP_SHOWN);
+    return h("div", { class: "ranked" }, shown.map((r) =>
+      h("div", { class: "rank" },
+        logo(site ? siteKey(r.key) : targetKey(r.key, r.dev, false), 28, { cls: "rank-logo" }),
+        h("div", { class: "rank-main" },
+          h("div", { class: "rank-top" },
+            h("span", { class: "rank-name" }, r.name),
+            site && devices.length > 1 && h("span", { class: "rank-devs" }, devices.filter((d) => r[d] > 0).map((d) =>
+              h("span", { title: d === "phone" ? "Phone" : "Laptop" }, deviceIcon(d), duration(r[d])))),
+            h("b", {}, duration(r.ms))),
+          h("span", { class: "rank-bar" }, h("i", { style: { width: `${(r.ms / max) * 100}%` } }))))));
+  };
+  const rest = Math.max(st.apps.length, st.sites.length) - TOP_SHOWN;
+  return [
+    devices.length > 1 && h("div", { class: "st-devs" }, devices.map((d) =>
+      h("span", { title: d === "phone" ? "Phone" : "Laptop" }, deviceIcon(d), h("b", {}, duration(st[d]))))),
+    data.range !== "today" && h("div", { class: "st-days", "aria-hidden": "true" }, st.days.map((d) =>
+      h("span", { class: `st-day${d.day === data.today ? " now" : ""}`, title: `${dayTitle(d.day, data.today)} · ${duration(d.total)}` },
+        h("span", { class: "st-col", style: { height: `${(d.total / most) * 100}%` } },
+          ["laptop", "phone"].filter((k) => d[k] > 0).map((k) => h("i", { class: `st-${k}`, style: { flex: `${d[k]} 0 0px` } })))))),
+    h("div", { class: "st-lists" },
+      h("div", {}, h("h4", { class: "st-head" }, "Apps"), st.apps.length ? list(st.apps, false) : h("p", { class: "empty" }, "None")),
+      h("div", {}, h("h4", { class: "st-head" }, "Sites"), st.sites.length ? list(st.sites, true) : h("p", { class: "empty" }, "None"))),
+    rest > 0 && !view.screenAll && h("button", { type: "button", class: "show-more", onclick: () => actions.moreScreen?.() }, `Show ${rest} more`),
+  ];
+}
+
 function rowText(r) {
   switch (r.t) {
     case "blocked": return [h("span", { class: "what" }, r.site ? bare(r.target) : r.name || r.target), r.n > 1 && h("span", { class: "times" }, `×${r.n}`)];
@@ -728,6 +828,7 @@ export function renderInsights(root, input, view, actions) {
         h("section", { class: "card" },
           cardHead("When", peak && [`${WEEKDAY[peak.day]} ${hh(peak.hour)} · `, h("b", {}, String(peak.n))]),
           heatmap(data))),
-      data.perBlock.length > 0 && h("section", { class: "card wide" }, cardHead("By block"), byBlock(data, actions, view))),
+      data.perBlock.length > 0 && h("section", { class: "card wide" }, cardHead("By block"), byBlock(data, actions, view)),
+      data.screen && h("section", { class: "card wide screen" }, cardHead("Screen time", duration(data.screen.total)), screenCard(data, view, actions))),
     h("section", { class: "card history" }, cardHead("History"), historyList(data, view, actions, input.zone)));
 }
