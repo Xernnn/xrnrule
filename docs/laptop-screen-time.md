@@ -21,7 +21,7 @@ Time is counted on the laptop only. The daemon already knows what is in front, f
   - time on a block page, xrnrule's or the extension's. The block page stands in for the blocked
     app or site so a wait timer runs (I4), but nobody is using that site. The time goes to the
     browser, with no site.
-  - sites in a private window. The extension says when a page is private (`private` in the
+  - sites in a private window. The extension says when a page is private (`inPrivate` in the
     heartbeat, from 2.3.12). The time goes to the browser, with no site. An older extension
     doesn't say, so its private pages count like the rest.
   - a tab playing out of sight. Background sound counts toward a limit (I47), but it isn't screen time.
@@ -66,14 +66,13 @@ GET  /usage?since=YYYY-MM-DD
               {"usage": {device: {day: {"apps": {...}, "sites": {...}}}}, "names": {...}}
 ```
 
-The laptop sends with the shared-state rounds, at most once a minute, alongside its events
-(`POST /events`). Each send has today, yesterday and any day that changed since the last one. A
-new daemon sends everything once. Like the event log, the server keeps 120 days. Days come as
+The laptop sends once a minute, the days whose stored figures changed since the last send. A new
+daemon sends everything once, and every ten minutes today and yesterday go again whatever. Like the event log, the server keeps 120 days. Days come as
 `YYYY-MM-DD`, the laptop's local date. Laptop app ids come with their names, which other devices
 can't look up. The server checks the shape (a real date within the kept range, at most a day
 ahead; ids and hosts of the usual characters; figures between 0 and 25 hours; at most 500 apps
-and 500 sites a day) and skips anything else. It writes the file at most every 5 minutes. Today
-and yesterday are sent again with every round, so a restart loses nothing.
+and 500 sites a day) and skips anything else. It writes the file at most every 5 minutes, so a
+restart may lose the last few; the laptop's resend of today and yesterday puts them back.
 
 **Only the laptop sends.** The phone's time stays on the phone, as its Usage access screen
 promises ("Nothing leaves your phone"). Sending it too would be the owner's call (see Open
@@ -88,8 +87,9 @@ questions).
     figure. Today shows the figures alone.
   - A day's total on each device is its apps' time; sites are part of it. Laptop apps go by their
     laptop names, under a laptop icon.
-- **Laptop page and the server's status page** (the shared `insights.js`). A Screen time card
-  shows each device that sent any: its apps and sites, each with its time, and the day's total.
+- **Laptop page and the server's status page** (the shared `insights.js`). The same Screen time
+  card: the range's time, each device's when there are two, a column a day split by device, then
+  the apps and the sites with their time.
   The laptop page reads it from `/api/history`, which merges this laptop's own count with the
   server's.
 - **xrnhub**, `GET /api/v1/screen-time?from=&to=`: each day's time per device, app and site, from
