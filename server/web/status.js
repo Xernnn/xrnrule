@@ -303,15 +303,17 @@ async function loadHistory() {
   historyLoading = true;
   try {
     const since = Date.now() - 120 * DAY;
-    const [ev, lim] = await Promise.all([
+    const [ev, lim, use] = await Promise.all([
       fetch(new URL(`events?since=${since}`, location.href), { headers: HEADERS, cache: "no-store" }),
       fetch(new URL("limits", location.href), { headers: HEADERS, cache: "no-store" }),
+      fetch(new URL(`usage?since=${new Date(since).toISOString().slice(0, 10)}`, location.href), { headers: HEADERS, cache: "no-store" }),
     ]);
     check(ev);
     if (!ev.ok) throw new Error(`${ev.status}`);
     const events = (await ev.json()).events ?? [];
     const limits = lim.ok ? (await lim.json()).limits ?? {} : {}; // a server before /limits has none
-    hist = { events: mergeShared(events, doc.emergencyLog), limits, at: Date.now() };
+    const screen = use.ok ? await use.json() : null; // nor one before /usage
+    hist = { events: mergeShared(events, doc.emergencyLog), limits, usage: screen?.usage ?? null, usageNames: screen?.names ?? {}, at: Date.now() };
   } catch (e) {
     if (e instanceof AuthError) return signOut("Signed out");
     hist = hist ?? { events: [], limits: {}, at: Date.now(), failed: true };
@@ -340,6 +342,8 @@ function drawInsights(force) {
     events: hist.events,
     blocks: normalizeBlocks(Object.values(doc.blocks ?? {})),
     limits: hist.limits,
+    usage: hist.usage,
+    usageNames: hist.usageNames,
     now: Date.now(),
     zone: sharedZone(doc) ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     // Today's limit use, for a limit the server has kept no day of.
@@ -347,11 +351,12 @@ function drawInsights(force) {
       .map((b) => [b.id, useToday(doc, b, new Date()).ms])),
   };
   renderInsights(insightsNode, input, insights, {
-    setRange: (range) => setInsights({ range, historyDays: 7, topAll: false }),
+    setRange: (range) => setInsights({ range, historyDays: 7, topAll: false, screenAll: false }),
     setDevice: (device) => setInsights({ device }),
     pickBlock: (block) => { setInsights({ block, historyDays: 7, topAll: false }); window.scrollTo({ top: 0, behavior: "smooth" }); },
     more: () => setInsights({ historyDays: insights.historyDays + 7 }),
     moreTop: () => setInsights({ topAll: true }),
+    moreScreen: () => setInsights({ screenAll: true }),
     toggleDay: (day, open) => setInsights({ openDays: { ...insights.openDays, [day]: open } }),
   });
   return insightsNode;

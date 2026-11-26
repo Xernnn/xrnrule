@@ -64,6 +64,7 @@ fun main(args: Array<String>) {
     val world = Demo.world(clock.nowWallMs(), clock.startOfLocalDayMs(), empty)
     val telemetryFile = File(dir, "telemetry.log")
     if (!empty) telemetryFile.writeText(Demo.laptopLog(clock.nowWallMs(), clock.zone()).joinToString("") { it + "\n" })
+    if (!empty) File(dir, "usage.json").writeText(Demo.usage(clock.nowWallMs(), clock.zone()))
     val store = Store(
         BlockEngine(),
         object : PersistPort {
@@ -93,7 +94,8 @@ fun main(args: Array<String>) {
         ServerIcons(File(dir, "server-icons"), url, Http(login[0], login.getOrElse(1) { "" }), store.world, { ServerIcons.owned(it, icons, laptopIcons) }, scope)
             .also { it.start(kotlinx.coroutines.flow.MutableStateFlow(null)) }
     }
-    LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), icons, telemetry, remote, laptopIcons, serverIcons).start()
+    val usage = UsageLog(File(dir, "usage.json"), clock)
+    LocalServer(config, store, foreground, enforcer, shared, HabitClient(config, store, scope), icons, telemetry, remote, laptopIcons, serverIcons, usage).start()
     println("demo on http://127.0.0.1:$port/ (data in $dir)")
     // Keep the extension "seen" and the clock ticking, as the real loop does.
     while (true) {
@@ -255,6 +257,32 @@ object Demo {
 
         override fun events(sinceMs: Long) = events.filter { it["at"]!!.jsonPrimitive.long >= sinceMs }
         override fun limits() = limits
+    }
+
+    /** A month of made-up screen time on this laptop, as usage.json keeps it. */
+    fun usage(now: Long, zone: ZoneId): String {
+        val r = Random(11)
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate().toEpochDay()
+        val min = 60_000L
+        val days = (0L until 30L).associate { back ->
+            val browser = (60 + r.nextInt(180)) * min
+            val sites = mapOf(
+                "youtube.com" to browser * (20 + r.nextInt(25)) / 100,
+                "reddit.com" to browser * r.nextInt(15) / 100,
+                "example.org" to browser * (10 + r.nextInt(20)) / 100,
+                "news.example.com" to browser * r.nextInt(10) / 100,
+            ).filterValues { it >= min }
+            val apps = mapOf(
+                "zen" to browser,
+                "org.example.Editor" to (30 + r.nextInt(150)) * min,
+                "org.example.Terminal" to (10 + r.nextInt(60)) * min,
+                "steam" to if (r.nextInt(3) == 0) (20 + r.nextInt(90)) * min else 0L,
+            ).filterValues { it > 0 }
+            (today - back) to UsageLog.Day(apps, sites)
+        }
+        return kotlinx.serialization.json.buildJsonObject {
+            put("days", kotlinx.serialization.json.buildJsonObject { for ((d, use) in days) put(d.toString(), json.encodeToJsonElement(UsageLog.Day.serializer(), use)) })
+        }.toString()
     }
 
     fun laptopLog(now: Long, zone: ZoneId): List<String> =
