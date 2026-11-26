@@ -225,6 +225,8 @@ class BlockerForegroundService : LifecycleService() {
                 .flowOn(Dispatchers.Default)
                 .collect { (r, screen, status) ->
                     overlay.show(screen)
+                    // Screen time: the app under the block screen isn't in use (ShieldSpans).
+                    container.shieldSpans.shown(r.shown.pkg.takeIf { screen != null })
                     settingsGuard.render(r.fg.pkg, r.world)
                     updateCornerClock()
                     notifications.updateStatus(status)

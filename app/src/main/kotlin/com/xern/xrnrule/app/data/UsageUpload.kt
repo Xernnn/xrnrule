@@ -166,11 +166,16 @@ class UsageUpload(
  * This phone's screen time as its Insights shows it: Android's usage events for the apps
  * ([ScreenTime], with usage access), [sites] for the sites.
  */
-class PhoneUsage(private val context: Context, private val sites: SiteUsageLog, private val clock: Clock) : UsageUpload.Source {
+class PhoneUsage(
+    private val context: Context,
+    private val sites: SiteUsageLog,
+    private val clock: Clock,
+    private val shieldSpans: ShieldSpans? = null,
+) : UsageUpload.Source {
     override fun days(first: LocalDate, last: LocalDate): Map<LocalDate, UsageDay> {
         val count = (last.toEpochDay() - first.toEpochDay() + 1).toInt().coerceAtLeast(1)
         val apps = if (AppPermission.USAGE_ACCESS.isGranted(context)) {
-            ScreenTime.lastDays(context, count, clock.zone()).associate { d -> d.date to d.apps.associate { it.packageName to it.foregroundMs } }
+            ScreenTime.lastDays(context, count, clock.zone(), shieldSpans).associate { d -> d.date to d.apps.associate { it.packageName to it.foregroundMs } }
         } else {
             emptyMap()
         }

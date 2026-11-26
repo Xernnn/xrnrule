@@ -48,6 +48,9 @@ class AppContainer(context: Context) {
 
     val siteUsage = SiteUsageLog(File(context.filesDir, "site_usage.json"), clock)
 
+    /** When the block screen covered which app, for screen time. */
+    val shieldSpans = ShieldSpans(File(context.filesDir, "shield_spans.tsv"))
+
     /** Websites' own icons, asked of each site and kept on the phone. */
     val siteIcons = SiteIconCache(context, appScope)
 
@@ -66,7 +69,7 @@ class AppContainer(context: Context) {
     /** This phone's screen time, sent to the sync server for the laptop's pages, the status page and the hub. */
     val usageUpload = UsageUpload(
         server = { shared.settings.takeIf { it.isConfigured }?.let { IconUpload.Server(it.url, it.user, it.password) } },
-        source = PhoneUsage(context, siteUsage, clock),
+        source = PhoneUsage(context, siteUsage, clock, shieldSpans),
         prefs = context.getSharedPreferences("usage_upload", Context.MODE_PRIVATE),
         clock = clock,
         scope = appScope,

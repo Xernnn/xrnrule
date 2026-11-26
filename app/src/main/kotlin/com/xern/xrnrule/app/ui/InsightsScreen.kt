@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xern.xrnrule.app.XrnruleApp
 import com.xern.xrnrule.app.data.AppPermission
 import com.xern.xrnrule.app.data.DayUsage
 import com.xern.xrnrule.app.data.InstalledApps
@@ -173,7 +174,7 @@ fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, si
     var usage by remember { mutableStateOf<List<DayUsage>>(emptyList()) }
     LaunchedEffect(hasAccess, resume, range) {
         while (hasAccess) {
-            usage = withContext(Dispatchers.IO) { ScreenTime.lastDays(context, range.days, zone) }
+            usage = withContext(Dispatchers.IO) { ScreenTime.lastDays(context, range.days, zone, (context.applicationContext as? XrnruleApp)?.container?.shieldSpans) }
             delay(REFRESH_MS)
         }
     }
