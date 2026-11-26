@@ -109,6 +109,8 @@ object Defaults {
     const val FOCUS_BREAK_MS = 5L * 60 * 1000
     /** §2.4: a device whose use reports are this far behind the newest is gone, and they're dropped. */
     const val GONE_DEVICE_MS = 30L * 24 * 60 * 60 * 1000
+    /** §2.4, I39: a stamp further ahead of the merging device's clock than this is read as this far ahead. */
+    const val FUTURE_STAMP_MS = 2L * 60 * 1000
 }
 
 /** When a habit reminds: [days] packs Monday..Sunday into bits 0..6, as Loop does (127 = every day). */

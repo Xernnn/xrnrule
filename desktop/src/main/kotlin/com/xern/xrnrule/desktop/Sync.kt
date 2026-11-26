@@ -237,6 +237,16 @@ class SharedSyncClient(
         requests.trySend(Unit)
     }
 
+    /**
+     * I39 at a start, before anything is reported: the world as read from disk, merged with the
+     * base as a round in which the server changed nothing. A block locked there and loosened or
+     * deleted in `world.json` while the daemon was stopped is as it was again, network or not.
+     */
+    suspend fun holdLocks() {
+        val base = loadBase() ?: return
+        store.dispatchAndGet(BlockEvent.SharedStateMerged(base.state, base.state))
+    }
+
     companion object {
         /** In the data dir, beside the world (see [FilePersist]). */
         const val BASE_FILE = "shared-base.json"

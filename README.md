@@ -134,7 +134,7 @@ parts of a site alone (music.youtube.com under youtube.com).
   lock. The laptop goes by the time zone the phone sets itself.
 - **Locks.** A block can be locked for 24 hours up to a year (its edit page): until then nothing
   that makes it easier to get past can change, on the phone or the laptop, whatever you wait or
-  type. Bought minutes and the daily break don't get past it either, not even ones already
+  type, nor by writing the laptop's files or the server's copy by hand: the phone keeps its own. Bought minutes and the daily break don't get past it either, not even ones already
   running; a habit still opens it. Making it stricter still works. Five emergency unlocks, shared
   by both devices and never given back, can end a lock early.
 - **Status at a glance.** The notification shows what's open and for how long, warns 30 s

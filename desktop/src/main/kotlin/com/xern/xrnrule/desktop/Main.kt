@@ -63,7 +63,7 @@ fun main() = runBlocking {
         store.world, { world -> ServerIcons.owned(world, siteIcons, laptopIcons) }, scope,
     )
 
-    store.coldStart {
+    store.coldStart(locks = shared::holdLocks) {
         windows.start(enforcer, enforcer::reported) // lists the open windows (again), then follows them
         LocalServer(config, store, foreground, enforcer, shared, habits, siteIcons, telemetry, laptopIcons = laptopIcons, serverIcons = serverIcons, usage = usage).start()
     }
