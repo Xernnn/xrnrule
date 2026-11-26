@@ -163,7 +163,9 @@ parts of a site alone (music.youtube.com under youtube.com).
   first day); tries per day (per hour on Today) stacked by block, each column's split shown on
   hover or tap, and when in the week they come; the most tried apps and sites, and on which
   device; a row per block (tries and their trend, unlocks and time open, minutes bought, a daily
-  limit's use a day against it, clean days in a row); on the phone, time per app and site; and a
+  limit's use a day against it, clean days in a row); screen time, each day's on each device, and
+  time per app and site with each device's part (the laptop's comes through the sync server, the
+  phone's stays on the phone, [docs/laptop-screen-time.md](docs/laptop-screen-time.md)); and a
   day-by-day history. A block has a muted tone from its place in the block list, shown only small:
   a dot before its name, its part of a bar or a day's strip, its sparkline. A habit or an unlock
   both devices logged counts once.
@@ -208,6 +210,8 @@ server behind HTTPS, under a path such as `/xrnrule`. It keeps no logic of its o
 - **History** (`POST`/`GET /events`, `GET /limits`): blocked tries, habits, unlocks, bought
   minutes and breaks from both devices, and each limit's use a day, kept 120 days, for Insights
   and the weekly review in the habits web app.
+- **Screen time** (`POST`/`GET /usage`): the laptop's minutes per app and site a day, kept 120
+  days, the largest figure a day winning ([docs/laptop-screen-time.md](docs/laptop-screen-time.md)).
 - **Logos** (`/icons`), **check-ins** (`/devices`) and **releases** (`/update/…`: the extension's
   signed `.crx`, the phone app's `.apk`; see [Updates](#updates)).
 - **The status page** (`/`): the blocks both devices share, live, with Insights, after one

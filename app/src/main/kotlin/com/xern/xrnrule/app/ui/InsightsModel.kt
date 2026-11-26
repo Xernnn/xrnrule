@@ -1,6 +1,7 @@
 package com.xern.xrnrule.app.ui
 
 import com.xern.xrnrule.app.data.TelemetryEvent
+import com.xern.xrnrule.app.data.UsageDay
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.Sites
 import java.time.Instant
@@ -343,9 +344,10 @@ object InsightsModel {
         if (isSite) Sites.hostOf(target).removePrefix("www.") to true else target to false
 
     /**
-     * The apps' and the sites' rows: time on the phone (when the filter shows the phone) and
-     * tries on the devices shown, by time and then by tries. Only what [blockId] covers when one
-     * is picked. Under a minute and never tried is left out.
+     * The apps' and the sites' rows: time on the phone ([appTime], [siteTime]) and on the laptop
+     * ([laptopApps], [laptopSites], from the server: docs/laptop-screen-time.md), each only when the
+     * caller's filter shows that device, and tries on the devices shown, by time and then by tries.
+     * Only what [blockId] covers when one is picked. Under a minute and never tried is left out.
      */
     fun topTargets(
         appTime: Map<String, Pair<String, Long>>,
@@ -353,25 +355,68 @@ object InsightsModel {
         tries: List<TargetTries>,
         blocks: List<Block>,
         blockId: String?,
+        laptopApps: Map<String, Pair<String, Long>> = emptyMap(),
+        laptopSites: Map<String, Long> = emptyMap(),
     ): Pair<List<TopTarget>, List<TopTarget>> {
         val picked = blocks.firstOrNull { it.id == blockId }
         fun covered(target: String, site: Boolean) = picked == null || (if (site) picked.coversSite(target) else target in picked.targetApps)
         val triesOf = tries.associateBy { it.target to it.isSite }
-        fun rows(time: Map<String, Long>, labels: Map<String, String>, site: Boolean): List<TopTarget> {
-            val keys = time.keys + tries.filter { it.isSite == site }.map { it.target }
+        fun rows(phone: Map<String, Long>, laptop: Map<String, Long>, labels: Map<String, String>, site: Boolean): List<TopTarget> {
+            val keys = phone.keys + laptop.keys + tries.filter { it.isSite == site }.map { it.target }
             return keys.distinct()
                 .filter { covered(it, site) }
                 .map { t ->
                     val n = triesOf[t to site]
-                    val ms = time[t] ?: 0L
-                    TopTarget(t, labels[t] ?: n?.label, site, ms, n?.tries ?: 0, blockFor(blocks, t, site), laptopOnly = ms == 0L && n?.devices == setOf(Device.LAPTOP))
+                    val p = phone[t] ?: 0L
+                    val l = laptop[t] ?: 0L
+                    TopTarget(
+                        t, labels[t] ?: n?.label, site, p + l, n?.tries ?: 0, blockFor(blocks, t, site),
+                        laptopOnly = p == 0L && (l > 0L || n?.devices == setOf(Device.LAPTOP)), phoneMs = p, laptopMs = l,
+                    )
                 }
                 .filter { it.ms >= 60_000 || it.tries > 0 }
                 .sortedWith(compareByDescending<TopTarget> { it.ms }.thenByDescending { it.tries })
         }
-        val apps = rows(appTime.mapValues { it.value.second }, appTime.mapValues { it.value.first }, site = false)
-        val sites = rows(siteTime.entries.groupBy({ targetKey(it.key, true).first }, { it.value }).mapValues { it.value.sum() }, emptyMap(), site = true)
+        fun bySite(time: Map<String, Long>) = time.entries.groupBy({ targetKey(it.key, true).first }, { it.value }).mapValues { it.value.sum() }
+        val apps = rows(
+            appTime.mapValues { it.value.second }, laptopApps.mapValues { it.value.second },
+            laptopApps.mapValues { it.value.first } + appTime.mapValues { it.value.first }, site = false,
+        )
+        val sites = rows(bySite(siteTime), bySite(laptopSites), emptyMap(), site = true)
         return apps to sites
+    }
+
+    /**
+     * Screen time a day over [range] on the devices [device] shows: the phone's ([phoneApps],
+     * [phoneSites]: date -> app or host -> ms) and the laptop's ([laptop], from the server). A day's
+     * time on a device is its apps' (a site's is part of its browser's); with a block picked
+     * ([blockId]), the time of the apps and the sites it covers.
+     */
+    fun screenTime(
+        phoneApps: Map<LocalDate, Map<String, Long>>,
+        phoneSites: Map<LocalDate, Map<String, Long>>,
+        laptop: Map<LocalDate, UsageDay>,
+        blocks: List<Block>,
+        blockId: String?,
+        range: InsightRange,
+        device: DeviceFilter,
+        nowWallMs: Long,
+        zone: ZoneId,
+    ): ScreenTimeSummary {
+        val picked = blocks.firstOrNull { it.id == blockId }
+        fun of(apps: Map<String, Long>?, sites: Map<String, Long>?): Long =
+            if (picked == null) apps.orEmpty().values.sum()
+            else apps.orEmpty().filterKeys { it in picked.targetApps }.values.sum() + sites.orEmpty().filterKeys { picked.coversSite(it) }.values.sum()
+        val today = today(nowWallMs, zone)
+        val days = (range.days - 1 downTo 0).map { back ->
+            val d = today.minusDays(back.toLong())
+            ScreenDay(
+                d,
+                phoneMs = if (device.shows(Device.PHONE)) of(phoneApps[d], phoneSites[d]) else 0L,
+                laptopMs = if (device.shows(Device.LAPTOP)) laptop[d]?.let { of(it.apps, it.sites) } ?: 0L else 0L,
+            )
+        }
+        return ScreenTimeSummary(days)
     }
 
     /** Whole days of [range] as epoch days, oldest first: what to add up of per-day logs. */
@@ -448,8 +493,33 @@ data class TargetTries(
     val laptop: Int = 0,
 )
 
-/** An app or a site: time on the phone, tries on the devices shown. [laptopOnly]: only ever met on the laptop. */
-data class TopTarget(val target: String, val label: String?, val isSite: Boolean, val ms: Long, val tries: Int, val blockId: String?, val laptopOnly: Boolean = false)
+/**
+ * An app or a site: time on the devices shown ([ms], the phone's and the laptop's parts beside
+ * it), tries on them. [laptopOnly]: only ever met on the laptop.
+ */
+data class TopTarget(
+    val target: String,
+    val label: String?,
+    val isSite: Boolean,
+    val ms: Long,
+    val tries: Int,
+    val blockId: String?,
+    val laptopOnly: Boolean = false,
+    val phoneMs: Long = ms,
+    val laptopMs: Long = 0,
+)
+
+/** A day's screen time on each device. */
+data class ScreenDay(val date: LocalDate, val phoneMs: Long, val laptopMs: Long) {
+    val totalMs: Long get() = phoneMs + laptopMs
+}
+
+/** Screen time over a range: a day each, oldest first. */
+data class ScreenTimeSummary(val days: List<ScreenDay>) {
+    val phoneMs: Long get() = days.sumOf { it.phoneMs }
+    val laptopMs: Long get() = days.sumOf { it.laptopMs }
+    val totalMs: Long get() = phoneMs + laptopMs
+}
 
 /** One row of the history: an event, or [n] tries at one thing in a run, the first at [fromMs]. */
 data class HistoryRow(val event: InsightEvent, val n: Int = 1, val fromMs: Long = event.atWallMs)

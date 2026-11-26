@@ -94,6 +94,7 @@ import com.xern.xrnrule.app.data.ScreenTime
 import com.xern.xrnrule.app.data.SharedSync
 import com.xern.xrnrule.app.data.SiteUsageLog
 import com.xern.xrnrule.app.data.TelemetryEvent
+import com.xern.xrnrule.app.data.UsageElsewhere
 import com.xern.xrnrule.app.data.WorldStore
 import com.xern.xrnrule.app.data.isGranted
 import com.xern.xrnrule.app.data.settingsIntent
@@ -146,6 +147,8 @@ data class InsightsUi(
     val zone: ZoneId,
     /** An app's name, by package (or laptop app id). */
     val appLabel: (String) -> String = { it },
+    /** Each day's time on the phone and on the laptop. */
+    val screen: ScreenTimeSummary? = null,
 )
 
 /**
@@ -186,9 +189,12 @@ fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, si
     var elsewhere by remember { mutableStateOf<List<TelemetryEvent>?>(emptyList()) }
     // Each block's limit use day by day, as the server kept it: the days before today.
     var limitRecord by remember { mutableStateOf<Map<String, Map<String, Map<Long, Long>>>>(emptyMap()) }
+    // The laptop's time per app and site, a month of it (docs/laptop-screen-time.md).
+    var laptopUse by remember { mutableStateOf(UsageElsewhere()) }
     LaunchedEffect(resume) {
         elsewhere = withContext(Dispatchers.IO) { shared.eventsElsewhere(clock.nowWallMs() - (InsightRange.MONTH.days * 2 + 1) * DAY_MS) }
         withContext(Dispatchers.IO) { shared.limitsRecord() }?.let { limitRecord = it }
+        withContext(Dispatchers.IO) { shared.usageElsewhere(InsightsModel.today(clock.nowWallMs(), zone).minusDays(InsightRange.MONTH.days - 1L)) }?.let { laptopUse = it }
     }
 
     val labels = remember { HashMap<String, String>() }
@@ -200,19 +206,42 @@ fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, si
     val summary = remember(merged, device, blockId, range, world.blocks, minute) {
         InsightsModel.summarize(InsightsModel.select(merged, device, blockId), world.blocks, range, now, zone, logStartMs = merged.firstOrNull()?.atWallMs)
     }
-    // Time per app and site is the phone's own (the laptop keeps none).
+    // Time per app and site: the phone's own, and the laptop's from the server.
     val phoneShown = device != DeviceFilter.LAPTOP
-    val (apps, sites) = remember(summary, usage, siteDays, phoneShown) {
+    val laptopShown = device != DeviceFilter.PHONE
+    val (apps, sites) = remember(summary, usage, siteDays, laptopUse, phoneShown, laptopShown) {
         val appTime = HashMap<String, Pair<String, Long>>()
         val siteTime = HashMap<String, Long>()
+        val laptopApps = HashMap<String, Pair<String, Long>>()
+        val laptopSites = HashMap<String, Long>()
+        val today = InsightsModel.today(now, zone)
+        val first = today.minusDays(range.days - 1L)
         if (phoneShown) {
-            val first = InsightsModel.today(now, zone).minusDays(range.days - 1L)
             usage.filter { !it.date.isBefore(first) }.flatMap { it.apps }.forEach { a ->
                 appTime[a.packageName] = a.label to ((appTime[a.packageName]?.second ?: 0L) + a.foregroundMs)
             }
             InsightsModel.epochDays(range, now, zone).forEach { d -> siteDays[d]?.forEach { (host, ms) -> siteTime.merge(host, ms, Long::plus) } }
         }
-        InsightsModel.topTargets(appTime, siteTime, summary.targets, world.blocks, blockId)
+        if (laptopShown) {
+            laptopUse.days.filterKeys { !it.isBefore(first) && !it.isAfter(today) }.values.forEach { day ->
+                day.apps.forEach { (id, ms) -> laptopApps[id] = (laptopUse.names[id] ?: id) to ((laptopApps[id]?.second ?: 0L) + ms) }
+                day.sites.forEach { (host, ms) -> laptopSites.merge(host, ms, Long::plus) }
+            }
+        }
+        InsightsModel.topTargets(appTime, siteTime, summary.targets, world.blocks, blockId, laptopApps, laptopSites)
+    }
+    val screen = remember(usage, siteDays, laptopUse, device, blockId, range, world.blocks, minute) {
+        InsightsModel.screenTime(
+            phoneApps = usage.associate { d -> d.date to d.apps.associate { it.packageName to it.foregroundMs } },
+            phoneSites = siteDays.mapKeys { LocalDate.ofEpochDay(it.key) },
+            laptop = laptopUse.days,
+            blocks = world.blocks,
+            blockId = blockId,
+            range = range,
+            device = device,
+            nowWallMs = now,
+            zone = zone,
+        )
     }
     val dayStart = clock.startOfLocalDayMs()
     val limits = world.blocks.filter { it.dailyAllowanceMs > 0 && (it.mode == BlockMode.ALLOWANCE || it.mode == BlockMode.HABIT) }.associate { b ->
@@ -238,6 +267,7 @@ fun InsightsScreen(world: World, store: WorldStore, websites: WebsiteMonitor, si
             },
             zone = zone,
             appLabel = appLabel,
+            screen = screen,
         ),
         range = range,
         onRange = { range = it },
@@ -312,6 +342,7 @@ internal fun InsightsContent(
             Heatmap(s)
             MostTried(s, ui, device)
             ByBlock(s, ui, range, picked, onBlock)
+            ui.screen?.let { ScreenCard(it, range, device, s.today) }
             TopCard("Apps", ui.apps, ui, showSetup = device != DeviceFilter.LAPTOP && !ui.usageAccess, setupLabel = "Allow usage access", onSetup = onAllowUsage)
             TopCard("Sites", ui.sites, ui, showSetup = device != DeviceFilter.LAPTOP && !ui.sitesOn, setupLabel = "Set up the browser extension", onSetup = onSetUpSites)
             HistoryCard(s, ui, onBlock = onBlock)
@@ -704,6 +735,71 @@ private fun DeviceCount(icon: ImageVector, n: Int, where: String) {
     Muted(n.toString(), style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp))
 }
 
+/** A device's glyph and a small grey time: on the phone, on the laptop. */
+@Composable
+private fun DeviceTime(icon: ImageVector, ms: Long, where: String) {
+    Icon(icon, contentDescription = where, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
+    WGap(2)
+    Muted(shortDuration(ms), style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp))
+}
+
+/**
+ * Screen time: the range's, each device's under it beside its glyph, and (not on Today) a column a
+ * day, the phone's part below the laptop's. Figures only.
+ */
+@Composable
+private fun ScreenCard(st: ScreenTimeSummary, range: InsightRange, device: DeviceFilter, today: LocalDate) {
+    val phoneColor = DataColor
+    val laptopColor = DataColor.copy(alpha = 0.45f)
+    val empty = MaterialTheme.colorScheme.surfaceVariant
+    Panel {
+        PanelTitle("Screen time") { Text(formatDuration(st.totalMs), style = MaterialTheme.typography.titleLarge.copy(fontFeatureSettings = TABULAR)) }
+        if (device == DeviceFilter.ALL) {
+            Gap(6)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ScreenFigure(Icons.Outlined.PhoneAndroid, st.phoneMs, phoneColor, "on the phone")
+                WGap(18)
+                ScreenFigure(Icons.Outlined.Laptop, st.laptopMs, laptopColor, "on the laptop")
+            }
+        }
+        if (range != InsightRange.TODAY && st.days.isNotEmpty()) {
+            Gap(14)
+            val most = st.days.maxOf { it.totalMs }.coerceAtLeast(1)
+            val n = st.days.size
+            Canvas(Modifier.fillMaxWidth().height(72.dp).semantics { contentDescription = "Screen time a day" }) {
+                val slot = size.width / n
+                val barW = (slot * if (n > 12) 0.64f else 0.5f).coerceAtMost(26.dp.toPx())
+                val radius = (barW / 2).coerceAtMost(3.dp.toPx())
+                st.days.forEachIndexed { i, d ->
+                    val x = slot * i + (slot - barW) / 2
+                    val h = size.height * d.totalMs / most
+                    if (d.totalMs == 0L) {
+                        drawRoundRect(empty, Offset(x, size.height - 2.dp.toPx()), Size(barW, 2.dp.toPx()), CornerRadius(radius, radius))
+                        return@forEachIndexed
+                    }
+                    val phoneH = h * d.phoneMs / d.totalMs
+                    drawRoundRect(laptopColor, Offset(x, size.height - h), Size(barW, h), CornerRadius(radius, radius))
+                    if (phoneH > 0f) drawRect(phoneColor, Offset(x, size.height - phoneH), Size(barW, phoneH))
+                }
+            }
+            Gap(4)
+            AxisLabels(axisLabels(st.days.map { Bar(it.date, null, emptyList()) }, range, today), n, strong = n - 1)
+        }
+    }
+}
+
+/** A device's glyph, its colour's dot and its time. */
+@Composable
+private fun ScreenFigure(icon: ImageVector, ms: Long, color: Color, where: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) { }) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        WGap(6)
+        Icon(icon, contentDescription = where, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
+        WGap(4)
+        Text(formatDuration(ms), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold, fontFeatureSettings = TABULAR))
+    }
+}
+
 /** A row per block: its tries and their trend, its time open and bought, its clean days, and a limit's use a day. */
 @Composable
 private fun ByBlock(s: InsightsSummary, ui: InsightsUi, range: InsightRange, picked: Block?, onBlock: (String?) -> Unit) {
@@ -854,6 +950,13 @@ private fun TopRow(row: TopTarget, ui: InsightsUi, fraction: Float) {
         WGap(12)
         Column(Modifier.weight(1f)) {
             Text(targetName(row.target, row.isSite, row.label, ui), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (row.phoneMs >= 60_000 && row.laptopMs >= 60_000) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DeviceTime(Icons.Outlined.PhoneAndroid, row.phoneMs, "on the phone")
+                    WGap(8)
+                    DeviceTime(Icons.Outlined.Laptop, row.laptopMs, "on the laptop")
+                }
+            }
             Gap(5)
             Box(Modifier.fillMaxWidth().height(5.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant)) {
                 if (animated > 0f) Box(Modifier.fillMaxWidth(animated).height(5.dp).clip(CircleShape).background(color))

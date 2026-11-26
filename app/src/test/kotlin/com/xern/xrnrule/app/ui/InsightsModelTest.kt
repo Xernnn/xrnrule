@@ -1,6 +1,7 @@
 package com.xern.xrnrule.app.ui
 
 import com.xern.xrnrule.app.data.TelemetryEvent
+import com.xern.xrnrule.app.data.UsageDay
 import com.xern.xrnrule.domain.Block
 import com.xern.xrnrule.domain.BlockMode
 import com.xern.xrnrule.domain.Trigger
@@ -256,6 +257,51 @@ class InsightsModelTest {
         val (gameApps, gameSites) = InsightsModel.topTargets(emptyMap(), mapOf("youtube.com" to 60_000L), s.targets, blocks, "games")
         assertEquals(listOf("steam"), gameApps.map { it.target })
         assertTrue(gameSites.isEmpty())
+    }
+
+    @Test
+    fun theLaptopsTimeAddsToThePhonesInTheSameRows() {
+        val (apps, sites) = InsightsModel.topTargets(
+            appTime = mapOf("com.youtube" to ("YouTube" to 40 * 60_000L)),
+            siteTime = mapOf("www.youtube.com" to 10 * 60_000L),
+            tries = emptyList(),
+            blocks = blocks,
+            blockId = null,
+            laptopApps = mapOf("zen" to ("Zen Browser" to 90 * 60_000L), "steam" to ("Steam" to 30 * 60_000L)),
+            laptopSites = mapOf("youtube.com" to 25 * 60_000L, "example.org" to 5 * 60_000L),
+        )
+        // A laptop app is its own row, under its laptop name and glyph.
+        assertEquals(listOf("zen", "com.youtube", "steam"), apps.map { it.target })
+        val zen = apps.first()
+        assertEquals(listOf("Zen Browser", 0L, 90 * 60_000L, true), listOf(zen.label, zen.phoneMs, zen.laptopMs, zen.laptopOnly))
+        // A site is one row: the phone's part and the laptop's beside it.
+        val yt = sites.first { it.target == "youtube.com" }
+        assertEquals(listOf(35 * 60_000L, 10 * 60_000L, 25 * 60_000L), listOf(yt.ms, yt.phoneMs, yt.laptopMs))
+        assertEquals(listOf("youtube.com", "example.org"), sites.map { it.target })
+    }
+
+    @Test
+    fun screenTimeIsEachDaysAppsOnEachDevice() {
+        val today = LocalDate.of(2026, 11, 19)
+        val phoneApps = mapOf(today to mapOf("com.youtube" to 30 * 60_000L, "com.insta" to 10 * 60_000L), today.minusDays(1) to mapOf("com.youtube" to 5 * 60_000L))
+        val phoneSites = mapOf(today to mapOf("youtube.com" to 7 * 60_000L))
+        val laptop = mapOf(
+            today to UsageDay(mapOf("zen" to 60 * 60_000L, "steam" to 20 * 60_000L), mapOf("youtube.com" to 15 * 60_000L)),
+            today.minusDays(9) to UsageDay(mapOf("zen" to 999 * 60_000L)), // before the week
+        )
+        val week = InsightsModel.screenTime(phoneApps, phoneSites, laptop, blocks, null, InsightRange.WEEK, DeviceFilter.ALL, now, zone)
+        assertEquals(7, week.days.size)
+        assertEquals(ScreenDay(today, 40 * 60_000L, 80 * 60_000L), week.days.last()) // sites are part of the apps' time
+        assertEquals(ScreenDay(today.minusDays(1), 5 * 60_000L, 0L), week.days[5])
+        assertEquals(125 * 60_000L, week.totalMs)
+        // One device.
+        val laptopOnly = InsightsModel.screenTime(phoneApps, phoneSites, laptop, blocks, null, InsightRange.TODAY, DeviceFilter.LAPTOP, now, zone)
+        assertEquals(listOf(ScreenDay(today, 0L, 80 * 60_000L)), laptopOnly.days)
+        // A block: its apps and its sites, on each device.
+        val yt = InsightsModel.screenTime(phoneApps, phoneSites, laptop, blocks, "yt", InsightRange.TODAY, DeviceFilter.ALL, now, zone)
+        assertEquals(listOf(ScreenDay(today, 37 * 60_000L, 15 * 60_000L)), yt.days)
+        val games = InsightsModel.screenTime(phoneApps, phoneSites, laptop, blocks, "games", InsightRange.TODAY, DeviceFilter.ALL, now, zone)
+        assertEquals(listOf(ScreenDay(today, 0L, 20 * 60_000L)), games.days)
     }
 
     @Test
